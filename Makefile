@@ -5,7 +5,7 @@ CFLAGS := -march=rv64im_zicsr -mabi=lp64 -mcmodel=medany \
 	-Os -g -Wall -Wextra -Werror -Ifirmware/include
 LDFLAGS := -nostdlib -nostartfiles -static -T firmware/linker.ld
 
-.PHONY: all check test sandbox-init clean
+.PHONY: all check test sandbox-init firmware-demo-build firmware-demo firmware-demo-broadcast clean
 
 all: build/stage0.elf
 
@@ -27,6 +27,7 @@ build/stage0.elf: build/reset.o build/secure_boot.o
 check:
 	python3 tests/static_checks.py
 	node --check bin/qos.js
+	node --check bin/qos-firmware-demo.js
 	node --test
 
 test:
@@ -34,6 +35,15 @@ test:
 
 sandbox-init:
 	node bin/qos.js init
+
+firmware-demo-build:
+	node bin/qos-firmware-demo.js build
+
+firmware-demo:
+	node bin/qos-firmware-demo.js run
+
+firmware-demo-broadcast:
+	node bin/qos-firmware-demo.js run --broadcast
 
 clean:
 	rm -f build/reset.o build/secure_boot.o build/stage0.elf

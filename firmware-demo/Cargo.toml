@@ -1,0 +1,17 @@
+[package]
+name = "qos-firmware-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = false
+

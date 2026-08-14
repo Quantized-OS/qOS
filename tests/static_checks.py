@@ -4,7 +4,6 @@
 from pathlib import Path
 from typing import Tuple
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -74,7 +73,28 @@ def main() -> None:
             "FEE_LIMIT_EXCEEDED",
         ),
     )
-    print("PASS: fail-closed boot, Solana template, and narrow signer-policy checks")
+    require(
+        "firmware-demo/src/main.rs",
+        (
+            "QOS_FW:BOOT",
+            "POLICY_DESTINATION",
+            "NONCE_REPLAY",
+            "build_transfer_message",
+            "signing_key.sign(&message",
+            "QOS_FW:REJECT",
+        ),
+    )
+    require(
+        "bin/qos-firmware-demo.js",
+        (
+            "FIRMWARE_MEASUREMENT_MISMATCH",
+            "verifyFirmwareTransaction",
+            "simulateTransaction",
+            "confirmSignature",
+            "FIRMWARE_REPLAY_TEST_FAILED",
+        ),
+    )
+    print("PASS: fail-closed boot, firmware demo, Solana template, and narrow signer-policy checks")
 
 
 if __name__ == "__main__":

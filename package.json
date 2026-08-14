@@ -1,11 +1,12 @@
 {
   "name": "qos-solana-sandbox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Devnet-only policy signer and relay prototype for qOS",
   "type": "module",
   "bin": {
-    "qos": "./bin/qos.js"
+    "qos": "./bin/qos.js",
+    "qos-firmware-demo": "./bin/qos-firmware-demo.js"
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",

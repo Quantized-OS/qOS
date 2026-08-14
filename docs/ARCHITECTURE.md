@@ -107,6 +107,39 @@ That is not a hardware isolation boundary. A production port must preserve the
 module interface while moving key loading, nonce state, policy, message
 construction, and audit authorization below the untrusted OS boundary.
 
+## QEMU M-mode signing demonstration
+
+The firmware demo provides a stronger process boundary than the Node mock and
+keeps the host relay out of transaction construction and signing:
+
+```mermaid
+flowchart TD
+    A[Host fetches Devnet context] --> B[Typed binary intent]
+    B --> C[RV64 M-mode policy signer]
+    C --> D[Signed Solana transaction]
+    D --> E[Host verifies and simulates]
+    E --> F[Devnet broadcast]
+```
+
+QEMU loads no operating system. The M-mode image parses a fixed 168-byte
+`OrderIntentV1` representation from a read-only-by-convention demo mailbox,
+checks the provisioned cluster, destination, strategy, amount, fee ceiling,
+slot window, reserved fields, and monotonic in-boot nonce, constructs the
+single System Program transfer, and invokes Ed25519 only on that internal
+message. The UART response contains the public transaction and never the seed.
+
+The host relay validates the provisioned ELF SHA-256 measurement, verifies the
+firmware signature and parses the message against the original intent before
+simulation or submission. Its scripted proof includes one accepted intent, an
+over-limit intent rejected with `AMOUNT`, and a replay rejected with
+`NONCE_REPLAY`.
+
+QEMU is not a hardware security boundary: its host can inspect guest memory and
+the demo seed is provisioned into the ELF. The demo proves that the real
+bare-metal firmware code performs narrow policy signing; it does not prove
+physical key isolation, immutable boot ROM, power-loss-safe monotonic storage,
+or the unfinished ML-DSA stage-0 chain.
+
 ## Transaction routing and privacy
 
 A direct validator/block-engine route can reduce exposure before inclusion.

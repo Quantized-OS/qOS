@@ -70,6 +70,8 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
 * `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and audit modules
 * `bin/qos.js` — Sandbox CLI and local API server
+* `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
+* `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet policy template
 * `test/` — Transaction, policy, audit, and relay integration tests
 * `tests/static_checks.py` — Fail-closed starter invariants
@@ -120,6 +122,30 @@ node bin/qos.js init --destination YOUR_DEVNET_PUBLIC_KEY
 ```
 
 For the local HTTP interface and the complete two-step prepare/submit flow, see [`docs/SANDBOX.md`](docs/SANDBOX.md).
+
+## Demo firmware signing the transaction
+
+The QEMU demonstration moves policy enforcement, Solana message construction,
+and Ed25519 signing into a bare-metal RV64 M-mode firmware image. The host
+loads fixed-size typed intent frames into a mailbox and receives a completed
+signed transaction over the emulated UART. The firmware also rejects an
+over-limit amount and a replayed nonce on screen before QEMU exits.
+
+After installing QEMU, Rust, and the `riscv64imac-unknown-none-elf` Rust target:
+
+```sh
+node bin/qos-firmware-demo.js build
+node bin/qos-firmware-demo.js run --lamports 1000000
+node bin/qos-firmware-demo.js run --lamports 1000000 --broadcast
+```
+
+The first command is the provisioning/manufacturing step and reads the Devnet
+demo key. The runtime `run` command does not read `signer.pem`; it verifies the
+provisioned ELF measurement, obtains a current Devnet blockhash, executes the
+firmware, independently verifies the signature and exact instruction, then
+simulates and optionally broadcasts it. See
+[`docs/QEMU_FIRMWARE_DEMO.md`](docs/QEMU_FIRMWARE_DEMO.md) for setup, expected
+terminal output, and the precise security boundary.
 
 ## Roadmap
 

@@ -16,6 +16,7 @@ import { encodeBase58 } from "./base58.js";
 import { assertQos, QosError } from "./errors.js";
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const ED25519_PKCS8_SEED_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 function requirePrivatePermissions(path) {
   if (process.platform === "win32") return;
@@ -87,4 +88,14 @@ export function publicKeyObjectFromRaw(raw) {
     type: "spki",
     format: "der",
   });
+}
+
+export function privateKeySeed(privateKey) {
+  const der = privateKey.export({ type: "pkcs8", format: "der" });
+  assertQos(
+    der.length === ED25519_PKCS8_SEED_PREFIX.length + 32 && der.subarray(0, ED25519_PKCS8_SEED_PREFIX.length).equals(ED25519_PKCS8_SEED_PREFIX),
+    "INVALID_PRIVATE_KEY",
+    "Unexpected Ed25519 PKCS#8 private-key encoding",
+  );
+  return der.subarray(ED25519_PKCS8_SEED_PREFIX.length);
 }
