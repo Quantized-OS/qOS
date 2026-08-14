@@ -1,9 +1,9 @@
 # QEMU firmware transaction demo
 
 This demo shows an actual bare-metal RV64 firmware image constructing and
-signing the same native SOL transfer that the host-side sandbox already
-executes on Devnet. The firmware runs in machine mode on QEMU's `virt` board;
-there is no guest operating system.
+signing either the native SOL transfer used on Devnet or the pinned qOS
+Token-2022 `TransferChecked` instruction on mainnet. The firmware runs in
+machine mode on QEMU's `virt` board; there is no guest operating system.
 
 ## What the audience sees
 
@@ -13,9 +13,10 @@ One run produces all of these events:
 2. A valid typed intent is accepted and signed.
 3. The same policy receives an over-limit amount and rejects it.
 4. A previously accepted nonce is replayed and rejected.
-5. The host verifies the firmware signature and exact System Program transfer.
+5. The host verifies the firmware signature and exact System Program or
+   Token-2022 transfer.
 6. The host simulates the transaction and, with `--broadcast`, waits for a
-   confirmed Devnet result and prints the Explorer link.
+   confirmed result on the pinned cluster and prints the Explorer link.
 
 The visible rejection cases are part of the run. They are not prerecorded
 output and the host treats their absence as a failed demo.
@@ -74,7 +75,7 @@ node bin/qos-firmware-demo.js run --lamports 1000000
 Expected firmware portion:
 
 ```text
-QOS_FW:BOOT mode=M policy=typed-transfer key=sealed-demo
+QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer key=sealed-demo
 QOS_FW:SIGNER_HEX ...
 QOS_FW:ACCEPT index=0 tx_hex=...
 QOS_FW:REJECT index=1 code=AMOUNT
@@ -105,6 +106,33 @@ destination, amount, blockhash, fee, signature, instruction template, or
 simulation differs from the provisioned policy. A successful result includes
 `"status": "confirmed"` and a Devnet Explorer URL.
 
+## Rehearse the qOS token path
+
+Create and fund the separate mainnet sandbox as described in
+[`SANDBOX.md`](SANDBOX.md). Its signer and allowlisted destination must both
+already have qOS associated token accounts. Provision a separate firmware ELF
+from that policy:
+
+```sh
+node bin/qos-firmware-demo.js build --home .qos-mainnet
+node bin/qos-firmware-demo.js run --home .qos-mainnet \
+  --asset token --amount 1000000
+```
+
+The firmware pins the mint, Token-2022 program, six decimals, source associated
+token account, destination associated token account, destination owner, amount
+ceiling, fee ceiling, strategy, cluster, slot window, and nonce. The host also
+re-reads the three onchain accounts and rejects a changed mint extension set,
+owner, mint, state, or insufficient source balance before QEMU runs.
+
+Only after reviewing the verification-only result, enable a mainnet broadcast:
+
+```sh
+QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
+  node bin/qos-firmware-demo.js run --home .qos-mainnet \
+  --asset token --amount 1000000 --broadcast
+```
+
 ## Presenter script
 
 Explain the boundary in four sentences while the command runs:
@@ -117,13 +145,15 @@ Explain the boundary in four sentences while the command runs:
 ## Security limitations
 
 This is an engineering demonstration, not a custody product. QEMU's host can
-inspect guest memory, the provisioned ELF contains a disposable Devnet seed,
+inspect guest memory, and the provisioned ELF contains the signing seed,
 the nonce is monotonic only during one boot, and the current slot comes from the
 untrusted host. Network blockhash expiry and the verifying relay limit those
 last two weaknesses, but they do not replace trusted time and rollback-safe
 storage. The ML-DSA secure-boot hooks in `firmware/secure_boot.c` remain
-unimplemented platform boundaries. Never provision a mainnet key into this
-image.
+unimplemented platform boundaries. Verification-only mode is preferred. If
+the mainnet path is demonstrated, use a new, deliberately capped signer that
+holds only the exact fee and token amount needed for the demo; do not use a
+treasury, operator, or production wallet.
 
 After the presentation, remove the secret-bearing build output with your normal
 secure artifact-cleanup procedure. `make clean` intentionally does not remove

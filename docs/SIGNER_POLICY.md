@@ -1,11 +1,11 @@
-# Isolated Solana signer policy v0.2
+# Isolated Solana signer policy v0.4
 
 This document defines the narrow interface between the untrusted trading OS
 and the trusted signing component.
 
 ## Request
 
-The trusted component accepts a typed order intent, not serialized arbitrary
+The trusted component accepts one of two typed intents, not serialized arbitrary
 Solana instructions:
 
 ```text
@@ -27,6 +27,27 @@ OrderIntentV1
   expires_at_slot:     u64
   strategy_id:         u32
   operator_approval:   optional authenticated approval token
+
+TokenTransferIntentV2
+  request_nonce:              u128
+  cluster_genesis:            [u8; 32]
+  venue_id:                   enum allowlisted venue
+  market_id:                  enum allowlisted market
+  side:                       SEND
+  mint:                       [u8; 32]
+  amount:                     u64 base units
+  max_fee_lamports:           u64
+  max_cu_price:               u64
+  max_relay_tip:              u64
+  destination:                [u8; 32] owner wallet
+  source_token_account:       [u8; 32]
+  destination_token_account:  [u8; 32]
+  token_program:              [u8; 32]
+  decimals:                   u8
+  recent_blockhash:           [u8; 32]
+  expires_at_slot:            u64
+  strategy_id:                u32
+  operator_approval:          optional authenticated approval token
 ```
 
 The Node.js sandbox uses the equivalent camel-case JSON fields. Values wider
@@ -34,22 +55,34 @@ than JavaScript's safe integer range, including all lamport values, nonces, and
 slots, are canonical unsigned decimal strings. Unknown fields, leading zeroes,
 trailing data, and non-canonical base58 encodings are rejected.
 
-## Implemented transaction template
+## Implemented transaction templates
 
-Policy version 1 intentionally exposes only one Devnet template:
+Policy version 2 exposes two exact templates:
 
-- Venue: `QOS_DEVNET_NATIVE_TRANSFER`
-- Market: `SOL_DEVNET`
+- Venue: `QOS_SOLANA_POLICY_TRANSFER`
+- Market: `SOLANA`
 - Side: `SEND`
-- Program: `11111111111111111111111111111111` (System Program)
-- Instruction: exactly one native SOL transfer
+- Native program: `11111111111111111111111111111111` (System Program)
+- Native instruction: exactly one SOL transfer
+- Token mint: `5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump`
+- Token program: `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
+- Token instruction: exactly one `TransferChecked`
+- Token decimals: exactly `6`
+- Allowed mint extensions: exactly `18` and `19` (metadata pointer and token metadata)
 - Signer and fee payer: the isolated mock signer
-- Destination: exact policy allowlist match
+- Destination owner: exact policy allowlist match
+- Token accounts: associated addresses derived from owner, mint, and token program
 - Address lookup tables, compute price, and relay tip: disabled
 
 This is a real Solana transaction template for exercising signing, policy,
 relay, confirmation, and audit controls. It is not represented as a DEX trade.
-An actual venue adapter must receive its own exact instruction discriminator,
+The Token-2022 path re-reads the mint, source account, and destination account
+before signing. It rejects a changed token program, decimals, mint extension
+set, account mint, account owner, frozen state, associated address, or
+insufficient balance. It does not create token accounts; both associated token
+accounts must already exist.
+
+An actual DEX venue adapter must receive its own exact instruction discriminator,
 account derivation rules, market and mint pins, token-account ownership checks,
 slippage math, and tests before it can be added.
 

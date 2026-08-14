@@ -73,14 +73,14 @@ At minimum it enforces:
 Keep treasury assets in a separate cold or MPC-controlled account.  The hot
 trading key should only control a deliberately capped balance.
 
-## Implemented Devnet sandbox
+## Implemented Solana sandbox
 
 The host-side prototype implements the first narrow slice of the target design:
 
 ```mermaid
 flowchart TD
-    A[Typed intent] --> B[Devnet and policy checks]
-    B --> C[Pinned transfer builder]
+    A[Typed intent] --> B[Cluster and policy checks]
+    B --> C[SOL or qOS token builder]
     C --> D[Mock Ed25519 signer]
     D --> E[Simulation and RPC relay]
     E --> F[Confirmation monitor]
@@ -89,14 +89,20 @@ flowchart TD
 
 The sandbox has no arbitrary-message signing endpoint. `src/transaction.js`
 constructs a legacy Solana message containing exactly one
-`SystemProgram.transfer` instruction. The only signer is the fee payer; the
-only writable destination is selected from the policy allowlist; no address
+`SystemProgram.transfer` or one Token-2022 `TransferChecked` instruction. The
+token path pins mint
+`5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump`, the Token-2022 program, six
+decimals, metadata-only mint extensions, and associated source and destination
+accounts. The only signer is the fee payer; the destination owner is selected
+from the policy allowlist; no address
 lookup tables, compute-budget instructions, relay tips, memos, or user-supplied
 programs are accepted.
 
 Before signing, the service verifies the live RPC genesis hash, checks the
 recent blockhash with `isBlockhashValid`, bounds slot expiry, calculates the
 actual fee with `getFeeForMessage`, and self-parses its constructed message.
+Token mode also verifies the mint account and both token-account owners,
+states, mints, balances, and deterministic associated addresses.
 It records the intent and message digests in an HMAC-authenticated, chained
 audit log before release. The relay simulates with signature verification,
 submits with preflight enabled, checks the returned signature, and polls
@@ -114,19 +120,22 @@ keeps the host relay out of transaction construction and signing:
 
 ```mermaid
 flowchart TD
-    A[Host fetches Devnet context] --> B[Typed binary intent]
+    A[Host fetches cluster context] --> B[Typed binary intent]
     B --> C[RV64 M-mode policy signer]
     C --> D[Signed Solana transaction]
     D --> E[Host verifies and simulates]
-    E --> F[Devnet broadcast]
+    E --> F[Opt-in broadcast]
 ```
 
-QEMU loads no operating system. The M-mode image parses a fixed 168-byte
-`OrderIntentV1` representation from a read-only-by-convention demo mailbox,
-checks the provisioned cluster, destination, strategy, amount, fee ceiling,
-slot window, reserved fields, and monotonic in-boot nonce, constructs the
-single System Program transfer, and invokes Ed25519 only on that internal
-message. The UART response contains the public transaction and never the seed.
+QEMU loads no operating system. The M-mode image parses a fixed 304-byte
+version-2 transfer frame from a read-only-by-convention demo mailbox, checks the
+provisioned cluster, destination, strategy, amount, fee ceiling, slot window,
+reserved fields, and monotonic in-boot nonce, then constructs either the single
+System Program transfer or the single pinned Token-2022 `TransferChecked`
+instruction. The token branch additionally compares the mint, token program,
+decimals, source token account, and destination token account with provisioned
+constants. Ed25519 is invoked only on that internal message. The UART response
+contains the public transaction and never the seed.
 
 The host relay validates the provisioned ELF SHA-256 measurement, verifies the
 firmware signature and parses the message against the original intent before

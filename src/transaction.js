@@ -1,6 +1,11 @@
 import { sign, verify } from "node:crypto";
 import { decodeBase58, encodeBase58 } from "./base58.js";
-import { MAX_TRANSACTION_BYTES, SYSTEM_PROGRAM_ID } from "./constants.js";
+import {
+  MAX_TRANSACTION_BYTES,
+  SYSTEM_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+} from "./constants.js";
 import { assertQos } from "./errors.js";
 import { publicKeyObjectFromRaw, rawPublicKey } from "./key-store.js";
 
@@ -46,6 +51,44 @@ export function buildNativeTransferMessage({ payer, destination, lamports, recen
     encodeShortVec(accounts.length),
     ...accounts,
     blockhashBytes,
+    encodeShortVec(1),
+    instruction,
+  ]);
+}
+
+export function buildTokenTransferCheckedMessage({
+  payer,
+  sourceTokenAccount,
+  destinationTokenAccount,
+  mint,
+  tokenProgram,
+  amount,
+  decimals,
+  recentBlockhash,
+}) {
+  assertQos(tokenProgram === TOKEN_PROGRAM_ID || tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "Only the pinned Token and Token-2022 programs are supported");
+  assertQos(Number.isInteger(decimals) && decimals >= 0 && decimals <= 255, "INVALID_TOKEN_DECIMALS", "Token decimals must fit in u8");
+  const accounts = [
+    decodeBase58(payer, 32),
+    decodeBase58(sourceTokenAccount, 32),
+    decodeBase58(destinationTokenAccount, 32),
+    decodeBase58(mint, 32),
+    decodeBase58(tokenProgram, 32),
+  ];
+  assertQos(new Set(accounts.map((account) => account.toString("hex"))).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Token transfer template requires five distinct accounts");
+  const instructionData = Buffer.concat([Buffer.from([12]), u64le(amount), Buffer.from([decimals])]);
+  const instruction = Buffer.concat([
+    Buffer.from([4]),
+    encodeShortVec(4),
+    Buffer.from([1, 3, 2, 0]),
+    encodeShortVec(instructionData.length),
+    instructionData,
+  ]);
+  return Buffer.concat([
+    Buffer.from([1, 0, 2]),
+    encodeShortVec(accounts.length),
+    ...accounts,
+    decodeBase58(recentBlockhash, 32),
     encodeShortVec(1),
     instruction,
   ]);
@@ -119,5 +162,36 @@ export function parseNativeTransferMessage(message) {
     systemProgram: accounts[programIndex],
     recentBlockhash: blockhash,
     lamports: data.readBigUInt64LE(4),
+  };
+}
+
+export function parseTokenTransferCheckedMessage(message) {
+  const reader = new Reader(message);
+  const header = [reader.byte(), reader.byte(), reader.byte()];
+  assertQos(header[0] === 1 && header[1] === 0 && header[2] === 2, "UNEXPECTED_MESSAGE_HEADER", "Token message header does not match the pinned template");
+  const accountCount = reader.shortVec();
+  assertQos(accountCount === 5, "UNEXPECTED_ACCOUNTS", "Pinned token transfer requires exactly five accounts");
+  const accounts = Array.from({ length: accountCount }, () => encodeBase58(reader.bytes(32)));
+  assertQos(new Set(accounts).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Token transfer message contains duplicate accounts");
+  const recentBlockhash = encodeBase58(reader.bytes(32));
+  assertQos(reader.shortVec() === 1, "UNEXPECTED_INSTRUCTIONS", "Pinned token template requires exactly one instruction");
+  const programIndex = reader.byte();
+  assertQos(reader.shortVec() === 4, "UNEXPECTED_INSTRUCTION_ACCOUNTS", "TransferChecked requires four account indexes");
+  const indexes = [...reader.bytes(4)];
+  const dataLength = reader.shortVec();
+  const data = reader.bytes(dataLength);
+  assertQos(reader.offset === reader.buffer.length, "TRAILING_TRANSACTION_DATA", "Message contains trailing bytes");
+  assertQos(programIndex === 4 && (accounts[programIndex] === TOKEN_PROGRAM_ID || accounts[programIndex] === TOKEN_2022_PROGRAM_ID), "WRONG_PROGRAM", "Only the pinned Token or Token-2022 program is allowed");
+  assertQos(indexes[0] === 1 && indexes[1] === 3 && indexes[2] === 2 && indexes[3] === 0, "WRONG_ACCOUNTS", "TransferChecked accounts do not match the pinned template");
+  assertQos(data.length === 10 && data[0] === 12, "WRONG_INSTRUCTION", "Only SPL Token TransferChecked is allowed");
+  return {
+    payer: accounts[0],
+    sourceTokenAccount: accounts[1],
+    destinationTokenAccount: accounts[2],
+    mint: accounts[3],
+    tokenProgram: accounts[4],
+    recentBlockhash,
+    amount: data.readBigUInt64LE(1),
+    decimals: data[9],
   };
 }

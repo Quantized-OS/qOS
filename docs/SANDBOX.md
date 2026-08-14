@@ -1,14 +1,15 @@
-# Solana Devnet sandbox
+# Solana sandbox
 
 The sandbox turns the qOS signer-policy design into a usable, deliberately
-narrow Solana transaction path. It is locked to the pinned Devnet genesis hash
-and has no mainnet switch.
+narrow Solana transaction path. Devnet is the default and supports native SOL.
+An explicit mainnet policy supports only the pinned qOS Token-2022 mint.
 
 ## Requirements
 
 - Node.js 20 or newer
-- Network access to a Solana Devnet JSON-RPC endpoint
-- Devnet SOL only
+- Network access to a Solana JSON-RPC endpoint for the selected cluster
+- Disposable Devnet funds for the native-SOL path
+- A separately created and deliberately funded mainnet signer for the token path
 
 There are no third-party runtime dependencies and no install step.
 
@@ -63,6 +64,46 @@ node bin/qos.js audit-verify
 To use a dedicated Devnet provider, set `SOLANA_RPC_URL`. The endpoint may
 change, but its live `getGenesisHash` response must equal the policy pin.
 
+## qOS Token-2022 mainnet path
+
+Create a separate home and explicitly select mainnet. Use a destination wallet
+whose qOS associated token account already exists:
+
+```sh
+node bin/qos.js init --home .qos-mainnet --cluster mainnet-beta \
+  --destination YOUR_MAINNET_WALLET
+node bin/qos.js address --home .qos-mainnet
+node bin/qos.js token-address --home .qos-mainnet
+```
+
+The policy pins:
+
+- Mint: `5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump`
+- Token program: `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
+- Decimals: `6`
+- Mint extensions: metadata pointer (`18`) and token metadata (`19`)
+- Maximum transfer: `1000000000` base units (1,000 tokens)
+
+Fund the printed signer with SOL for fees and send qOS tokens to its derived
+associated token account. Then inspect its base-unit balance and prepare a
+one-token intent:
+
+```sh
+node bin/qos.js token-balance --home .qos-mainnet
+node bin/qos.js token-prepare --home .qos-mainnet --amount 1000000 > token-intent.json
+```
+
+Review the intent. Mainnet submission requires this exact additional opt-in:
+
+```sh
+QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
+  node bin/qos.js submit --home .qos-mainnet --intent token-intent.json
+```
+
+A different mainnet RPC can be supplied with `SOLANA_RPC_URL`; the client still
+requires the mainnet genesis hash. There is no faucet or airdrop command in
+mainnet mode.
+
 ## HTTP API
 
 Start the loopback-only service:
@@ -86,6 +127,14 @@ curl -sS http://127.0.0.1:8787/v1/intents/prepare \
   -d '{"lamports":"1000000"}' > intent.json
 ```
 
+Prepare a token intent when the server is using `.qos-mainnet`:
+
+```sh
+curl -sS http://127.0.0.1:8787/v1/token-intents/prepare \
+  -H 'Content-Type: application/json' \
+  -d '{"amount":"1000000"}' > token-intent.json
+```
+
 Submit it:
 
 ```sh
@@ -104,23 +153,30 @@ TLS.
 
 The signing path fails closed unless all of these conditions hold:
 
-1. RPC genesis exactly matches the pinned Devnet genesis.
-2. Intent fields and canonical encodings exactly match `OrderIntentV1`.
+1. RPC genesis exactly matches the selected policy's cluster.
+2. Intent fields and canonical encodings exactly match `OrderIntentV1` or
+   `TokenTransferIntentV2`.
 3. Venue, market, mints, side, strategy, and destination are allowlisted.
 4. Amount, fee cap, compute price, relay tip, and slot TTL are within policy.
 5. The blockhash is currently valid and the nonce is strictly increasing.
-6. The internally built message self-parses as one System Program transfer.
-7. RPC fee calculation fits both intent and policy limits.
-8. The Ed25519 signature verifies locally.
-9. The authorization is appended to the authenticated audit chain.
-10. Simulation succeeds, RPC returns the same signature, and the transaction
+6. The internally built message self-parses as one System Program transfer or
+   one Token-2022 `TransferChecked` instruction.
+7. Token mode verifies the mint owner, decimals, extension set, associated
+   account derivations, account owners, account state, and source balance.
+8. RPC fee calculation fits both intent and policy limits.
+9. The Ed25519 signature verifies locally.
+10. The authorization is appended to the authenticated audit chain.
+11. Simulation succeeds, RPC returns the same signature, and the transaction
     reaches confirmed or finalized status before its blockhash expires.
 
 ## Security boundary
 
-This is a mock signer suitable for Devnet integration and policy development.
+This is a mock signer suitable for integration and policy development.
 The signer key exists in a local Node.js process and the operating system can
 read it. It is not a replacement for the firmware, PMP, HSM, TEE, MPC, or
-two-person controls described by the target architecture. Never copy mainnet
-keys into `.qos-devnet/`, never change the genesis pin to enable mainnet, and
-never treat public Devnet RPC availability as production infrastructure.
+two-person controls described by the target architecture. Keep `.qos-devnet`
+and `.qos-mainnet` separate, use only deliberately capped keys, and never treat
+the public RPC endpoints or this prototype as production custody
+infrastructure. Mainnet submission is guarded by
+`QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`, but that guard is not a security
+boundary against a compromised operating system.

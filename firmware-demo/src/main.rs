@@ -12,11 +12,10 @@ const UART_BASE: usize = 0x1000_0000;
 const TEST_FINISHER: usize = 0x0010_0000;
 const INTENT_BASE: usize = 0x8100_0000;
 const HEADER_SIZE: usize = 16;
-const FRAME_SIZE: usize = 168;
+const FRAME_SIZE: usize = 304;
 const MAX_FRAMES: usize = 4;
-const MAX_TTL_SLOTS: u64 = 120;
 const MIN_BASE_FEE_LAMPORTS: u64 = 5_000;
-const BUNDLE_MAGIC: [u8; 8] = *b"QOSINTV1";
+const BUNDLE_MAGIC: [u8; 8] = *b"QOSINTV2";
 
 global_asm!(
     r#"
@@ -137,7 +136,7 @@ fn build_transfer_message(
     destination: &[u8; 32],
     recent_blockhash: &[u8; 32],
     lamports: u64,
-    output: &mut [u8; 192],
+    output: &mut [u8],
 ) -> usize {
     let mut offset = 0;
     push(output, &mut offset, &[1, 0, 1]);
@@ -155,6 +154,35 @@ fn build_transfer_message(
     offset
 }
 
+fn build_token_transfer_message(
+    payer: &[u8; 32],
+    source_token: &[u8; 32],
+    destination_token: &[u8; 32],
+    mint: &[u8; 32],
+    token_program: &[u8; 32],
+    recent_blockhash: &[u8; 32],
+    amount: u64,
+    decimals: u8,
+    output: &mut [u8],
+) -> usize {
+    let mut offset = 0;
+    push(output, &mut offset, &[1, 0, 2]);
+    push(output, &mut offset, &[5]);
+    push(output, &mut offset, payer);
+    push(output, &mut offset, source_token);
+    push(output, &mut offset, destination_token);
+    push(output, &mut offset, mint);
+    push(output, &mut offset, token_program);
+    push(output, &mut offset, recent_blockhash);
+    push(output, &mut offset, &[1]);
+    push(output, &mut offset, &[4]);
+    push(output, &mut offset, &[4, 1, 3, 2, 0]);
+    push(output, &mut offset, &[10, 12]);
+    push(output, &mut offset, &amount.to_le_bytes());
+    push(output, &mut offset, &[decimals]);
+    offset
+}
+
 fn wipe(bytes: &mut [u8]) {
     for byte in bytes {
         unsafe { write_volatile(byte as *mut u8, 0) };
@@ -163,7 +191,7 @@ fn wipe(bytes: &mut [u8]) {
 
 #[no_mangle]
 extern "C" fn rust_main() -> ! {
-    uart_str("QOS_FW:BOOT mode=M policy=typed-transfer key=sealed-demo\n");
+    uart_str("QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer key=sealed-demo\n");
 
     let mut magic = [0u8; 8];
     read_bundle_bytes(0, &mut magic);
@@ -192,7 +220,8 @@ extern "C" fn rust_main() -> ! {
         let mut frame = [0u8; FRAME_SIZE];
         read_bundle_bytes(HEADER_SIZE + index * FRAME_SIZE, &mut frame);
 
-        if le_u32(&frame[0..4]) != 1 || le_u32(&frame[4..8]) != 0 || le_u32(&frame[164..168]) != 0 {
+        let asset_kind = le_u32(&frame[4..8]);
+        if le_u32(&frame[0..4]) != 2 || asset_kind > 1 || le_u32(&frame[164..168]) != 0 || nonzero(&frame[297..304]) {
             reject(index, "SHAPE");
             continue;
         }
@@ -211,7 +240,8 @@ extern "C" fn rust_main() -> ! {
         }
         let amount = le_u64(&frame[88..96]);
         let minimum_output = le_u64(&frame[96..104]);
-        if amount == 0 || amount > POLICY_MAX_AMOUNT || minimum_output != amount {
+        let max_amount = if asset_kind == 0 { POLICY_MAX_AMOUNT } else { POLICY_MAX_TOKEN_AMOUNT };
+        if amount == 0 || amount > max_amount || minimum_output != amount {
             reject(index, "AMOUNT");
             continue;
         }
@@ -226,7 +256,7 @@ extern "C" fn rust_main() -> ! {
         }
         let expires_at_slot = le_u64(&frame[144..152]);
         let current_slot = le_u64(&frame[152..160]);
-        if expires_at_slot <= current_slot || expires_at_slot > current_slot.saturating_add(MAX_TTL_SLOTS) {
+        if expires_at_slot <= current_slot || expires_at_slot > current_slot.saturating_add(POLICY_MAX_TTL_SLOTS) {
             reject(index, "EXPIRY");
             continue;
         }
@@ -239,10 +269,38 @@ extern "C" fn rust_main() -> ! {
         destination.copy_from_slice(&frame[56..88]);
         let mut blockhash = [0u8; 32];
         blockhash.copy_from_slice(&frame[112..144]);
-        let mut message = [0u8; 192];
-        let message_length = build_transfer_message(&payer, &destination, &blockhash, amount, &mut message);
+        let mut message = [0u8; 256];
+        let message_length = if asset_kind == 0 {
+            if nonzero(&frame[168..304]) {
+                reject(index, "TOKEN_FIELDS");
+                continue;
+            }
+            build_transfer_message(&payer, &destination, &blockhash, amount, &mut message)
+        } else {
+            if !POLICY_TOKEN_ENABLED
+                || frame[168..200] != POLICY_TOKEN_MINT
+                || frame[200..232] != POLICY_SOURCE_TOKEN
+                || frame[232..264] != POLICY_DESTINATION_TOKEN
+                || frame[264..296] != POLICY_TOKEN_PROGRAM
+                || frame[296] != POLICY_TOKEN_DECIMALS
+            {
+                reject(index, "TOKEN_POLICY");
+                continue;
+            }
+            build_token_transfer_message(
+                &payer,
+                &POLICY_SOURCE_TOKEN,
+                &POLICY_DESTINATION_TOKEN,
+                &POLICY_TOKEN_MINT,
+                &POLICY_TOKEN_PROGRAM,
+                &blockhash,
+                amount,
+                POLICY_TOKEN_DECIMALS,
+                &mut message,
+            )
+        };
         let signature = signing_key.sign(&message[..message_length]).to_bytes();
-        let mut transaction = [0u8; 256];
+        let mut transaction = [0u8; 384];
         transaction[0] = 1;
         transaction[1..65].copy_from_slice(&signature);
         transaction[65..65 + message_length].copy_from_slice(&message[..message_length]);

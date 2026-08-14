@@ -51,6 +51,14 @@ export class SolanaRpc {
     return this.call("getBalance", [address, { commitment: this.commitment }]);
   }
 
+  async getAccountInfo(address) {
+    const result = await this.call("getAccountInfo", [address, {
+      commitment: this.commitment,
+      encoding: "base64",
+    }]);
+    return result.value;
+  }
+
   getSlot() {
     return this.call("getSlot", [{ commitment: this.commitment }]);
   }

@@ -60,6 +60,9 @@ def main() -> None:
             "SYSTEM_PROGRAM_ID",
             "buildNativeTransferMessage",
             "parseNativeTransferMessage",
+            "buildTokenTransferCheckedMessage",
+            "parseTokenTransferCheckedMessage",
+            "TransferChecked",
             "SIGNATURE_SELF_CHECK_FAILED",
             "MAX_TRANSACTION_BYTES",
         ),
@@ -67,10 +70,22 @@ def main() -> None:
     require(
         "src/policy.js",
         (
-            "MAINNET_DISABLED",
+            "TOKEN_CLUSTER_MISMATCH",
+            "QOS_TOKEN_MINT",
+            "allowedMintExtensions",
             "DESTINATION_NOT_ALLOWED",
             "NONCE",
             "FEE_LIMIT_EXCEEDED",
+        ),
+    )
+    require(
+        "src/token.js",
+        (
+            "associatedTokenAddress",
+            "verifyTokenTransferAccounts",
+            "MINT_EXTENSIONS_MISMATCH",
+            "TOKEN_ACCOUNT_OWNER_MISMATCH",
+            "INSUFFICIENT_TOKEN_BALANCE",
         ),
     )
     require(
@@ -80,6 +95,8 @@ def main() -> None:
             "POLICY_DESTINATION",
             "NONCE_REPLAY",
             "build_transfer_message",
+            "build_token_transfer_message",
+            "POLICY_TOKEN_PROGRAM",
             "signing_key.sign(&message",
             "QOS_FW:REJECT",
         ),
@@ -94,7 +111,7 @@ def main() -> None:
             "FIRMWARE_REPLAY_TEST_FAILED",
         ),
     )
-    print("PASS: fail-closed boot, firmware demo, Solana template, and narrow signer-policy checks")
+    print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")
 
 
 if __name__ == "__main__":

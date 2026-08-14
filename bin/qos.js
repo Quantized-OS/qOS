@@ -6,10 +6,10 @@ import { initializeSandbox, QosService } from "../src/service.js";
 import { startServer } from "../src/server.js";
 
 function usage() {
-  return `qOS Solana Devnet sandbox
+  return `qOS Solana policy sandbox
 
 Usage:
-  qos init [--home PATH] [--destination PUBKEY]
+  qos init [--home PATH] [--cluster devnet|mainnet-beta] [--destination PUBKEY]
   qos address [--home PATH]
   qos health [--home PATH]
   qos balance [--home PATH] [--address PUBKEY]
@@ -18,10 +18,16 @@ Usage:
               [--nonce N] [--max-fee-lamports N] [--strategy-id N]
   qos submit --intent FILE [--home PATH]
   qos transfer [--home PATH] [--destination PUBKEY] [--lamports N]
+  qos token-address [--home PATH] [--owner PUBKEY]
+  qos token-balance [--home PATH] [--owner PUBKEY]
+  qos token-prepare [--home PATH] [--destination PUBKEY] [--amount N]
+                    [--nonce N] [--max-fee-lamports N] [--strategy-id N]
+  qos token-transfer [--home PATH] [--destination PUBKEY] [--amount N]
   qos audit-verify [--home PATH]
   qos serve [--home PATH] [--host HOST] [--port PORT]
 
-All amounts are integer lamports. This prototype refuses non-Devnet clusters.
+SOL amounts are integer lamports. Token amounts are integer base units.
+Mainnet submission additionally requires QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND.
 `;
 }
 
@@ -68,8 +74,8 @@ async function main() {
   }
 
   if (command === "init") {
-    only(options, ["home", "destination"]);
-    print(initializeSandbox(homeOf(options), options.destination));
+    only(options, ["home", "destination", "cluster"]);
+    print(initializeSandbox(homeOf(options), options.destination, { cluster: options.cluster ?? "devnet" }));
     return;
   }
 
@@ -77,7 +83,7 @@ async function main() {
   switch (command) {
     case "address":
       only(options, ["home"]);
-      print({ signer: service.publicKey, cluster: "devnet" });
+      print({ signer: service.publicKey, cluster: service.policy.cluster });
       return;
     case "health":
       only(options, ["home"]);
@@ -119,6 +125,36 @@ async function main() {
       print(await service.submitIntent(intent));
       return;
     }
+    case "token-address": {
+      only(options, ["home", "owner"]);
+      print(service.tokenAddresses(options.owner ?? service.publicKey));
+      return;
+    }
+    case "token-balance": {
+      only(options, ["home", "owner"]);
+      print(await service.tokenBalance(options.owner ?? service.publicKey));
+      return;
+    }
+    case "token-prepare": {
+      only(options, ["home", "destination", "amount", "nonce", "max-fee-lamports", "strategy-id"]);
+      print(await service.prepareTokenIntent({
+        ...(options.destination === undefined ? {} : { destination: options.destination }),
+        ...(options.amount === undefined ? {} : { amount: options.amount }),
+        ...(options.nonce === undefined ? {} : { requestNonce: options.nonce }),
+        ...(options["max-fee-lamports"] === undefined ? {} : { maxFeeLamports: options["max-fee-lamports"] }),
+        ...(options["strategy-id"] === undefined ? {} : { strategyId: Number(options["strategy-id"]) }),
+      }));
+      return;
+    }
+    case "token-transfer": {
+      only(options, ["home", "destination", "amount"]);
+      const intent = await service.prepareTokenIntent({
+        ...(options.destination === undefined ? {} : { destination: options.destination }),
+        ...(options.amount === undefined ? {} : { amount: options.amount }),
+      });
+      print(await service.submitIntent(intent));
+      return;
+    }
     case "audit-verify": {
       only(options, ["home"]);
       const records = service.audit.readVerified();
@@ -130,7 +166,7 @@ async function main() {
       const host = options.host ?? process.env.QOS_HOST ?? "127.0.0.1";
       const port = Number(options.port ?? process.env.QOS_PORT ?? "8787");
       const server = startServer(service, { host, port });
-      print({ status: "listening", address: `http://${host}:${port}`, signer: service.publicKey, cluster: "devnet" });
+      print({ status: "listening", address: `http://${host}:${port}`, signer: service.publicKey, cluster: service.policy.cluster });
       const close = () => server.close(() => process.exit(0));
       process.on("SIGINT", close);
       process.on("SIGTERM", close);

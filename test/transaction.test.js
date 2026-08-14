@@ -5,10 +5,13 @@ import { encodeBase58 } from "../src/base58.js";
 import { publicKeyObjectFromRaw, rawPublicKey } from "../src/key-store.js";
 import {
   buildNativeTransferMessage,
+  buildTokenTransferCheckedMessage,
   encodeShortVec,
   parseNativeTransferMessage,
+  parseTokenTransferCheckedMessage,
   signMessage,
 } from "../src/transaction.js";
+import { QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
 
 test("shortvec encodes Solana compact lengths", () => {
   assert.deepEqual([...encodeShortVec(0)], [0]);
@@ -57,4 +60,47 @@ test("message parser rejects trailing instructions or data", () => {
     recentBlockhash: encodeBase58(Buffer.alloc(32, 4)),
   });
   assert.throws(() => parseNativeTransferMessage(Buffer.concat([message, Buffer.from([0])])), { code: "TRAILING_TRANSACTION_DATA" });
+});
+
+test("Token-2022 TransferChecked message exactly round-trips the pinned template", () => {
+  const payer = encodeBase58(Buffer.alloc(32, 11));
+  const sourceTokenAccount = encodeBase58(Buffer.alloc(32, 12));
+  const destinationTokenAccount = encodeBase58(Buffer.alloc(32, 13));
+  const recentBlockhash = encodeBase58(Buffer.alloc(32, 14));
+  const message = buildTokenTransferCheckedMessage({
+    payer,
+    sourceTokenAccount,
+    destinationTokenAccount,
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    amount: 2_500_000n,
+    decimals: 6,
+    recentBlockhash,
+  });
+  assert.deepEqual(parseTokenTransferCheckedMessage(message), {
+    payer,
+    sourceTokenAccount,
+    destinationTokenAccount,
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    recentBlockhash,
+    amount: 2_500_000n,
+    decimals: 6,
+  });
+});
+
+test("Token-2022 parser rejects a changed instruction opcode", () => {
+  const message = buildTokenTransferCheckedMessage({
+    payer: encodeBase58(Buffer.alloc(32, 11)),
+    sourceTokenAccount: encodeBase58(Buffer.alloc(32, 12)),
+    destinationTokenAccount: encodeBase58(Buffer.alloc(32, 13)),
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    amount: 1n,
+    decimals: 6,
+    recentBlockhash: encodeBase58(Buffer.alloc(32, 14)),
+  });
+  const tampered = Buffer.from(message);
+  tampered[tampered.length - 10] = 3;
+  assert.throws(() => parseTokenTransferCheckedMessage(tampered), { code: "WRONG_INSTRUCTION" });
 });

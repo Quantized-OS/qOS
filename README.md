@@ -72,13 +72,14 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
-* `config/devnet.policy.json` — Fail-closed Devnet policy template
+* `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
+* `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
 * `test/` — Transaction, policy, audit, and relay integration tests
 * `tests/static_checks.py` — Fail-closed starter invariants
 
 The firmware code is intentionally incomplete. It will not produce a deployable firmware image until the target platform provides working implementations of ML-DSA-65, SHA3-384, rollback storage, measured boot, PMP locking, and failure handling. There is no development-signature bypass.
 
-The repository now also contains a working **Devnet-only Solana sandbox**. It accepts typed `OrderIntentV1` requests, constructs a single pinned System Program transfer internally, signs it with an isolated mock Ed25519 signer, simulates it, submits it, waits for confirmation, and records authorization in a keyed hash-chain audit log. It does not accept arbitrary serialized messages for signing.
+The repository now contains a working Solana sandbox. Devnet mode accepts typed `OrderIntentV1` requests and constructs one pinned System Program transfer. The explicit mainnet mode accepts `TokenTransferIntentV2` for the qOS mint `5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump` and constructs one Token-2022 `TransferChecked` instruction. Both paths sign with the isolated mock Ed25519 signer, simulate, submit, confirm, and record authorization in a keyed hash-chain audit log. Neither path accepts arbitrary serialized messages for signing.
 
 ## Build the research starter
 
@@ -123,6 +124,45 @@ node bin/qos.js init --destination YOUR_DEVNET_PUBLIC_KEY
 
 For the local HTTP interface and the complete two-step prepare/submit flow, see [`docs/SANDBOX.md`](docs/SANDBOX.md).
 
+## Transfer the qOS native token
+
+The qOS token is pinned to mainnet address
+`5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump`. The mint is owned by the
+Token-2022 program, uses six decimals, and currently exposes metadata-pointer
+and token-metadata mint extensions. The signer checks those properties and
+fails closed if they change.
+
+Initialize a separate mainnet sandbox with an allowlisted destination wallet:
+
+```sh
+node bin/qos.js init --home .qos-mainnet --cluster mainnet-beta \
+  --destination YOUR_MAINNET_WALLET
+node bin/qos.js address --home .qos-mainnet
+node bin/qos.js token-address --home .qos-mainnet
+```
+
+Fund the printed signer with enough SOL for fees and send qOS tokens to its
+derived token account. The destination wallet must already have its qOS
+associated token account. Verify the source balance and prepare a one-token
+intent; token amounts are base units, so `1000000` is one token:
+
+```sh
+node bin/qos.js token-balance --home .qos-mainnet
+node bin/qos.js token-prepare --home .qos-mainnet --amount 1000000
+```
+
+Mainnet broadcast requires both an explicit transfer command and a separate
+environment opt-in:
+
+```sh
+QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
+  node bin/qos.js token-transfer --home .qos-mainnet --amount 1000000
+```
+
+Review `.qos-mainnet/policy.json` before funding the signer. The included
+maximum is `1000000000` base units (1,000 tokens), and any policy edit requires
+rebuilding the firmware demo before it will run.
+
 ## Demo firmware signing the transaction
 
 The QEMU demonstration moves policy enforcement, Solana message construction,
@@ -146,6 +186,18 @@ firmware, independently verifies the signature and exact instruction, then
 simulates and optionally broadcasts it. See
 [`docs/QEMU_FIRMWARE_DEMO.md`](docs/QEMU_FIRMWARE_DEMO.md) for setup, expected
 terminal output, and the precise security boundary.
+
+For the qOS Token-2022 path, provision from the separate mainnet sandbox and
+run one token in verification-only mode before enabling broadcast:
+
+```sh
+node bin/qos-firmware-demo.js build --home .qos-mainnet
+node bin/qos-firmware-demo.js run --home .qos-mainnet \
+  --asset token --amount 1000000
+QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
+  node bin/qos-firmware-demo.js run --home .qos-mainnet \
+  --asset token --amount 1000000 --broadcast
+```
 
 ## Roadmap
 

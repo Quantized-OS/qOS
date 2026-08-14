@@ -70,6 +70,10 @@ export function startServer(service, { host = "127.0.0.1", port = 8787, apiToken
         sendJson(response, 200, await service.prepareIntent(await readJson(request)));
         return;
       }
+      if (request.method === "POST" && url.pathname === "/v1/token-intents/prepare") {
+        sendJson(response, 200, await service.prepareTokenIntent(await readJson(request)));
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/v1/intents/submit") {
         sendJson(response, 200, await service.submitIntent(await readJson(request)));
         return;
