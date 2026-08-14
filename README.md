@@ -104,6 +104,18 @@ code can also create copies outside qOS.
 
 ## Build the research starter
 
+On Ubuntu 20.04, 22.04, or 24.04, the complete deterministic QEMU demo is one
+command:
+
+```sh
+bash run-demo.sh
+```
+
+It installs missing prerequisites, runs every project check, initializes the
+new ephemeral Devnet home, builds the RV64 firmware, and performs an offline
+transaction-signing rehearsal without contacting Solana or spending funds.
+Use `bash run-demo.sh --help` for live verification and broadcast options.
+
 Run the host-side invariant checks:
 
 ```sh

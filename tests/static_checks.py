@@ -19,6 +19,10 @@ def forbid(path: str, needles: Tuple[str, ...]) -> None:
         assert needle not in text, f"{path}: forbidden {needle!r}"
 
 
+def forbid_path(path: str) -> None:
+    assert not (ROOT / path).exists(), f"{path}: retired file must not exist"
+
+
 def main() -> None:
     require(
         "firmware/reset.S",
@@ -129,6 +133,8 @@ def main() -> None:
     forbid("firmware-demo/build.rs", ("QOS_FW_SEED_HEX", "POLICY_SEED"))
     forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
     forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))
+    forbid_path("src/audit.js")
+    forbid_path("test/audit.test.js")
     print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")
 
 

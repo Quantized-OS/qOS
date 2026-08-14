@@ -5,7 +5,7 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SETUP_SCRIPT="${SCRIPT_DIR}/scripts/setup-ubuntu-20.04.sh"
 
-qos_home="${QOS_HOME:-.qos-devnet}"
+qos_home="${QOS_HOME:-.qos-ephemeral-devnet}"
 lamports="${QOS_DEMO_LAMPORTS:-1000000}"
 airdrop_lamports="${QOS_DEMO_AIRDROP_LAMPORTS:-200000000}"
 live=0
@@ -36,7 +36,7 @@ Install the Ubuntu prerequisites, initialize a disposable Solana Devnet
 sandbox, build the bare-metal RISC-V firmware, and run it in QEMU.
 
 Options:
-  --home PATH              qOS sandbox directory (default: .qos-devnet)
+  --home PATH              qOS sandbox directory (default: .qos-ephemeral-devnet)
   --lamports N             demo transfer amount (default: 1000000)
   --offline                deterministic run without Solana RPC (default)
   --live                   verify against live Devnet without broadcasting

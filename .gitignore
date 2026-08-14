@@ -1,4 +1,7 @@
 build/
+.qos-ephemeral-devnet/
+.qos-ephemeral-mainnet/
+.qos-demo/
 .qos-devnet/
 .qos-mainnet/
 *.pem

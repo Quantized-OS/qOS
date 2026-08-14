@@ -45,9 +45,9 @@ fi
 # shellcheck disable=SC1091
 source /etc/os-release
 if [[ "${ID:-}" != "ubuntu" ]]; then
-  warn "This script is tested on Ubuntu 20.04; detected ${PRETTY_NAME:-unknown Linux}."
-elif [[ "${VERSION_ID:-}" != "20.04" ]]; then
-  warn "This script targets Ubuntu 20.04; detected ${PRETTY_NAME:-Ubuntu}."
+  warn "This script supports Ubuntu 20.04, 22.04, and 24.04; detected ${PRETTY_NAME:-unknown Linux}."
+elif [[ "${VERSION_ID:-}" != "20.04" && "${VERSION_ID:-}" != "22.04" && "${VERSION_ID:-}" != "24.04" ]]; then
+  warn "This script supports Ubuntu 20.04, 22.04, and 24.04; detected ${PRETTY_NAME:-Ubuntu}."
 fi
 
 privileged=()
@@ -161,4 +161,3 @@ log "Node: $(node --version)"
 log "Rust: $(rustc --version)"
 log "Cargo: $(cargo --version)"
 log "QEMU: $(qemu-system-riscv64 --version | sed -n '1p')"
-
