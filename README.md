@@ -148,7 +148,11 @@ bash run-demo.sh
 It installs missing prerequisites, runs every project check, initializes the
 new ephemeral Devnet home, builds the RV64 firmware, and performs an offline
 transaction-signing rehearsal without contacting Solana or spending funds.
-Use `bash run-demo.sh --help` for live verification and broadcast options.
+`npm run demo` is an equivalent package-script entry point. Use
+`bash run-demo.sh --help` for live verification and broadcast options, or
+`npm run demo:build -- --skip-setup` to build and provision on a machine that
+already has Node.js, Rust, and the RISC-V Rust target. Build-only mode does not
+require QEMU.
 
 Run the host-side invariant checks:
 

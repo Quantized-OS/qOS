@@ -18,6 +18,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
+import { canonicalJson } from "../src/canonical.js";
 import { assertQos, publicError, QosError } from "../src/errors.js";
 import {
   loadPrivateKey,
@@ -88,7 +89,8 @@ function policyPath(home) {
 }
 
 function commandAvailable(command) {
-  return spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0;
+  const result = spawnSync(command, ["--version"], { stdio: "ignore", timeout: 5_000 });
+  return result.error === undefined && result.status === 0;
 }
 
 function sha256File(path) {
@@ -217,7 +219,7 @@ export function redactFirmwareOutput(output) {
 
 export function parseFirmwareOutput(output) {
   const accepted = [...output.matchAll(/QOS_FW:ACCEPT index=(\d+) tx_hex=([0-9a-f]+)/g)];
-  assertQos(accepted.length === 1 && accepted[0][1] === "0", "FIRMWARE_ACCEPT_SET_INVALID", "Firmware must accept exactly the first intent and no others", { output });
+  assertQos(accepted.length === 1 && accepted[0][1] === "0", "FIRMWARE_ACCEPT_SET_INVALID", "Firmware must accept exactly the first intent and no others", { output: redactFirmwareOutput(output) });
   assertQos(/QOS_FW:REJECT index=1 code=AMOUNT/.test(output), "FIRMWARE_TAMPER_TEST_FAILED", "Firmware did not reject the over-limit amount");
   assertQos(/QOS_FW:REJECT index=2 code=NONCE_REPLAY/.test(output), "FIRMWARE_REPLAY_TEST_FAILED", "Firmware did not reject the replayed nonce");
   assertQos(/QOS_FW:DONE/.test(output), "FIRMWARE_DID_NOT_FINISH", "Firmware did not reach a clean completion");
@@ -227,6 +229,7 @@ export function parseFirmwareOutput(output) {
 function provisioningEnv(home, policy) {
   const privateKey = loadPrivateKey(join(home, "signer.pem"));
   assertQos(policy.allowedDestinations.length === 1, "DEMO_POLICY_DESTINATIONS", "Firmware demo requires exactly one pinned destination");
+  assertQos(policy.allowedStrategyIds.length === 1, "DEMO_POLICY_STRATEGIES", "Firmware demo requires exactly one pinned strategy ID");
   const signer = publicKeyAddress(privateKey);
   const token = policy.tokenTransfer;
   const sourceTokenAccount = token === null ? null : associatedTokenAddress({
@@ -302,21 +305,29 @@ export function buildFirmware(home) {
   return record;
 }
 
-function loadProvisioning(home, policy) {
-  assertQos(existsSync(PROVISIONING_FILE) && existsSync(FIRMWARE_ELF), "FIRMWARE_NOT_PROVISIONED", "Run the firmware demo build command first");
-  const record = JSON.parse(readFileSync(PROVISIONING_FILE, "utf8"));
+export function validateProvisioningRecord(record, policy, firmwareSha256) {
+  assertQos(record && typeof record === "object" && !Array.isArray(record), "BAD_PROVISIONING_RECORD", "Firmware provisioning record must be an object");
   assertQos(record.version === 3, "BAD_PROVISIONING_RECORD", "Unsupported firmware provisioning record");
-  assertQos(record.firmwareSha256 === sha256File(FIRMWARE_ELF), "FIRMWARE_MEASUREMENT_MISMATCH", "Firmware ELF changed after provisioning");
+  assertQos(record.firmwareSha256 === firmwareSha256, "FIRMWARE_MEASUREMENT_MISMATCH", "Firmware ELF changed after provisioning");
+  assertQos(policy.allowedDestinations.length === 1, "PROVISIONING_POLICY_MISMATCH", "Firmware demo policy must still contain exactly one destination");
+  assertQos(policy.allowedStrategyIds.length === 1, "PROVISIONING_POLICY_MISMATCH", "Firmware demo policy must still contain exactly one strategy ID");
   assertQos(record.clusterGenesis === policy.clusterGenesis, "PROVISIONING_POLICY_MISMATCH", "Provisioned cluster does not match current policy");
   assertQos(record.destination === policy.allowedDestinations[0], "PROVISIONING_POLICY_MISMATCH", "Provisioned destination does not match current policy");
   assertQos(record.maxTransferLamports === policy.maxTransferLamports && record.maxFeeLamports === policy.maxFeeLamports && record.maxIntentTtlSlots === policy.maxIntentTtlSlots, "PROVISIONING_POLICY_MISMATCH", "Provisioned limits do not match current policy");
+  assertQos(record.strategyId === policy.allowedStrategyIds[0], "PROVISIONING_POLICY_MISMATCH", "Provisioned strategy does not match current policy");
   const expectedToken = policy.tokenTransfer === null ? null : {
     ...policy.tokenTransfer,
     sourceTokenAccount: associatedTokenAddress({ owner: record.signer, mint: policy.tokenTransfer.mint, tokenProgram: policy.tokenTransfer.tokenProgram }),
     destinationTokenAccount: associatedTokenAddress({ owner: policy.allowedDestinations[0], mint: policy.tokenTransfer.mint, tokenProgram: policy.tokenTransfer.tokenProgram }),
   };
-  assertQos(JSON.stringify(record.tokenTransfer) === JSON.stringify(expectedToken), "PROVISIONING_POLICY_MISMATCH", "Provisioned token policy does not match current policy");
+  assertQos(canonicalJson(record.tokenTransfer) === canonicalJson(expectedToken), "PROVISIONING_POLICY_MISMATCH", "Provisioned token policy does not match current policy");
   return record;
+}
+
+function loadProvisioning(home, policy) {
+  assertQos(existsSync(PROVISIONING_FILE) && existsSync(FIRMWARE_ELF), "FIRMWARE_NOT_PROVISIONED", "Run the firmware demo build command first");
+  const record = JSON.parse(readFileSync(PROVISIONING_FILE, "utf8"));
+  return validateProvisioningRecord(record, policy, sha256File(FIRMWARE_ELF));
 }
 
 function verifyFirmwareTransaction(transaction, record, intent) {
@@ -454,9 +465,10 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     replay.fill(0);
   }
   const firmwareOutput = `${qemuResult.stdout ?? ""}${qemuResult.stderr ?? ""}`;
-  process.stdout.write(redactFirmwareOutput(firmwareOutput));
+  const safeFirmwareOutput = redactFirmwareOutput(firmwareOutput);
+  process.stdout.write(safeFirmwareOutput);
   assertQos(!qemuResult.error, "QEMU_FAILED", `QEMU execution failed: ${qemuResult.error?.message}`);
-  assertQos(qemuResult.status === 0, "QEMU_FAILED", `QEMU exited with status ${qemuResult.status}`, { firmwareOutput });
+  assertQos(qemuResult.status === 0, "QEMU_FAILED", `QEMU exited with status ${qemuResult.status}`, { firmwareOutput: safeFirmwareOutput });
   const transaction = parseFirmwareOutput(firmwareOutput);
   try {
   const verified = verifyFirmwareTransaction(transaction, record, base);
@@ -546,7 +558,7 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
 async function main() {
   process.umask(0o077);
   const { command, options } = parseArgs(process.argv.slice(2));
-  if (!command || command === "help") {
+  if (!command || command === "help" || command === "--help" || command === "-h") {
     process.stdout.write(usage());
     return;
   }

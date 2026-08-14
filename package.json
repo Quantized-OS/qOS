@@ -10,8 +10,10 @@
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",
+    "demo": "bash ./run-demo.sh",
+    "demo:build": "bash ./run-demo.sh --build-only",
     "test": "node --test",
-    "check": "node --check ./bin/qos.js && node --test"
+    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --test"
   },
   "engines": {
     "node": ">=20"

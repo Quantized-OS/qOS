@@ -72,6 +72,9 @@ export function initializeSandbox(home, destination = undefined, {
   preflightPolicy.allowedDestinations = [destination ?? "11111111111111111111111111111111"];
   validatePolicy(preflightPolicy);
 
+  // Allow a first-run sandbox to use a nested --home path while retaining the
+  // atomic sibling-directory initialization below.
+  mkdirSync(dirname(home), { recursive: true, mode: 0o700 });
   const stagingHome = `${home}.init-${process.pid}-${Date.now()}`;
   assertQos(!existsSync(stagingHome), "SANDBOX_INIT_COLLISION", "Could not allocate a unique sandbox staging path");
   try {

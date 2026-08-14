@@ -45,6 +45,15 @@ test("sandbox initialization validates inputs before creating any key material",
   assert.equal(existsSync(home), false);
 });
 
+test("sandbox initialization supports a new nested home path", () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-init-nested-"));
+  const home = join(parent, "one", "two", "sandbox");
+  const initialized = initializeSandbox(home);
+  assert.equal(initialized.home, home);
+  assert.equal(existsSync(join(home, "policy.json")), true);
+  assert.equal(existsSync(join(home, "signer.pem")), true);
+});
+
 test("native SOL preparation rejects a transfer back to the signer", async () => {
   const parent = mkdtempSync(join(tmpdir(), "qos-self-transfer-"));
   const home = join(parent, "sandbox");

@@ -174,6 +174,14 @@ def main() -> None:
             "redactFirmwareOutput",
         ),
     )
+    require(
+        "run-demo.sh",
+        (
+            "required_commands=(node cargo rustup make python3)",
+            "if (( ! build_only )); then",
+            "required_commands+=(qemu-system-riscv64)",
+        ),
+    )
     forbid("firmware-demo/build.rs", ("QOS_FW_SEED_HEX", "POLICY_SEED"))
     forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
     forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))

@@ -102,7 +102,11 @@ function validateRpcUrl(rpcUrl) {
   } catch {
     assertQos(false, "INVALID_RPC_URL", "rpcUrl is not a valid URL");
   }
-  const local = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
+  // Node preserves brackets in URL.hostname for IPv6 literals.
+  const local = url.hostname === "127.0.0.1"
+    || url.hostname === "localhost"
+    || url.hostname === "::1"
+    || url.hostname === "[::1]";
   assertQos(url.protocol === "https:" || (local && url.protocol === "http:"), "INSECURE_RPC_URL", "RPC must use HTTPS unless it is loopback");
   assertQos(!url.username && !url.password, "RPC_CREDENTIALS_IN_URL", "Do not put credentials in rpcUrl");
 }

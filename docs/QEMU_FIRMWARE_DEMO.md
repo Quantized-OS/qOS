@@ -51,6 +51,14 @@ rustup target list --installed | grep riscv64imac-unknown-none-elf
 No RISC-V GCC toolchain is required. Cargo uses the committed `Cargo.lock` and
 retrieves the pinned dependencies during the first build.
 
+Run `node bin/qos-firmware-demo.js --help` for the complete command-line
+surface. The repository wrapper also supports a build-only path that does not
+require QEMU when prerequisites are already installed:
+
+```sh
+bash run-demo.sh --build-only --skip-setup
+```
+
 ## Provision the demo firmware
 
 Use the initialized `.qos-ephemeral-devnet` signer and its pinned destination. It does

@@ -72,7 +72,7 @@ async function readStdin() {
 
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
-  if (!command || command === "help" || command === "--help") {
+  if (!command || command === "help" || command === "--help" || command === "-h") {
     process.stdout.write(usage());
     return;
   }

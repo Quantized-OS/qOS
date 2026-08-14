@@ -49,13 +49,26 @@ privacy controls, and regression coverage for the defects found during review.
     destination or ambiguous custody files.
 11. The C compiler was not explicitly prevented from optimizing away the
     stage-0 digest wipe.
+12. Firmware demo failure details could disclose the raw signed transaction
+    even though the displayed QEMU transcript was redacted.
+13. Firmware provisioning did not re-bind the sole strategy ID after policy
+    changes.
+14. Valid plaintext RPC endpoints on IPv6 loopback were rejected.
+15. First-run sandbox initialization failed when `--home` used missing parent
+    directories.
+16. The wrapper required QEMU for `--build-only`, even though QEMU is needed
+    only when running the firmware.
+17. The source archive included an ignored, incomplete `.qos-demo` runtime
+    directory that could be mistaken for an initialized runnable sandbox.
 
 ## Verification performed
 
 - `make check` passes.
-- 54 Node.js tests pass, including encryption/decryption failure, external
+- 58 Node.js tests pass, including encryption/decryption failure, external
   signer isolation, SNARK request binding, replay rejection, canonicalization,
-  RPC size limits, and HTTP bind restrictions.
+  RPC size limits, HTTP bind restrictions, provisioning-policy binding,
+  failure-output redaction, IPv6 loopback handling, nested sandbox
+  initialization, and firmware CLI help.
 - Python firmware/static fail-closed invariants pass.
 - JavaScript syntax checks pass.
 - Archive diff whitespace checks pass.

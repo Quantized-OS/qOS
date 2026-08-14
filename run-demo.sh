@@ -115,9 +115,12 @@ done
 
 [[ "${lamports}" =~ ^[1-9][0-9]*$ ]] || die "--lamports must be a positive integer."
 [[ "${airdrop_lamports}" =~ ^[1-9][0-9]*$ ]] || die "--airdrop-lamports must be a positive integer."
+[[ -n "${qos_home}" ]] || die "--home must not be empty."
 (( ${#lamports} <= 18 )) || die "--lamports is too large."
 (( ${#airdrop_lamports} <= 18 )) || die "--airdrop-lamports is too large."
 (( 10#${airdrop_lamports} <= 1000000000 )) || die "--airdrop-lamports cannot exceed 1000000000."
+(( setup_only && skip_setup )) && die "--setup-only cannot be combined with --skip-setup."
+(( setup_only && build_only )) && die "--setup-only cannot be combined with --build-only."
 
 if (( ! skip_setup )); then
   [[ -x "${SETUP_SCRIPT}" ]] || die "Setup script is missing or not executable: ${SETUP_SCRIPT}"
@@ -137,7 +140,12 @@ fi
 
 cd "${SCRIPT_DIR}"
 
-for required_command in node cargo rustup qemu-system-riscv64 make python3; do
+required_commands=(node cargo rustup make python3)
+if (( ! build_only )); then
+  required_commands+=(qemu-system-riscv64)
+fi
+
+for required_command in "${required_commands[@]}"; do
   command -v "${required_command}" >/dev/null 2>&1 || \
     die "${required_command} is unavailable. Re-run without --skip-setup."
 done

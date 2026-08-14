@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { closeSync, readFileSync, readlinkSync } from "node:fs";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
-import { MAINNET_GENESIS_HASH } from "../src/constants.js";
+import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH } from "../src/constants.js";
 import {
   clusterGenesisBytes,
   encodeKeyMailbox,
@@ -11,6 +12,7 @@ import {
   openRamBackedFile,
   parseFirmwareOutput,
   redactFirmwareOutput,
+  validateProvisioningRecord,
 } from "../bin/qos-firmware-demo.js";
 
 function frame(overrides = {}) {
@@ -110,8 +112,61 @@ test("demo transcript must prove acceptance, tamper rejection, and replay reject
   ].join("\n");
   assert.deepEqual(parseFirmwareOutput(output), Buffer.from([1, 2, 3]));
   assert.throws(() => parseFirmwareOutput(output.replace("NONCE_REPLAY", "OTHER")), { code: "FIRMWARE_REPLAY_TEST_FAILED" });
-  assert.throws(() => parseFirmwareOutput(`${output}\nQOS_FW:ACCEPT index=2 tx_hex=04`), { code: "FIRMWARE_ACCEPT_SET_INVALID" });
+  let failure;
+  try {
+    parseFirmwareOutput(`${output}\nQOS_FW:ACCEPT index=2 tx_hex=04`);
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.code, "FIRMWARE_ACCEPT_SET_INVALID");
+  assert.equal(failure.details.output.includes("010203"), false);
+  assert.match(failure.details.output, /tx_hex=<redacted-in-memory>/);
   const redacted = redactFirmwareOutput(output);
   assert.equal(redacted.includes("010203"), false);
   assert.match(redacted, /tx_hex=<redacted-in-memory>/);
+});
+
+test("provisioning validation binds the firmware to the sole policy strategy", () => {
+  const destination = encodeBase58(Buffer.alloc(32, 41));
+  const policy = {
+    clusterGenesis: DEVNET_GENESIS_HASH,
+    allowedDestinations: [destination],
+    allowedStrategyIds: [1],
+    maxTransferLamports: "100000000",
+    maxFeeLamports: "10000",
+    maxIntentTtlSlots: 120,
+    tokenTransfer: null,
+  };
+  const firmwareSha256 = "a".repeat(64);
+  const record = {
+    version: 3,
+    firmwareSha256,
+    signer: encodeBase58(Buffer.alloc(32, 42)),
+    clusterGenesis: policy.clusterGenesis,
+    destination,
+    maxTransferLamports: policy.maxTransferLamports,
+    maxFeeLamports: policy.maxFeeLamports,
+    maxIntentTtlSlots: policy.maxIntentTtlSlots,
+    strategyId: 1,
+    tokenTransfer: null,
+  };
+  assert.equal(validateProvisioningRecord(record, policy, firmwareSha256), record);
+  assert.throws(
+    () => validateProvisioningRecord({ ...record, strategyId: 2 }, policy, firmwareSha256),
+    { code: "PROVISIONING_POLICY_MISMATCH" },
+  );
+  assert.throws(
+    () => validateProvisioningRecord(record, { ...policy, allowedStrategyIds: [1, 2] }, firmwareSha256),
+    { code: "PROVISIONING_POLICY_MISMATCH" },
+  );
+});
+
+test("firmware demo exposes conventional help flags without requiring a sandbox", () => {
+  for (const flag of ["--help", "-h"]) {
+    const result = spawnSync(process.execPath, [new URL("../bin/qos-firmware-demo.js", import.meta.url).pathname, flag], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /qOS QEMU firmware transaction demo/);
+  }
 });

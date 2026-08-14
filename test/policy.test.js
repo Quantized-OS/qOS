@@ -84,6 +84,18 @@ test("policy accepts the exact sandbox intent", () => {
   assert.equal(values.nonce, 1n);
 });
 
+test("policy permits plaintext RPC only on IPv4 or IPv6 loopback", () => {
+  const ipv6 = JSON.parse(readFileSync(new URL("../config/devnet.policy.json", import.meta.url), "utf8"));
+  ipv6.allowedDestinations = [destination];
+  ipv6.rpcUrl = "http://[::1]:8899";
+  assert.doesNotThrow(() => validatePolicy(ipv6));
+
+  const remote = JSON.parse(readFileSync(new URL("../config/devnet.policy.json", import.meta.url), "utf8"));
+  remote.allowedDestinations = [destination];
+  remote.rpcUrl = "http://192.0.2.1:8899";
+  assert.throws(() => validatePolicy(remote), { code: "INSECURE_RPC_URL" });
+});
+
 test("policy rejects unknown fields", () => {
   assert.throws(() => validateIntent(intent({ arbitraryInstruction: "AA==" }), policy(), 100), { code: "INVALID_INTENT_SHAPE" });
 });
