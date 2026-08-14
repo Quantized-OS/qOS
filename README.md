@@ -67,9 +67,16 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `firmware/linker.ld` — QEMU-oriented development memory layout
 * `docs/ARCHITECTURE.md` — Trust domains and privacy boundaries
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
+* `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
+* `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and audit modules
+* `bin/qos.js` — Sandbox CLI and local API server
+* `config/devnet.policy.json` — Fail-closed Devnet policy template
+* `test/` — Transaction, policy, audit, and relay integration tests
 * `tests/static_checks.py` — Fail-closed starter invariants
 
-The code is intentionally incomplete. It will not produce a deployable firmware image until the target platform provides working implementations of ML-DSA-65, SHA3-384, rollback storage, measured boot, PMP locking, and failure handling. There is no development-signature bypass.
+The firmware code is intentionally incomplete. It will not produce a deployable firmware image until the target platform provides working implementations of ML-DSA-65, SHA3-384, rollback storage, measured boot, PMP locking, and failure handling. There is no development-signature bypass.
+
+The repository now also contains a working **Devnet-only Solana sandbox**. It accepts typed `OrderIntentV1` requests, constructs a single pinned System Program transfer internally, signs it with an isolated mock Ed25519 signer, simulates it, submits it, waits for confirmation, and records authorization in a keyed hash-chain audit log. It does not accept arbitrary serialized messages for signing.
 
 ## Build the research starter
 
@@ -79,21 +86,48 @@ Run the host-side invariant checks:
 make check
 ```
 
+This requires Python 3 and Node.js 20 or newer. It does not download npm packages.
+
 With a `riscv64-linux-gnu-` cross-toolchain, compile the firmware objects:
 
 ```sh
 make build/reset.o build/secure_boot.o
 ```
 
-Do not use this repository with production keys or mainnet funds. The first end-to-end target is a devnet-only order builder connected to a mock signer that enforces `docs/SIGNER_POLICY.md`.
+Do not use this repository with production keys or mainnet funds.
+
+## Run a real Solana Devnet transaction
+
+Initialize disposable signer, receiver, audit, and policy files:
+
+```sh
+node bin/qos.js init
+```
+
+Fund the printed signer with Devnet SOL, then send 0.001 Devnet SOL to the generated allowlisted receiver:
+
+```sh
+node bin/qos.js airdrop --lamports 200000000
+node bin/qos.js transfer --lamports 1000000
+```
+
+The transfer command checks the RPC genesis hash, creates a fresh bounded intent, applies policy, calculates the network fee, signs, simulates, broadcasts, polls `getSignatureStatuses`, and returns a Devnet Explorer link only after confirmation. The public Devnet faucet and RPC can rate-limit requests; a dedicated Devnet RPC may be selected with `SOLANA_RPC_URL`, but its genesis hash must match the pinned policy.
+
+To allow an existing Devnet wallet instead of generating a receiver:
+
+```sh
+node bin/qos.js init --destination YOUR_DEVNET_PUBLIC_KEY
+```
+
+For the local HTTP interface and the complete two-step prepare/submit flow, see [`docs/SANDBOX.md`](docs/SANDBOX.md).
 
 ## Roadmap
 
 * Boot the qOS root of trust under QEMU and verify failure and rollback behavior
 * Integrate OpenSBI and a reproducible minimal OS image
-* Build the isolated Solana order-intent signer
-* Add devnet transaction templates for one tightly allowlisted venue
-* Integrate direct and private relay routing with inclusion monitoring
+* Replace the Devnet mock signer with an isolated process or hardware boundary
+* Add a reviewed DEX instruction template after program, market, account, and token validation is specified
+* Add a pinned private relay adapter; the current sandbox uses standard Solana JSON-RPC
 * Anchor approved firmware measurements and policies onchain
 * Port the hardware trust boundary to an AMD platform if technical and commercial discussions produce an agreed integration path
 * Commission independent reviews of the firmware, custody model, Solana message handling, side-channel resistance, and fault-injection behavior before any mainnet deployment

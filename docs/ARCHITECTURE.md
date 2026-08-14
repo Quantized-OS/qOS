@@ -73,6 +73,40 @@ At minimum it enforces:
 Keep treasury assets in a separate cold or MPC-controlled account.  The hot
 trading key should only control a deliberately capped balance.
 
+## Implemented Devnet sandbox
+
+The host-side prototype implements the first narrow slice of the target design:
+
+```mermaid
+flowchart TD
+    A[Typed intent] --> B[Devnet and policy checks]
+    B --> C[Pinned transfer builder]
+    C --> D[Mock Ed25519 signer]
+    D --> E[Simulation and RPC relay]
+    E --> F[Confirmation monitor]
+    D --> G[Authenticated audit chain]
+```
+
+The sandbox has no arbitrary-message signing endpoint. `src/transaction.js`
+constructs a legacy Solana message containing exactly one
+`SystemProgram.transfer` instruction. The only signer is the fee payer; the
+only writable destination is selected from the policy allowlist; no address
+lookup tables, compute-budget instructions, relay tips, memos, or user-supplied
+programs are accepted.
+
+Before signing, the service verifies the live RPC genesis hash, checks the
+recent blockhash with `isBlockhashValid`, bounds slot expiry, calculates the
+actual fee with `getFeeForMessage`, and self-parses its constructed message.
+It records the intent and message digests in an HMAC-authenticated, chained
+audit log before release. The relay simulates with signature verification,
+submits with preflight enabled, checks the returned signature, and polls
+confirmation status. RPC responses are untrusted inputs and are shape-checked.
+
+The mock signer, relay, and API can run in one Node.js process for sandbox use.
+That is not a hardware isolation boundary. A production port must preserve the
+module interface while moving key loading, nonce state, policy, message
+construction, and audit authorization below the untrusted OS boundary.
+
 ## Transaction routing and privacy
 
 A direct validator/block-engine route can reduce exposure before inclusion.
@@ -101,4 +135,3 @@ Post-quantum protection applies to:
 It does not apply to an ordinary Solana transaction until the Solana protocol
 accepts a post-quantum transaction signature scheme.  A local custom CPU
 instruction cannot change consensus verification rules.
-

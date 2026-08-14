@@ -41,9 +41,39 @@ def main() -> None:
             "fails closed",
         ),
     )
-    print("PASS: fail-closed boot and narrow signer-policy checks")
+    require(
+        "src/service.js",
+        (
+            "assertCluster",
+            "validateIntent",
+            "isBlockhashValid",
+            "getFeeForMessage",
+            "simulateTransaction",
+            "confirmSignature",
+            "authorizeAndAppend",
+        ),
+    )
+    require(
+        "src/transaction.js",
+        (
+            "SYSTEM_PROGRAM_ID",
+            "buildNativeTransferMessage",
+            "parseNativeTransferMessage",
+            "SIGNATURE_SELF_CHECK_FAILED",
+            "MAX_TRANSACTION_BYTES",
+        ),
+    )
+    require(
+        "src/policy.js",
+        (
+            "MAINNET_DISABLED",
+            "DESTINATION_NOT_ALLOWED",
+            "NONCE",
+            "FEE_LIMIT_EXCEEDED",
+        ),
+    )
+    print("PASS: fail-closed boot, Solana template, and narrow signer-policy checks")
 
 
 if __name__ == "__main__":
     main()
-

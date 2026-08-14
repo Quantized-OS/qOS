@@ -1,4 +1,4 @@
-# Isolated Solana signer policy v0.1
+# Isolated Solana signer policy v0.2
 
 This document defines the narrow interface between the untrusted trading OS
 and the trusted signing component.
@@ -14,7 +14,7 @@ OrderIntentV1
   cluster_genesis:     [u8; 32]
   venue_id:            enum allowlisted venue
   market_id:           enum allowlisted market
-  side:                BUY | SELL
+  side:                BUY | SELL | SEND
   input_mint:          [u8; 32]
   output_mint:         [u8; 32]
   input_amount:        u64
@@ -22,11 +22,36 @@ OrderIntentV1
   max_fee_lamports:    u64
   max_cu_price:        u64
   max_relay_tip:       u64
+  destination:         [u8; 32]
   recent_blockhash:    [u8; 32]
   expires_at_slot:     u64
   strategy_id:         u32
   operator_approval:   optional authenticated approval token
 ```
+
+The Node.js sandbox uses the equivalent camel-case JSON fields. Values wider
+than JavaScript's safe integer range, including all lamport values, nonces, and
+slots, are canonical unsigned decimal strings. Unknown fields, leading zeroes,
+trailing data, and non-canonical base58 encodings are rejected.
+
+## Implemented transaction template
+
+Policy version 1 intentionally exposes only one Devnet template:
+
+- Venue: `QOS_DEVNET_NATIVE_TRANSFER`
+- Market: `SOL_DEVNET`
+- Side: `SEND`
+- Program: `11111111111111111111111111111111` (System Program)
+- Instruction: exactly one native SOL transfer
+- Signer and fee payer: the isolated mock signer
+- Destination: exact policy allowlist match
+- Address lookup tables, compute price, and relay tip: disabled
+
+This is a real Solana transaction template for exercising signing, policy,
+relay, confirmation, and audit controls. It is not represented as a DEX trade.
+An actual venue adapter must receive its own exact instruction discriminator,
+account derivation rules, market and mint pins, token-account ownership checks,
+slippage math, and tests before it can be added.
 
 ## Signer behavior
 
@@ -42,6 +67,11 @@ OrderIntentV1
 8. Return only the signature, public key, message digest, and audit sequence.
 9. Append an authenticated audit record before authorizing another request.
 
+The sandbox additionally verifies the RPC genesis identity, recent blockhash,
+expiry slot, calculated fee, and its own serialized message before it releases
+the transaction. A send RPC response is not considered success; the relay
+waits for `confirmed` or `finalized` status.
+
 ## Explicitly forbidden interfaces
 
 - Sign arbitrary bytes
@@ -56,4 +86,3 @@ OrderIntentV1
 Any parse error, missing state, rollback indication, clock/slot uncertainty,
 audit failure, or policy ambiguity fails closed.  Recovery requires a separate
 management key and must never use the trading key.
-

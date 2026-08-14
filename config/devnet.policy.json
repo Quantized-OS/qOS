@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "cluster": "devnet",
+  "clusterGenesis": "GH7ome3EiwEr7tu9JuTh2dpYWBJK3z69Xm1ZE3MEE6JC",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "venueId": "QOS_DEVNET_NATIVE_TRANSFER",
+  "marketId": "SOL_DEVNET",
+  "inputMint": "So11111111111111111111111111111111111111112",
+  "outputMint": "So11111111111111111111111111111111111111112",
+  "allowedDestinations": [],
+  "allowedStrategyIds": [1],
+  "maxTransferLamports": "100000000",
+  "maxFeeLamports": "10000",
+  "maxComputeUnitPrice": "0",
+  "maxRelayTipLamports": "0",
+  "maxIntentTtlSlots": 120,
+  "maxRequestsPerMinute": 6,
+  "commitment": "confirmed",
+  "rpcTimeoutMs": 10000,
+  "confirmationTimeoutMs": 60000
+}
