@@ -2,11 +2,13 @@
 """Static safety checks for the firmware starter; not cryptographic tests."""
 
 from pathlib import Path
+from typing import Tuple
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def require(path: str, needles: tuple[str, ...]) -> None:
+def require(path: str, needles: Tuple[str, ...]) -> None:
     text = (ROOT / path).read_text()
     for needle in needles:
         assert needle in text, f"{path}: missing {needle!r}"
