@@ -68,6 +68,7 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/ARCHITECTURE.md` — Trust domains and privacy boundaries
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
+* `docs/PRIVACY_ZK_CUSTODY.md` — Agent-safe key custody, AES-256-GCM keys, and SNARK verifier contract
 * src/ — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
@@ -76,14 +77,16 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
 * test/ — Transaction, policy, privacy, firmware-mailbox, and relay integration tests
 * `tests/static_checks.py` — Fail-closed starter invariants
+* `SECURITY.md` — Threat model, deployment profiles, limitations, and disclosure guidance
+* `HARDENING_REPORT.md` — Implemented controls, fixed defects, verification, and remaining gaps
 
 The firmware code is intentionally incomplete. It will not produce a deployable firmware image until the target platform provides working implementations of ML-DSA-65, SHA3-384, rollback storage, measured boot, PMP locking, and failure handling. There is no development-signature bypass.
 
-The repository now contains a working Solana sandbox. Devnet mode accepts typed OrderIntentV1 requests and constructs one pinned System Program transfer. The explicit mainnet mode accepts TokenTransferIntentV2 for the qOS mint 5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump and constructs one Token-2022 TransferChecked instruction. Both paths sign with the isolated mock Ed25519 signer, simulate, submit, confirm, and forget completed transaction state. Neither path accepts arbitrary serialized messages for signing.
+The repository now contains a working Solana sandbox. Devnet mode accepts typed OrderIntentV1 requests and constructs one pinned System Program transfer. The explicit mainnet mode accepts TokenTransferIntentV2 for the qOS mint 5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump and constructs one Token-2022 TransferChecked instruction. Both paths support an external non-exportable signer, an AES-256-GCM encrypted software-key fallback, and the original plaintext development signer. They simulate, submit, confirm, and forget completed transaction state. Neither path accepts arbitrary serialized messages for signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.6 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.7 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
@@ -91,11 +94,42 @@ its typed intent and runtime key through already-unlinked files on Linux tmpfs.
 The firmware ELF contains policy constants but no Ed25519 seed. Raw signed
 transactions are redacted from the QEMU terminal transcript.
 
-The signer key, receiver key, policy, public provisioning record, and firmware
-ELF remain on disk so the sandbox keeps a stable identity and can verify what
-booted. JavaScript strings are garbage-collected and cannot be given the same
-zeroization guarantee as native buffers. Use a minimal host with swap and core
-dumps disabled for the strongest demo boundary.
+The policy, public provisioning record, and firmware ELF remain on disk so the
+sandbox keeps a stable identity and can verify what booted. External-signer
+homes contain only a public signer descriptor and require an explicit public
+destination, so initialization creates no private keys. Encrypted software
+homes retain AES-256-GCM ciphertext and scrypt metadata. Plaintext demo homes
+retain PEM keys. JavaScript strings are garbage-collected and cannot be given
+the same zeroization guarantee as native buffers. Use the external signer with
+a minimal host, swap disabled, and core dumps disabled for the strongest
+implemented host boundary.
+
+## Agent-safe key custody and private authorization
+
+For an AI agent or any other untrusted automation, initialize qOS with an
+already provisioned public key and destination:
+
+```sh
+node bin/qos.js init --signer-public-key YOUR_SIGNER_PUBLIC_KEY \
+  --destination YOUR_ALLOWLISTED_DESTINATION
+QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter \
+  node bin/qos.js address
+```
+
+The qOS process stores no private key in this mode. The external adapter should
+be backed by an HSM, TPM, enclave, KMS, MPC service, or isolated firmware that
+independently pins the policy commitment and accepts only the typed protocol.
+Possession of the adapter capability can still authorize policy-compliant
+signatures, so OS permissions and signer-side policy enforcement remain
+essential.
+
+The optional SNARK gate accepts Groth16-BN254 or PLONK-BN254 proof envelopes
+through a separately reviewed verifier adapter. qOS computes and binds the
+public signals itself: exact intent commitment, policy commitment, signer,
+expiry, circuit ID, proof system, and verifying-key SHA-256. No demo verifier is
+enabled at runtime, and a required verifier fails closed if it is absent. See
+[`docs/PRIVACY_ZK_CUSTODY.md`](docs/PRIVACY_ZK_CUSTODY.md) for the protocol and
+honest security boundaries.
 
 Ephemeral local handling does not make a broadcast transaction secret. Once
 Solana accepts it, the signature, accounts, amount, and instruction are public
@@ -241,7 +275,7 @@ QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
 
 * Boot the qOS root of trust under QEMU and verify failure and rollback behavior
 * Integrate OpenSBI and a reproducible minimal OS image
-* Replace the Devnet mock signer with an isolated process or hardware boundary
+* Move typed policy re-validation and message construction into reviewed HSM, enclave, or firmware adapters
 * Add a reviewed DEX instruction template after program, market, account, and token validation is specified
 * Add a pinned private relay adapter; the current sandbox uses standard Solana JSON-RPC
 * Anchor approved firmware measurements and policies onchain

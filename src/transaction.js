@@ -97,19 +97,29 @@ export function buildTokenTransferCheckedMessage({
 export function signMessage(message, privateKey) {
   const publicKeyBytes = rawPublicKey(privateKey);
   const signature = sign(null, message, privateKey);
+  const result = assembleSignedTransaction(message, publicKeyBytes, signature);
+  signature.fill(0);
+  publicKeyBytes.fill(0);
+  return result;
+}
+
+export function assembleSignedTransaction(message, publicKeyBytes, signatureBytes) {
+  const publicKey = Buffer.from(publicKeyBytes);
+  const signature = Buffer.from(signatureBytes);
+  assertQos(publicKey.length === 32, "INVALID_PUBLIC_KEY", "Ed25519 public key must be 32 bytes");
   assertQos(signature.length === 64, "INVALID_SIGNATURE", "Ed25519 signer returned a non-64-byte signature");
-  assertQos(verify(null, message, publicKeyObjectFromRaw(publicKeyBytes), signature), "SIGNATURE_SELF_CHECK_FAILED", "Generated signature did not verify");
+  assertQos(verify(null, message, publicKeyObjectFromRaw(publicKey), signature), "SIGNATURE_SELF_CHECK_FAILED", "Generated signature did not verify");
   const transaction = Buffer.concat([encodeShortVec(1), signature, message]);
   assertQos(transaction.length <= MAX_TRANSACTION_BYTES, "TRANSACTION_TOO_LARGE", "Serialized transaction exceeds Solana's 1232-byte limit");
   const result = {
     signature: encodeBase58(signature),
-    publicKey: encodeBase58(publicKeyBytes),
+    publicKey: encodeBase58(publicKey),
     messageBase64: Buffer.from(message).toString("base64"),
     transactionBase64: transaction.toString("base64"),
     transactionBytes: transaction.length,
   };
   signature.fill(0);
-  publicKeyBytes.fill(0);
+  publicKey.fill(0);
   transaction.fill(0);
   return result;
 }

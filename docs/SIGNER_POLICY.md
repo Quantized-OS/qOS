@@ -1,4 +1,4 @@
-# Isolated Solana signer policy v0.6
+# Isolated Solana signer policy v0.7
 
 This document defines the narrow interface between the untrusted trading OS
 and the trusted signing component.
@@ -69,7 +69,7 @@ Policy version 2 exposes two exact templates:
 - Token instruction: exactly one `TransferChecked`
 - Token decimals: exactly `6`
 - Allowed mint extensions: exactly `18` and `19` (metadata pointer and token metadata)
-- Signer and fee payer: the isolated mock signer
+- Signer and fee payer: the provisioned Ed25519 identity (external non-exportable signer preferred)
 - Destination owner: exact policy allowlist match
 - Token accounts: associated addresses derived from owner, mint, and token program
 - Address lookup tables, compute price, and relay tip: disabled
@@ -93,7 +93,9 @@ slippage math, and tests before it can be added.
 2. Reject unknown versions, enum values, trailing data, and nonzero reserved
    fields.
 3. Within one firmware boot, verify the request nonce is strictly increasing.
-   The host sandbox rejects concurrent reuse and forgets it after completion.
+   The host sandbox uses unpredictable u128 nonces and retains only keyed
+   SHA-256 nonce commitments for the process lifetime, rejecting both
+   concurrent and completed reuse without retaining the raw nonce.
 4. Apply amount, slippage, fee, program, market, and exposure policies.
 5. Construct the exact versioned Solana message internally from a pinned
    instruction template.

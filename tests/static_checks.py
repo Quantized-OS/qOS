@@ -37,6 +37,8 @@ def main() -> None:
         "firmware/secure_boot.c",
         (
             "manifest_shape_is_valid",
+            "secure_zero",
+            "volatile uint8_t",
             "platform_verify_mldsa65_manifest",
             "platform_commit_security_version",
             "platform_lock_root_secrets",
@@ -63,6 +65,48 @@ def main() -> None:
             "confirmSignature",
             "EphemeralSession",
             "transactionRetained",
+            "openSigner",
+            "SnarkProofGate",
+        ),
+    )
+    require("src/session.js", ("NONCE_REPLAY", "createHmac", "randomBytes(16)"))
+    require(
+        "src/signer.js",
+        (
+            "ExternalCommandSigner",
+            "keyExportableToAgentProcess: false",
+            "SIGNER_IDENTITY_MISMATCH",
+            "SIGNATURE_SELF_CHECK_FAILED",
+        ),
+    )
+    require(
+        "src/key-store.js",
+        (
+            'createCipheriv("aes-256-gcm"',
+            "scryptSync",
+            "setAAD",
+            "KEY_DECRYPTION_FAILED",
+            "KEY_IDENTITY_MISMATCH",
+        ),
+    )
+    require(
+        "src/zk.js",
+        (
+            "groth16-bn254",
+            "plonk-bn254",
+            "verifyingKeySha256",
+            "intentCommitment",
+            "policyCommitment",
+            "ZK_PROOF_INVALID",
+        ),
+    )
+    require(
+        "src/server.js",
+        (
+            "LOOPBACK_REQUIRED",
+            "API_TOKEN_REQUIRED",
+            'new TextDecoder("utf-8", { fatal: true })',
+            "maxRequestsPerSocket",
         ),
     )
     require(
@@ -133,6 +177,7 @@ def main() -> None:
     forbid("firmware-demo/build.rs", ("QOS_FW_SEED_HEX", "POLICY_SEED"))
     forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
     forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))
+    forbid("src/subprocess.js", ("shell: true",))
     forbid_path("src/audit.js")
     forbid_path("test/audit.test.js")
     print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")

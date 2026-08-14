@@ -12,26 +12,28 @@ import { fileURLToPath } from "node:url";
 import { decodeBase58 } from "./base58.js";
 import { assertQos } from "./errors.js";
 import {
-  loadPrivateKey,
   publicKeyAddress,
+  writeNewEncryptedEd25519Key,
   writeNewEd25519Key,
 } from "./key-store.js";
 import { loadPolicy, parseUnsigned, validateIntent, validatePolicy } from "./policy.js";
 import { SolanaRpc } from "./rpc.js";
 import { EphemeralSession } from "./session.js";
 import {
+  assembleSignedTransaction,
   buildNativeTransferMessage,
   buildTokenTransferCheckedMessage,
   parseNativeTransferMessage,
   parseTokenTransferCheckedMessage,
-  signMessage,
 } from "./transaction.js";
+import { openSigner, signerDescriptor } from "./signer.js";
 import {
   associatedTokenAddress,
   parseMintAccount,
   parseTokenAccount,
   verifyTokenTransferAccounts,
 } from "./token.js";
+import { intentCommitment, policyCommitment, SnarkProofGate, unwrapProofRequest } from "./zk.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -39,7 +41,10 @@ export function sandboxPaths(home) {
   return {
     home,
     signerKey: join(home, "signer.pem"),
+    encryptedSignerKey: join(home, "signer.qkey"),
+    signerDescriptor: join(home, "signer.json"),
     receiverKey: join(home, "receiver.pem"),
+    encryptedReceiverKey: join(home, "receiver.qkey"),
     legacyAuditKey: join(home, "audit.key"),
     legacyAuditLog: join(home, "audit.log"),
     legacyAuditLock: join(home, "audit.lock"),
@@ -47,9 +52,19 @@ export function sandboxPaths(home) {
   };
 }
 
-export function initializeSandbox(home, destination = undefined, { cluster = "devnet" } = {}) {
+export function initializeSandbox(home, destination = undefined, {
+  cluster = "devnet",
+  signerPublicKey = undefined,
+  keyPassphraseFile = undefined,
+} = {}) {
   assertQos(!existsSync(home), "SANDBOX_ALREADY_EXISTS", `Refusing to overwrite existing sandbox: ${home}`);
   assertQos(cluster === "devnet" || cluster === "mainnet-beta", "UNSUPPORTED_CLUSTER", "Cluster must be devnet or mainnet-beta");
+  assertQos(!(signerPublicKey !== undefined && keyPassphraseFile !== undefined), "SIGNER_CONFIG_CONFLICT", "External and encrypted software signer modes are mutually exclusive");
+  if (signerPublicKey !== undefined) {
+    decodeBase58(signerPublicKey, 32);
+    assertQos(destination !== undefined, "DESTINATION_REQUIRED", "External signer initialization requires an explicit destination so qOS creates no private keys");
+    assertQos(signerPublicKey !== destination, "SELF_TRANSFER_NOT_ALLOWED", "External signer and destination must be different accounts");
+  }
   const policyFile = cluster === "devnet" ? "devnet.policy.json" : "mainnet.policy.json";
   const templateText = readFileSync(join(PROJECT_ROOT, "config", policyFile), "utf8");
   if (destination !== undefined) decodeBase58(destination, 32);
@@ -63,8 +78,22 @@ export function initializeSandbox(home, destination = undefined, { cluster = "de
     mkdirSync(stagingHome, { recursive: false, mode: 0o700 });
     chmodSync(stagingHome, 0o700);
     const stagingPaths = sandboxPaths(stagingHome);
-    const signerKey = writeNewEd25519Key(stagingPaths.signerKey);
-    const receiver = destination ?? publicKeyAddress(writeNewEd25519Key(stagingPaths.receiverKey));
+    let signer;
+    if (signerPublicKey !== undefined) {
+      signer = signerPublicKey;
+      writeFileSync(stagingPaths.signerDescriptor, `${JSON.stringify(signerDescriptor(signerPublicKey), null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      chmodSync(stagingPaths.signerDescriptor, 0o600);
+    } else if (keyPassphraseFile !== undefined) {
+      signer = publicKeyAddress(writeNewEncryptedEd25519Key(stagingPaths.encryptedSignerKey, keyPassphraseFile));
+    } else {
+      signer = publicKeyAddress(writeNewEd25519Key(stagingPaths.signerKey));
+    }
+    let receiver = destination;
+    if (receiver === undefined) {
+      receiver = keyPassphraseFile === undefined
+        ? publicKeyAddress(writeNewEd25519Key(stagingPaths.receiverKey))
+        : publicKeyAddress(writeNewEncryptedEd25519Key(stagingPaths.encryptedReceiverKey, keyPassphraseFile));
+    }
     const template = JSON.parse(templateText);
     template.allowedDestinations = [receiver];
     validatePolicy(template);
@@ -74,12 +103,17 @@ export function initializeSandbox(home, destination = undefined, { cluster = "de
     renameSync(stagingHome, home);
     return {
       home,
-      signer: publicKeyAddress(signerKey),
+      signer,
       destination: receiver,
       cluster: template.cluster,
       clusterGenesis: template.clusterGenesis,
       tokenTransfer: template.tokenTransfer,
       retention: "ephemeral-memory",
+      keyCustody: signerPublicKey !== undefined
+        ? "non-exportable-external-boundary"
+        : keyPassphraseFile !== undefined
+          ? "aes-256-gcm-encrypted-at-rest"
+          : "plaintext-development",
     };
   } catch (error) {
     rmSync(stagingHome, { recursive: true, force: true });
@@ -121,13 +155,14 @@ function parseTokenPrepareOptions(options, policy, session) {
 }
 
 export class QosService {
-  constructor({ paths, policy, privateKey, session, rpc }) {
+  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate() }) {
     this.paths = paths;
     this.policy = policy;
-    this.privateKey = privateKey;
-    this.publicKey = publicKeyAddress(privateKey);
+    this.signer = signer;
+    this.publicKey = signer.publicKey;
     this.session = session;
     this.rpc = rpc;
+    this.proofGate = proofGate;
   }
 
   static open(home, { rpcUrl = process.env.SOLANA_RPC_URL } = {}) {
@@ -140,13 +175,14 @@ export class QosService {
       { files: legacyFiles },
     );
     const policy = loadPolicy(paths.policy, rpcUrl);
-    const privateKey = loadPrivateKey(paths.signerKey);
+    const signer = openSigner(paths);
     const session = new EphemeralSession();
+    const proofGate = SnarkProofGate.fromEnvironment();
     const rpc = new SolanaRpc(policy.rpcUrl, {
       timeoutMs: policy.rpcTimeoutMs,
       commitment: policy.commitment,
     });
-    return new QosService({ paths, policy, privateKey, session, rpc });
+    return new QosService({ paths, policy, signer, session, rpc, proofGate });
   }
 
   async assertCluster() {
@@ -307,7 +343,8 @@ export class QosService {
     return intent;
   }
 
-  async submitIntent(intent) {
+  async submitIntent(request) {
+    const { intent, privacyProof } = unwrapProofRequest(request);
     const [genesis, currentSlot] = await Promise.all([
       this.assertCluster(),
       this.rpc.getSlot(),
@@ -317,6 +354,10 @@ export class QosService {
     const releaseAuthorization = this.session.begin(intent.requestNonce, this.policy.maxRequestsPerMinute);
     let message;
     try {
+    const proofResult = await this.proofGate.verify(intent, privacyProof, {
+      policy: this.policy,
+      signer: this.publicKey,
+    });
     if (values.kind === "native") {
       assertQos(intent.destination !== this.publicKey, "SELF_TRANSFER_NOT_ALLOWED", "Native SOL destination must differ from the firmware signer");
     }
@@ -370,11 +411,18 @@ export class QosService {
     if (this.policy.cluster === "mainnet-beta") {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
     }
-    const signed = signMessage(message, this.privateKey);
+    const signature = await this.signer.sign(message, {
+      version: 1,
+      intent,
+      intentCommitment: intentCommitment(intent),
+      policyCommitment: policyCommitment(this.policy),
+      privacyProofVerified: proofResult.verified,
+    });
+    const signed = assembleSignedTransaction(message, decodeBase58(this.publicKey, 32), signature);
+    signature.fill(0);
     const simulation = await this.rpc.simulateTransaction(signed.transactionBase64);
     assertQos(simulation && simulation.err === null, "SIMULATION_FAILED", "Solana preflight simulation rejected the transaction", {
       err: simulation?.err,
-      logs: Array.isArray(simulation?.logs) ? simulation.logs.slice(-20) : undefined,
     });
     const rpcSignature = await this.rpc.sendTransaction(signed.transactionBase64);
     assertQos(rpcSignature === signed.signature, "SIGNATURE_MISMATCH", "RPC returned a different transaction signature");
@@ -400,6 +448,7 @@ export class QosService {
       transactionBytes: signed.transactionBytes,
       retention: "ephemeral-memory",
       transactionRetained: false,
+      privacyProofVerified: proofResult.verified,
       explorerUrl: this.policy.cluster === "devnet"
         ? `https://explorer.solana.com/tx/${signed.signature}?cluster=devnet`
         : `https://explorer.solana.com/tx/${signed.signature}`,
@@ -415,6 +464,8 @@ export class QosService {
       ...this.policy,
       rpcUrl: new URL(this.policy.rpcUrl).origin,
       signer: this.publicKey,
+      keyCustody: this.signer.status(),
+      privacyProof: this.proofGate.status(),
       ...this.session.status(),
     };
   }
@@ -423,8 +474,17 @@ export class QosService {
     return {
       ...this.session.status(),
       transactionFiles: [],
-      persistentFiles: [this.paths.signerKey, this.paths.receiverKey, this.paths.policy].filter(existsSync),
-      note: "The signer and policy persist so the wallet keeps its identity; completed transaction details do not.",
+      persistentFiles: [
+        this.paths.signerKey,
+        this.paths.encryptedSignerKey,
+        this.paths.signerDescriptor,
+        this.paths.receiverKey,
+        this.paths.encryptedReceiverKey,
+        this.paths.policy,
+      ].filter(existsSync),
+      keyCustody: this.signer.status(),
+      privacyProof: this.proofGate.status(),
+      note: "Only signer identity, policy, key-custody configuration, and hashed in-process nonce commitments persist in memory; completed transaction details do not.",
     };
   }
 }

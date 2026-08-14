@@ -62,8 +62,9 @@ node bin/qos.js submit --intent intent.json
 
 The shell redirection above deliberately writes transaction details to
 intent.json and is therefore not ephemeral. Use the one-step transfer command
-when local transaction retention is unwanted. Volatile nonce state is held
-only while the process runs and is released on success or failure.
+when local transaction retention is unwanted. Keyed commitments to used nonces
+remain only for the process lifetime; raw nonces and transaction fields are not
+retained.
 
 Inspect the privacy boundary:
 
@@ -119,20 +120,23 @@ mainnet mode.
 Start the loopback-only service:
 
 ```sh
+export QOS_API_TOKEN="$(openssl rand -base64 32)"
 node bin/qos.js serve
 ```
 
-Health and public policy:
+Minimal unauthenticated liveness and authenticated detailed health/policy:
 
 ```sh
 curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:8787/v1/policy
+curl http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $QOS_API_TOKEN"
+curl http://127.0.0.1:8787/v1/policy -H "Authorization: Bearer $QOS_API_TOKEN"
 ```
 
 Prepare an intent:
 
 ```sh
 curl -sS http://127.0.0.1:8787/v1/intents/prepare \
+  -H "Authorization: Bearer $QOS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"lamports":"1000000"}' > intent.json
 ```
@@ -141,6 +145,7 @@ Prepare a token intent when the server is using the mainnet home:
 
 ```sh
 curl -sS http://127.0.0.1:8787/v1/token-intents/prepare \
+  -H "Authorization: Bearer $QOS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"amount":"1000000"}' > token-intent.json
 ```
@@ -149,15 +154,18 @@ Submit it:
 
 ```sh
 curl -sS http://127.0.0.1:8787/v1/intents/submit \
+  -H "Authorization: Bearer $QOS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   --data-binary @intent.json
 ```
 
-Set `QOS_API_TOKEN` to require `Authorization: Bearer ...`. A token of at least
-32 characters is mandatory if the service is explicitly bound to a
-non-loopback address. Put TLS and additional authentication in front of any
-remote sandbox deployment; the built-in server intentionally does not provide
-TLS.
+Set `QOS_API_TOKEN` to a freshly generated secret containing at least 32 bytes;
+it is mandatory for the HTTP service and required as `Authorization: Bearer`
+on every detailed or mutating endpoint. The
+built-in server intentionally has no TLS and now refuses every non-loopback
+bind, even when a bearer token is present. For remote administration, place a
+separately isolated TLS and authentication proxy on the same host and keep qOS
+bound to loopback.
 
 HTTP request buffers are overwritten after parsing, but JSON strings are
 managed by the JavaScript garbage collector. Curl output redirection, reverse
@@ -173,8 +181,9 @@ The signing path fails closed unless all of these conditions hold:
    `TokenTransferIntentV2`.
 3. Venue, market, mints, side, strategy, and destination are allowlisted.
 4. Amount, fee cap, compute price, relay tip, and slot TTL are within policy.
-5. The blockhash is currently valid and the nonce is not already in flight in
-   the current process; firmware demo nonces are strictly increasing per boot.
+5. The blockhash is currently valid and the keyed nonce commitment has not
+   appeared earlier in the current process; firmware demo nonces are strictly
+   increasing per boot.
 6. The internally built message self-parses as one System Program transfer or
    one Token-2022 `TransferChecked` instruction.
 7. Token mode verifies the mint owner, decimals, extension set, associated
@@ -190,23 +199,26 @@ qOS writes no intent, message, blockhash, signature, or transaction audit
 record. The one-step CLI and QEMU demo keep those values in process or guest
 memory only and overwrite mutable buffers after the operation. The QEMU loader
 uses unlinked files on Linux tmpfs; no intents.bin file is created. The
-signer key, receiver key, policy, firmware ELF, and public provisioning record
-remain persistent by design.
+selected custody files, policy, firmware ELF, and public provisioning record
+remain persistent by design. External-signer homes persist only a public
+signer descriptor and create no private-key files.
 
 Existing v0.5 homes contain audit data and are rejected rather than silently
-ignored or deleted. The v0.6 defaults use new .qos-ephemeral-devnet and
+ignored or deleted. The v0.7 defaults use .qos-ephemeral-devnet and
 .qos-ephemeral-mainnet directories. Old homes remain untouched so the operator
 can archive or securely remove them.
 
 ## Security boundary
 
-This is a mock signer suitable for integration and policy development.
-The signer key exists in a local Node.js process and the operating system can
-read it. It is not a replacement for the firmware, PMP, HSM, TEE, MPC, or
-two-person controls described by the target architecture. Keep the Devnet and
-mainnet homes separate, use only deliberately capped keys, and never treat
-the public RPC endpoints or this prototype as production custody
-infrastructure. Mainnet submission is guarded by
+Plaintext development homes use a mock signer whose key exists in the Node.js
+process. Encrypted software homes protect the key at rest with AES-256-GCM and
+scrypt, but the decrypted key still exists in that process while qOS runs.
+External-signer homes create no private-key files and keep the key out of the
+agent process; their adapter and backing HSM, firmware, enclave, KMS, or MPC
+system become security-critical. None of these modes replaces an independent
+review, physical hardening, rollback-safe replay state, or two-person controls.
+Keep Devnet and mainnet homes separate and use deliberately capped keys.
+Mainnet submission is guarded by
 `QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`, but that guard is not a security
 boundary against a compromised operating system.
 

@@ -1,7 +1,47 @@
 import { assertQos, QosError } from "./errors.js";
+import { TextDecoder } from "node:util";
+
+const MAX_RPC_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function readBoundedJson(response) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    assertQos(/^(0|[1-9][0-9]*)$/.test(contentLength), "RPC_INVALID_LENGTH", "Solana RPC returned an invalid Content-Length");
+    assertQos(Number(contentLength) <= MAX_RPC_RESPONSE_BYTES, "RPC_RESPONSE_TOO_LARGE", "Solana RPC response exceeds 2 MiB");
+  }
+  assertQos(response.body !== null, "RPC_EMPTY_RESPONSE", "Solana RPC returned an empty response");
+  const chunks = [];
+  let length = 0;
+  try {
+    for await (const chunk of response.body) {
+      const bytes = Buffer.from(chunk);
+      length += bytes.length;
+      if (length > MAX_RPC_RESPONSE_BYTES) {
+        bytes.fill(0);
+        throw new QosError("RPC_RESPONSE_TOO_LARGE", "Solana RPC response exceeds 2 MiB");
+      }
+      chunks.push(bytes);
+    }
+    const body = Buffer.concat(chunks);
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+      return JSON.parse(text);
+    } finally {
+      body.fill(0);
+    }
+  } catch (error) {
+    if (error instanceof QosError) throw error;
+    if (error instanceof SyntaxError || error instanceof TypeError) {
+      throw new QosError("RPC_INVALID_JSON", "Solana RPC returned invalid JSON");
+    }
+    throw new QosError("RPC_UNAVAILABLE", "Solana RPC response could not be read");
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+  }
 }
 
 export class SolanaRpc {
@@ -26,17 +66,11 @@ export class SolanaRpc {
       throw new QosError("RPC_UNAVAILABLE", `Solana RPC request failed: ${error.message}`);
     }
     assertQos(response.ok, "RPC_HTTP_ERROR", `Solana RPC returned HTTP ${response.status}`);
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new QosError("RPC_INVALID_JSON", "Solana RPC returned invalid JSON");
-    }
+    const payload = await readBoundedJson(response);
     assertQos(payload && payload.jsonrpc === "2.0" && payload.id === id, "RPC_INVALID_RESPONSE", "Solana RPC response envelope is invalid");
     if (payload.error) {
       throw new QosError("RPC_ERROR", `Solana RPC ${method} failed: ${payload.error.message ?? "unknown error"}`, {
         rpcCode: payload.error.code,
-        data: payload.error.data,
       });
     }
     assertQos(Object.hasOwn(payload, "result"), "RPC_MISSING_RESULT", "Solana RPC response has no result");

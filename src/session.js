@@ -1,22 +1,36 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { assertQos } from "./errors.js";
 import { parseUnsigned } from "./policy.js";
 
 const WINDOW_MS = 60_000;
+const MAX_REMEMBERED_NONCES = 1_000_000;
 
 // Authorization state exists only for the lifetime of this process.
 // It stores no intent, message, blockhash, signature, or account data.
 export class EphemeralSession {
-  constructor({ clock = () => Date.now() } = {}) {
+  constructor({ clock = () => Date.now(), nonceSource = () => randomBytes(16) } = {}) {
     this.clock = clock;
+    this.nonceSource = nonceSource;
     this.activeNonces = new Set();
+    this.usedNonces = new Set();
     this.recentAuthorizations = [];
-    this.counter = 0n;
+    this.commitmentKey = randomBytes(32);
     this.lastClock = 0;
   }
 
   nextNonce() {
-    this.counter += 1n;
-    return this.counter.toString();
+    const bytes = Buffer.from(this.nonceSource());
+    assertQos(bytes.length === 16, "INVALID_NONCE_SOURCE", "Nonce source must return exactly 16 bytes");
+    const nonce = bytes.readBigUInt64BE(0) << 64n | bytes.readBigUInt64BE(8);
+    bytes.fill(0);
+    return (nonce === 0n ? 1n : nonce).toString();
+  }
+
+  nonceCommitment(nonce) {
+    return createHmac("sha256", this.commitmentKey)
+      .update("qos-nonce-v1\0", "utf8")
+      .update(nonce.toString(), "ascii")
+      .digest("base64url");
   }
 
   begin(requestNonce, maxRequestsPerMinute) {
@@ -32,9 +46,12 @@ export class EphemeralSession {
     this.lastClock = now;
     this.recentAuthorizations = this.recentAuthorizations.filter((timestamp) => timestamp > now - WINDOW_MS);
     assertQos(this.recentAuthorizations.length < maxRequestsPerMinute, "RATE_LIMITED", "Signer request rate limit exceeded");
-    const key = nonce.toString();
+    const key = this.nonceCommitment(nonce);
     assertQos(!this.activeNonces.has(key), "NONCE_IN_FLIGHT", "requestNonce is already being authorized in this process");
+    assertQos(!this.usedNonces.has(key), "NONCE_REPLAY", "requestNonce was already used in this process");
+    assertQos(this.usedNonces.size < MAX_REMEMBERED_NONCES, "NONCE_MEMORY_EXHAUSTED", "Nonce replay memory is full; restart into a measured signer state");
     this.activeNonces.add(key);
+    this.usedNonces.add(key);
     this.recentAuthorizations.push(now);
     let released = false;
     return () => {
@@ -49,14 +66,17 @@ export class EphemeralSession {
       retention: "ephemeral-memory",
       activeAuthorizations: this.activeNonces.size,
       recentAuthorizationCount: this.recentAuthorizations.length,
+      rememberedNonceCommitments: this.usedNonces.size,
     };
   }
 
   dispose() {
     this.activeNonces.clear();
+    this.usedNonces.clear();
     this.recentAuthorizations.fill(0);
     this.recentAuthorizations.length = 0;
-    this.counter = 0n;
+    this.commitmentKey.fill(0);
+    this.commitmentKey = randomBytes(32);
     this.lastClock = 0;
   }
 }

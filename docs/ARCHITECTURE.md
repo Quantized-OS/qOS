@@ -81,7 +81,7 @@ The host-side prototype implements the first narrow slice of the target design:
 flowchart TD
     A[Typed intent] --> B[Cluster and policy checks]
     B --> C[SOL or qOS token builder]
-    C --> D[Mock Ed25519 signer]
+    C --> D[External or software Ed25519 signer]
     D --> E[Simulation and RPC relay]
     E --> F[Confirmation monitor]
     D --> G[Volatile authorization session]
@@ -103,16 +103,20 @@ recent blockhash with `isBlockhashValid`, bounds slot expiry, calculates the
 actual fee with `getFeeForMessage`, and self-parses its constructed message.
 Token mode also verifies the mint account and both token-account owners,
 states, mints, balances, and deterministic associated addresses.
-It records no transaction audit log. The current authorization nonce and rate
-window exist only in process memory and the nonce is forgotten when the
-operation completes. The relay simulates with signature verification, submits
+It records no transaction audit log. The authorization rate window and keyed
+SHA-256 commitments to used nonces exist only in process memory; raw nonces are
+not retained. The relay simulates with signature verification, submits
 with preflight enabled, checks the returned signature, and polls confirmation
 status. RPC responses are untrusted inputs and are shape-checked.
 
-The mock signer, relay, and API can run in one Node.js process for sandbox use.
-That is not a hardware isolation boundary. A production port must preserve the
-module interface while moving key loading, rollback-safe replay metadata,
-policy, and message construction below the untrusted OS boundary.
+The compatibility software signer, relay, and API can run in one Node.js
+process for sandbox use. The preferred external-command mode keeps the private
+key outside that process and verifies every returned Ed25519 signature against
+the provisioned public key. The signer adapter must independently pin and
+enforce the typed policy; otherwise it is only key isolation, not an
+authorization boundary. A production port must preserve the module interface
+while moving key loading, rollback-safe replay metadata, policy, and message
+construction below the untrusted OS boundary.
 
 ## QEMU M-mode signing demonstration
 

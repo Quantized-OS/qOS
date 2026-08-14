@@ -73,6 +73,7 @@ test("service prepares, signs, submits, confirms, and forgets a real Solana tran
   assert.equal(result.transactionRetained, false);
   assert.equal(existsSync(service.paths.legacyAuditKey), false);
   assert.equal(existsSync(service.paths.legacyAuditLog), false);
+  await assert.rejects(() => service.submitIntent(intent), { code: "NONCE_REPLAY" });
 });
 
 test("service refuses an RPC endpoint on the wrong cluster", async () => {

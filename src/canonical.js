@@ -11,7 +11,13 @@ function normalize(value) {
     return value.map(normalize);
   }
   if (typeof value === "object") {
-    const output = {};
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new QosError("NON_CANONICAL_VALUE", "Only plain objects can be canonically encoded");
+    }
+    // A null prototype prevents a JSON key named "__proto__" from mutating
+    // the object being assembled and silently disappearing from the encoding.
+    const output = Object.create(null);
     for (const key of Object.keys(value).sort()) {
       output[key] = normalize(value[key]);
     }

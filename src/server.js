@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { TextDecoder } from "node:util";
 import { assertQos, publicError, QosError } from "./errors.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -10,6 +11,9 @@ function sendJson(response, status, value) {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
+    "cross-origin-resource-policy": "same-origin",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
   });
   response.end(body);
@@ -26,6 +30,12 @@ function isAuthorized(request, token) {
 
 async function readJson(request) {
   assertQos(request.headers["content-type"]?.split(";", 1)[0].trim() === "application/json", "UNSUPPORTED_CONTENT_TYPE", "Content-Type must be application/json");
+  assertQos(request.headers["content-encoding"] === undefined || request.headers["content-encoding"] === "identity", "UNSUPPORTED_CONTENT_ENCODING", "Compressed request bodies are not accepted");
+  const declaredLength = request.headers["content-length"];
+  if (declaredLength !== undefined) {
+    assertQos(/^(0|[1-9][0-9]*)$/.test(declaredLength), "INVALID_CONTENT_LENGTH", "Content-Length is invalid");
+    assertQos(Number(declaredLength) <= MAX_BODY_BYTES, "BODY_TOO_LARGE", "Request body exceeds 16 KiB");
+  }
   const chunks = [];
   let length = 0;
   for await (const chunk of request) {
@@ -38,7 +48,8 @@ async function readJson(request) {
   let body;
   try {
     body = Buffer.concat(chunks);
-    return JSON.parse(body.toString("utf8"));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+    return JSON.parse(text);
   } catch {
     throw new QosError("INVALID_JSON", "Request body is not valid JSON");
   } finally {
@@ -53,14 +64,15 @@ function loopback(host) {
 
 export function startServer(service, { host = "127.0.0.1", port = 8787, apiToken = process.env.QOS_API_TOKEN } = {}) {
   assertQos(Number.isInteger(port) && port >= 1 && port <= 65535, "INVALID_PORT", "Port must be between 1 and 65535");
-  if (!loopback(host)) {
-    assertQos(typeof apiToken === "string" && apiToken.length >= 32, "API_TOKEN_REQUIRED", "A token of at least 32 characters is required for non-loopback binding");
-  }
+  assertQos(loopback(host), "LOOPBACK_REQUIRED", "The built-in HTTP server is plaintext and may only bind to loopback; use a local TLS proxy or Unix-isolated deployment boundary");
+  assertQos(typeof apiToken === "string" && apiToken.length > 0, "API_TOKEN_REQUIRED", "QOS_API_TOKEN is required for the HTTP service");
+  assertQos(Buffer.byteLength(apiToken) >= 32, "API_TOKEN_TOO_SHORT", "Configured API token must contain at least 32 bytes");
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, "http://qos.local");
+      assertQos(url.search === "", "QUERY_STRING_NOT_ALLOWED", "API routes do not accept query strings");
       if (request.method === "GET" && url.pathname === "/health") {
-        sendJson(response, 200, await service.health());
+        sendJson(response, 200, { status: "ok" });
         return;
       }
       if (!isAuthorized(request, apiToken)) {
@@ -69,6 +81,10 @@ export function startServer(service, { host = "127.0.0.1", port = 8787, apiToken
       }
       if (request.method === "GET" && url.pathname === "/v1/policy") {
         sendJson(response, 200, service.publicPolicy());
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/v1/health") {
+        sendJson(response, 200, await service.health());
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/intents/prepare") {
@@ -91,6 +107,8 @@ export function startServer(service, { host = "127.0.0.1", port = 8787, apiToken
   });
   server.requestTimeout = 75_000;
   server.headersTimeout = 10_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 100;
   server.listen(port, host);
   return server;
 }

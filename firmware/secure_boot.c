@@ -12,6 +12,15 @@ static int constant_time_equal(const uint8_t *left, const uint8_t *right,
     return difference == 0;
 }
 
+static void secure_zero(void *buffer, size_t length) {
+    volatile uint8_t *bytes = (volatile uint8_t *)buffer;
+
+    while (length-- != 0) {
+        *bytes++ = 0;
+    }
+    __asm__ volatile("fence rw, rw" ::: "memory");
+}
+
 static bool add_overflows_uintptr(uintptr_t base, size_t length) {
     return length > UINTPTR_MAX - base;
 }
@@ -109,10 +118,7 @@ uintptr_t srtm_main(uintptr_t fdt_address) {
         platform_fail_closed(8, 0);
     }
 
-    for (size_t i = 0; i < sizeof(computed_digest); ++i) {
-        computed_digest[i] = 0;
-    }
-    __asm__ volatile("fence rw, rw" ::: "memory");
+    secure_zero(computed_digest, sizeof(computed_digest));
 
     return (uintptr_t)manifest->image_entry;
 }

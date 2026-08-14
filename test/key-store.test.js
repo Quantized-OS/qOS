@@ -1,7 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPrivateKey, generateKeyPairSync } from "node:crypto";
-import { privateKeySeed, rawPublicKey } from "../src/key-store.js";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  loadEncryptedPrivateKey,
+  privateKeySeed,
+  publicKeyAddress,
+  rawPublicKey,
+  writeNewEncryptedEd25519Key,
+} from "../src/key-store.js";
 
 test("runtime RAM mailbox extracts the canonical Ed25519 seed", () => {
   const { privateKey } = generateKeyPairSync("ed25519");
@@ -14,4 +23,19 @@ test("runtime RAM mailbox extracts the canonical Ed25519 seed", () => {
     format: "der",
   });
   assert.deepEqual(rawPublicKey(reconstructed), rawPublicKey(privateKey));
+});
+
+test("AES-256-GCM encrypted Ed25519 keys authenticate metadata and passphrase", () => {
+  const home = mkdtempSync(join(tmpdir(), "qos-encrypted-key-"));
+  const passphrasePath = join(home, "passphrase");
+  const wrongPath = join(home, "wrong");
+  const keyPath = join(home, "signer.qkey");
+  writeFileSync(passphrasePath, "a secure random passphrase with 32 bytes\n", { mode: 0o600 });
+  writeFileSync(wrongPath, "a different secure passphrase 32 bytes\n", { mode: 0o600 });
+  chmodSync(passphrasePath, 0o600);
+  chmodSync(wrongPath, 0o600);
+  const created = writeNewEncryptedEd25519Key(keyPath, passphrasePath);
+  const loaded = loadEncryptedPrivateKey(keyPath, passphrasePath);
+  assert.equal(publicKeyAddress(loaded), publicKeyAddress(created));
+  assert.throws(() => loadEncryptedPrivateKey(keyPath, wrongPath), { code: "KEY_DECRYPTION_FAILED" });
 });

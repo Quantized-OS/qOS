@@ -10,13 +10,14 @@ function usage() {
 
 Usage:
   qos init [--home PATH] [--cluster devnet|mainnet-beta] [--destination PUBKEY]
+           [--signer-public-key PUBKEY | --key-passphrase-file PATH]
   qos address [--home PATH]
   qos health [--home PATH]
   qos balance [--home PATH] [--address PUBKEY]
   qos airdrop [--home PATH] [--lamports N]
   qos prepare [--home PATH] [--destination PUBKEY] [--lamports N]
               [--nonce N] [--max-fee-lamports N] [--strategy-id N]
-  qos submit --intent FILE [--home PATH]
+  qos submit --intent FILE [--proof FILE] [--home PATH]
   qos transfer [--home PATH] [--destination PUBKEY] [--lamports N]
   qos token-address [--home PATH] [--owner PUBKEY]
   qos token-balance [--home PATH] [--owner PUBKEY]
@@ -28,6 +29,8 @@ Usage:
 
 SOL amounts are integer lamports. Token amounts are integer base units.
 Mainnet submission additionally requires QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND.
+External signer homes require QOS_SIGNER_COMMAND. Encrypted software-key homes
+require QOS_KEY_PASSPHRASE_FILE. Prefer the external signer for agent workloads.
 `;
 }
 
@@ -75,9 +78,13 @@ async function main() {
   }
 
   if (command === "init") {
-    only(options, ["home", "destination", "cluster"]);
+    only(options, ["home", "destination", "cluster", "signer-public-key", "key-passphrase-file"]);
     const cluster = options.cluster ?? "devnet";
-    print(initializeSandbox(homeOf(options, cluster), options.destination, { cluster }));
+    print(initializeSandbox(homeOf(options, cluster), options.destination, {
+      cluster,
+      signerPublicKey: options["signer-public-key"],
+      keyPassphraseFile: options["key-passphrase-file"] === undefined ? undefined : resolve(options["key-passphrase-file"]),
+    }));
     return;
   }
 
@@ -112,10 +119,14 @@ async function main() {
       }));
       return;
     case "submit": {
-      only(options, ["home", "intent"]);
+      only(options, ["home", "intent", "proof"]);
       if (!options.intent) throw new QosError("MISSING_ARGUMENT", "--intent is required");
       const text = options.intent === "-" ? await readStdin() : readFileSync(resolve(options.intent), "utf8");
-      print(await service.submitIntent(JSON.parse(text)));
+      const intent = JSON.parse(text);
+      const request = options.proof === undefined
+        ? intent
+        : { intent, privacyProof: JSON.parse(readFileSync(resolve(options.proof), "utf8")) };
+      print(await service.submitIntent(request));
       return;
     }
     case "transfer": {

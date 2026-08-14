@@ -37,6 +37,17 @@ test("RPC client fails closed on JSON-RPC errors", async (t) => {
   await assert.rejects(() => rpc.sendTransaction("AA=="), { code: "RPC_ERROR" });
 });
 
+test("RPC client rejects oversized responses before parsing", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response("{}", {
+    status: 200,
+    headers: { "content-length": String(2 * 1024 * 1024 + 1) },
+  });
+  const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
+  await assert.rejects(() => rpc.getGenesisHash(), { code: "RPC_RESPONSE_TOO_LARGE" });
+});
+
 test("RPC confirmation waits for the configured finalized commitment", async () => {
   const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000, commitment: "finalized" });
   const statuses = [
