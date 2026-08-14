@@ -13,6 +13,12 @@ def require(path: str, needles: Tuple[str, ...]) -> None:
         assert needle in text, f"{path}: missing {needle!r}"
 
 
+def forbid(path: str, needles: Tuple[str, ...]) -> None:
+    text = (ROOT / path).read_text()
+    for needle in needles:
+        assert needle not in text, f"{path}: forbidden {needle!r}"
+
+
 def main() -> None:
     require(
         "firmware/reset.S",
@@ -51,7 +57,8 @@ def main() -> None:
             "getFeeForMessage",
             "simulateTransaction",
             "confirmSignature",
-            "authorizeAndAppend",
+            "EphemeralSession",
+            "transactionRetained",
         ),
     )
     require(
@@ -99,6 +106,8 @@ def main() -> None:
             "POLICY_TOKEN_PROGRAM",
             "signing_key.sign(&message",
             "QOS_FW:REJECT",
+            "wipe_mailbox",
+            "KEY_MAGIC",
         ),
     )
     require(
@@ -113,8 +122,13 @@ def main() -> None:
             "simulateTransaction",
             "confirmSignature",
             "FIRMWARE_REPLAY_TEST_FAILED",
+            "openRamBackedFile",
+            "redactFirmwareOutput",
         ),
     )
+    forbid("firmware-demo/build.rs", ("QOS_FW_SEED_HEX", "POLICY_SEED"))
+    forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
+    forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))
     print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")
 
 

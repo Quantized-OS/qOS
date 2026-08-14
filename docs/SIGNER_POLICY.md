@@ -1,4 +1,4 @@
-# Isolated Solana signer policy v0.4
+# Isolated Solana signer policy v0.6
 
 This document defines the narrow interface between the untrusted trading OS
 and the trusted signing component.
@@ -75,7 +75,8 @@ Policy version 2 exposes two exact templates:
 - Address lookup tables, compute price, and relay tip: disabled
 
 This is a real Solana transaction template for exercising signing, policy,
-relay, confirmation, and audit controls. It is not represented as a DEX trade.
+relay, confirmation, and ephemeral-retention controls. It is not represented
+as a DEX trade.
 The Token-2022 path re-reads the mint, source account, and destination account
 before signing. It rejects a changed token program, decimals, mint extension
 set, account mint, account owner, frozen state, associated address, or
@@ -91,14 +92,18 @@ slippage math, and tests before it can be added.
 1. Decode using a fixed-length, canonical binary format.
 2. Reject unknown versions, enum values, trailing data, and nonzero reserved
    fields.
-3. Verify the request nonce is strictly increasing.
+3. Within one firmware boot, verify the request nonce is strictly increasing.
+   The host sandbox rejects concurrent reuse and forgets it after completion.
 4. Apply amount, slippage, fee, program, market, and exposure policies.
 5. Construct the exact versioned Solana message internally from a pinned
    instruction template.
 6. Reject any account not derivable from the pinned template and request.
 7. Sign the serialized message with the hardware-held Ed25519 key.
-8. Return only the signature, public key, message digest, and audit sequence.
-9. Append an authenticated audit record before authorizing another request.
+8. Return the public result required by the caller; return no raw transaction
+   in verification-only demo output.
+9. Wipe intent, seed, message, signature, and transaction buffers before
+   accepting another request or exiting.
+10. Write no transaction audit record, intent file, or serialized mailbox.
 
 The sandbox additionally verifies the RPC genesis identity, recent blockhash,
 expiry slot, calculated fee, and its own serialized message before it releases
@@ -117,5 +122,11 @@ waits for `confirmed` or `finalized` status.
 ## Failure behavior
 
 Any parse error, missing state, rollback indication, clock/slot uncertainty,
-audit failure, or policy ambiguity fails closed.  Recovery requires a separate
+RAM-mailbox failure, or policy ambiguity fails closed. Recovery requires a separate
 management key and must never use the trading key.
+
+Ephemeral retention intentionally removes cross-process nonce history. Exact
+Solana transaction replay remains rejected by the network signature and
+blockhash rules, while a production signer must use a rollback-safe monotonic
+counter that reveals no transaction fields. That production counter is not
+implemented by this sandbox.

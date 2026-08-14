@@ -35,10 +35,15 @@ async function readJson(request) {
     }
     chunks.push(chunk);
   }
+  let body;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    body = Buffer.concat(chunks);
+    return JSON.parse(body.toString("utf8"));
   } catch {
     throw new QosError("INVALID_JSON", "Request body is not valid JSON");
+  } finally {
+    if (body) body.fill(0);
+    for (const chunk of chunks) chunk.fill(0);
   }
 }
 

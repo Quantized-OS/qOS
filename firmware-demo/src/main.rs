@@ -11,11 +11,13 @@ include!(concat!(env!("OUT_DIR"), "/provisioned_policy.rs"));
 const UART_BASE: usize = 0x1000_0000;
 const TEST_FINISHER: usize = 0x0010_0000;
 const INTENT_BASE: usize = 0x8100_0000;
+const KEY_BASE: usize = 0x8120_0000;
 const HEADER_SIZE: usize = 16;
 const FRAME_SIZE: usize = 304;
 const MAX_FRAMES: usize = 4;
 const MIN_BASE_FEE_LAMPORTS: u64 = 5_000;
 const BUNDLE_MAGIC: [u8; 8] = *b"QOSINTV2";
+const KEY_MAGIC: [u8; 8] = *b"QOSKEYV1";
 
 global_asm!(
     r#"
@@ -94,6 +96,18 @@ fn read_input(offset: usize) -> u8 {
 fn read_bundle_bytes(offset: usize, output: &mut [u8]) {
     for (index, byte) in output.iter_mut().enumerate() {
         *byte = read_input(offset + index);
+    }
+}
+
+fn read_key_bytes(offset: usize, output: &mut [u8]) {
+    for (index, byte) in output.iter_mut().enumerate() {
+        *byte = unsafe { read_volatile((KEY_BASE + offset + index) as *const u8) };
+    }
+}
+
+fn wipe_mailbox(base: usize, offset: usize, length: usize) {
+    for index in 0..length {
+        unsafe { write_volatile((base + offset + index) as *mut u8, 0) };
     }
 }
 
@@ -191,11 +205,13 @@ fn wipe(bytes: &mut [u8]) {
 
 #[no_mangle]
 extern "C" fn rust_main() -> ! {
-    uart_str("QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer key=sealed-demo\n");
+    uart_str("QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer retention=ephemeral-memory\n");
 
     let mut magic = [0u8; 8];
     read_bundle_bytes(0, &mut magic);
     if magic != BUNDLE_MAGIC {
+        wipe_mailbox(INTENT_BASE, 0, HEADER_SIZE);
+        wipe(&mut magic);
         uart_str("QOS_FW:FATAL invalid-bundle-magic\n");
         finish(false);
     }
@@ -203,12 +219,31 @@ extern "C" fn rust_main() -> ! {
     read_bundle_bytes(8, &mut header_word);
     let count = le_u32(&header_word) as usize;
     read_bundle_bytes(12, &mut header_word);
+    wipe_mailbox(INTENT_BASE, 0, HEADER_SIZE);
     if count == 0 || count > MAX_FRAMES || le_u32(&header_word) as usize != FRAME_SIZE {
+        wipe(&mut magic);
+        wipe(&mut header_word);
         uart_str("QOS_FW:FATAL invalid-bundle-shape\n");
         finish(false);
     }
+    wipe(&mut magic);
+    wipe(&mut header_word);
 
-    let signing_key = SigningKey::from_bytes(&POLICY_SEED);
+    let mut key_magic = [0u8; 8];
+    read_key_bytes(0, &mut key_magic);
+    if key_magic != KEY_MAGIC {
+        wipe_mailbox(KEY_BASE, 0, 40);
+        wipe(&mut key_magic);
+        uart_str("QOS_FW:FATAL invalid-key-mailbox\n");
+        finish(false);
+    }
+    let mut seed = [0u8; 32];
+    read_key_bytes(8, &mut seed);
+    wipe_mailbox(KEY_BASE, 0, 40);
+    wipe(&mut key_magic);
+    let signing_key = SigningKey::from_bytes(&seed);
+    wipe(&mut seed);
+
     let payer = signing_key.verifying_key().to_bytes();
     uart_str("QOS_FW:SIGNER_HEX ");
     uart_hex(&payer);
@@ -219,23 +254,28 @@ extern "C" fn rust_main() -> ! {
     for index in 0..count {
         let mut frame = [0u8; FRAME_SIZE];
         read_bundle_bytes(HEADER_SIZE + index * FRAME_SIZE, &mut frame);
+        wipe_mailbox(INTENT_BASE, HEADER_SIZE + index * FRAME_SIZE, FRAME_SIZE);
 
         let asset_kind = le_u32(&frame[4..8]);
         if le_u32(&frame[0..4]) != 2 || asset_kind > 1 || le_u32(&frame[164..168]) != 0 || nonzero(&frame[297..304]) {
             reject(index, "SHAPE");
+            wipe(&mut frame);
             continue;
         }
         let nonce = le_u128(&frame[8..24]);
         if nonce == 0 || nonce <= last_nonce {
             reject(index, "NONCE_REPLAY");
+            wipe(&mut frame);
             continue;
         }
         if frame[24..56] != POLICY_GENESIS {
             reject(index, "CLUSTER");
+            wipe(&mut frame);
             continue;
         }
         if frame[56..88] != POLICY_DESTINATION || frame[56..88] == payer {
             reject(index, "DESTINATION");
+            wipe(&mut frame);
             continue;
         }
         let amount = le_u64(&frame[88..96]);
@@ -243,25 +283,30 @@ extern "C" fn rust_main() -> ! {
         let max_amount = if asset_kind == 0 { POLICY_MAX_AMOUNT } else { POLICY_MAX_TOKEN_AMOUNT };
         if amount == 0 || amount > max_amount || minimum_output != amount {
             reject(index, "AMOUNT");
+            wipe(&mut frame);
             continue;
         }
         let max_fee = le_u64(&frame[104..112]);
         if max_fee < MIN_BASE_FEE_LAMPORTS || max_fee > POLICY_MAX_FEE {
             reject(index, "FEE");
+            wipe(&mut frame);
             continue;
         }
         if !nonzero(&frame[112..144]) {
             reject(index, "BLOCKHASH");
+            wipe(&mut frame);
             continue;
         }
         let expires_at_slot = le_u64(&frame[144..152]);
         let current_slot = le_u64(&frame[152..160]);
         if expires_at_slot <= current_slot || expires_at_slot > current_slot.saturating_add(POLICY_MAX_TTL_SLOTS) {
             reject(index, "EXPIRY");
+            wipe(&mut frame);
             continue;
         }
         if le_u32(&frame[160..164]) != POLICY_STRATEGY_ID {
             reject(index, "STRATEGY");
+            wipe(&mut frame);
             continue;
         }
 
@@ -273,6 +318,10 @@ extern "C" fn rust_main() -> ! {
         let message_length = if asset_kind == 0 {
             if nonzero(&frame[168..304]) {
                 reject(index, "TOKEN_FIELDS");
+                wipe(&mut destination);
+                wipe(&mut blockhash);
+                wipe(&mut message);
+                wipe(&mut frame);
                 continue;
             }
             build_transfer_message(&payer, &destination, &blockhash, amount, &mut message)
@@ -285,6 +334,10 @@ extern "C" fn rust_main() -> ! {
                 || frame[296] != POLICY_TOKEN_DECIMALS
             {
                 reject(index, "TOKEN_POLICY");
+                wipe(&mut destination);
+                wipe(&mut blockhash);
+                wipe(&mut message);
+                wipe(&mut frame);
                 continue;
             }
             build_token_transfer_message(
@@ -299,7 +352,7 @@ extern "C" fn rust_main() -> ! {
                 &mut message,
             )
         };
-        let signature = signing_key.sign(&message[..message_length]).to_bytes();
+        let mut signature = signing_key.sign(&message[..message_length]).to_bytes();
         let mut transaction = [0u8; 384];
         transaction[0] = 1;
         transaction[1..65].copy_from_slice(&signature);
@@ -313,14 +366,19 @@ extern "C" fn rust_main() -> ! {
         last_nonce = nonce;
         signed_count += 1;
         wipe(&mut transaction);
+        wipe(&mut signature);
         wipe(&mut message);
+        wipe(&mut destination);
+        wipe(&mut blockhash);
         wipe(&mut frame);
     }
 
     if signed_count == 0 {
+        drop(signing_key);
         uart_str("QOS_FW:FATAL no-authorized-transaction\n");
         finish(false);
     }
+    drop(signing_key);
     uart_str("QOS_FW:DONE\n");
     finish(true)
 }

@@ -6,4 +6,3 @@ rustflags = [
   "-C", "link-arg=-Tlinker.ld",
   "-C", "link-arg=--gc-sections",
 ]
-

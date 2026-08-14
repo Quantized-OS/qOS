@@ -1,6 +1,6 @@
 {
   "name": "qos-solana-sandbox",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Policy signer for native SOL and the pinned qOS Token-2022 mint",
   "type": "module",

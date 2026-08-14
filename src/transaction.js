@@ -101,13 +101,17 @@ export function signMessage(message, privateKey) {
   assertQos(verify(null, message, publicKeyObjectFromRaw(publicKeyBytes), signature), "SIGNATURE_SELF_CHECK_FAILED", "Generated signature did not verify");
   const transaction = Buffer.concat([encodeShortVec(1), signature, message]);
   assertQos(transaction.length <= MAX_TRANSACTION_BYTES, "TRANSACTION_TOO_LARGE", "Serialized transaction exceeds Solana's 1232-byte limit");
-  return {
+  const result = {
     signature: encodeBase58(signature),
     publicKey: encodeBase58(publicKeyBytes),
     messageBase64: Buffer.from(message).toString("base64"),
     transactionBase64: transaction.toString("base64"),
     transactionBytes: transaction.length,
   };
+  signature.fill(0);
+  publicKeyBytes.fill(0);
+  transaction.fill(0);
+  return result;
 }
 
 class Reader {

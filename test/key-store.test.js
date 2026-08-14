@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPrivateKey, generateKeyPairSync } from "node:crypto";
 import { privateKeySeed, rawPublicKey } from "../src/key-store.js";
 
-test("firmware provisioning extracts the canonical Ed25519 seed", () => {
+test("runtime RAM mailbox extracts the canonical Ed25519 seed", () => {
   const { privateKey } = generateKeyPairSync("ed25519");
   const seed = privateKeySeed(privateKey);
   assert.equal(seed.length, 32);

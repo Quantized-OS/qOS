@@ -23,7 +23,7 @@ Usage:
   qos token-prepare [--home PATH] [--destination PUBKEY] [--amount N]
                     [--nonce N] [--max-fee-lamports N] [--strategy-id N]
   qos token-transfer [--home PATH] [--destination PUBKEY] [--amount N]
-  qos audit-verify [--home PATH]
+  qos privacy-status [--home PATH]
   qos serve [--home PATH] [--host HOST] [--port PORT]
 
 SOL amounts are integer lamports. Token amounts are integer base units.
@@ -53,7 +53,7 @@ function only(options, allowed) {
 }
 
 function homeOf(options, cluster = "devnet") {
-  const defaultHome = cluster === "mainnet-beta" ? ".qos-mainnet" : ".qos-devnet";
+  const defaultHome = cluster === "mainnet-beta" ? ".qos-ephemeral-mainnet" : ".qos-ephemeral-devnet";
   return resolve(options.home ?? process.env.QOS_HOME ?? defaultHome);
 }
 
@@ -157,10 +157,9 @@ async function main() {
       print(await service.submitIntent(intent));
       return;
     }
-    case "audit-verify": {
+    case "privacy-status": {
       only(options, ["home"]);
-      const records = service.audit.readVerified();
-      print({ status: "ok", records: records.length, lastRequestNonce: records.length ? records.at(-1).requestNonce : "0" });
+      print(service.privacyStatus());
       return;
     }
     case "serve": {

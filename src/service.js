@@ -9,18 +9,16 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuditLog, digestBytes, digestCanonical } from "./audit.js";
 import { decodeBase58 } from "./base58.js";
 import { assertQos } from "./errors.js";
 import {
-  loadAuditKey,
   loadPrivateKey,
   publicKeyAddress,
-  writeNewAuditKey,
   writeNewEd25519Key,
 } from "./key-store.js";
 import { loadPolicy, parseUnsigned, validateIntent, validatePolicy } from "./policy.js";
 import { SolanaRpc } from "./rpc.js";
+import { EphemeralSession } from "./session.js";
 import {
   buildNativeTransferMessage,
   buildTokenTransferCheckedMessage,
@@ -42,9 +40,9 @@ export function sandboxPaths(home) {
     home,
     signerKey: join(home, "signer.pem"),
     receiverKey: join(home, "receiver.pem"),
-    auditKey: join(home, "audit.key"),
-    auditLog: join(home, "audit.log"),
-    auditLock: join(home, "audit.lock"),
+    legacyAuditKey: join(home, "audit.key"),
+    legacyAuditLog: join(home, "audit.log"),
+    legacyAuditLock: join(home, "audit.lock"),
     policy: join(home, "policy.json"),
   };
 }
@@ -66,7 +64,6 @@ export function initializeSandbox(home, destination = undefined, { cluster = "de
     chmodSync(stagingHome, 0o700);
     const stagingPaths = sandboxPaths(stagingHome);
     const signerKey = writeNewEd25519Key(stagingPaths.signerKey);
-    writeNewAuditKey(stagingPaths.auditKey);
     const receiver = destination ?? publicKeyAddress(writeNewEd25519Key(stagingPaths.receiverKey));
     const template = JSON.parse(templateText);
     template.allowedDestinations = [receiver];
@@ -82,6 +79,7 @@ export function initializeSandbox(home, destination = undefined, { cluster = "de
       cluster: template.cluster,
       clusterGenesis: template.clusterGenesis,
       tokenTransfer: template.tokenTransfer,
+      retention: "ephemeral-memory",
     };
   } catch (error) {
     rmSync(stagingHome, { recursive: true, force: true });
@@ -89,7 +87,7 @@ export function initializeSandbox(home, destination = undefined, { cluster = "de
   }
 }
 
-function parsePrepareOptions(options, policy, audit) {
+function parsePrepareOptions(options, policy, session) {
   assertQos(options && typeof options === "object" && !Array.isArray(options), "INVALID_PREPARE_REQUEST", "Prepare request must be an object");
   const allowed = new Set(["requestNonce", "destination", "lamports", "maxFeeLamports", "strategyId"]);
   assertQos(Object.keys(options).every((key) => allowed.has(key)), "INVALID_PREPARE_REQUEST", "Prepare request contains unknown fields");
@@ -97,7 +95,7 @@ function parsePrepareOptions(options, policy, audit) {
   const lamports = options.lamports ?? "1000000";
   const maxFeeLamports = options.maxFeeLamports ?? policy.maxFeeLamports;
   const strategyId = options.strategyId ?? policy.allowedStrategyIds[0];
-  const requestNonce = options.requestNonce ?? (audit.lastNonce() + 1n).toString();
+  const requestNonce = options.requestNonce ?? session.nextNonce();
   parseUnsigned(lamports, 64, "lamports");
   parseUnsigned(maxFeeLamports, 64, "maxFeeLamports");
   parseUnsigned(requestNonce, 128, "requestNonce");
@@ -105,7 +103,7 @@ function parsePrepareOptions(options, policy, audit) {
   return { destination, lamports, maxFeeLamports, strategyId, requestNonce };
 }
 
-function parseTokenPrepareOptions(options, policy, audit) {
+function parseTokenPrepareOptions(options, policy, session) {
   assertQos(policy.tokenTransfer !== null, "TOKEN_TRANSFERS_DISABLED", "Policy does not enable token transfers");
   assertQos(options && typeof options === "object" && !Array.isArray(options), "INVALID_PREPARE_REQUEST", "Prepare request must be an object");
   const allowed = new Set(["requestNonce", "destination", "amount", "maxFeeLamports", "strategyId"]);
@@ -114,7 +112,7 @@ function parseTokenPrepareOptions(options, policy, audit) {
   const amount = options.amount ?? "1000000";
   const maxFeeLamports = options.maxFeeLamports ?? policy.maxFeeLamports;
   const strategyId = options.strategyId ?? policy.allowedStrategyIds[0];
-  const requestNonce = options.requestNonce ?? (audit.lastNonce() + 1n).toString();
+  const requestNonce = options.requestNonce ?? session.nextNonce();
   parseUnsigned(amount, 64, "amount");
   parseUnsigned(maxFeeLamports, 64, "maxFeeLamports");
   parseUnsigned(requestNonce, 128, "requestNonce");
@@ -123,26 +121,32 @@ function parseTokenPrepareOptions(options, policy, audit) {
 }
 
 export class QosService {
-  constructor({ paths, policy, privateKey, audit, rpc }) {
+  constructor({ paths, policy, privateKey, session, rpc }) {
     this.paths = paths;
     this.policy = policy;
     this.privateKey = privateKey;
     this.publicKey = publicKeyAddress(privateKey);
-    this.audit = audit;
+    this.session = session;
     this.rpc = rpc;
   }
 
   static open(home, { rpcUrl = process.env.SOLANA_RPC_URL } = {}) {
     const paths = sandboxPaths(home);
+    const legacyFiles = [paths.legacyAuditKey, paths.legacyAuditLog, paths.legacyAuditLock].filter(existsSync);
+    assertQos(
+      legacyFiles.length === 0,
+      "LEGACY_AUDIT_DATA_PRESENT",
+      "This sandbox contains transaction audit data from qOS v0.5. Initialize a fresh qOS v0.6 home before using ephemeral mode.",
+      { files: legacyFiles },
+    );
     const policy = loadPolicy(paths.policy, rpcUrl);
     const privateKey = loadPrivateKey(paths.signerKey);
-    const audit = new AuditLog(paths.auditLog, paths.auditLock, loadAuditKey(paths.auditKey));
-    audit.readVerified();
+    const session = new EphemeralSession();
     const rpc = new SolanaRpc(policy.rpcUrl, {
       timeoutMs: policy.rpcTimeoutMs,
       commitment: policy.commitment,
     });
-    return new QosService({ paths, policy, privateKey, audit, rpc });
+    return new QosService({ paths, policy, privateKey, session, rpc });
   }
 
   async assertCluster() {
@@ -164,7 +168,7 @@ export class QosService {
       signer: this.publicKey,
       balanceLamports: balance.toString(),
       tokenMint: this.policy.tokenTransfer?.mint ?? null,
-      auditRecords: this.audit.readVerified().length,
+      ...this.session.status(),
     };
   }
 
@@ -193,7 +197,7 @@ export class QosService {
   }
 
   async prepareIntent(options = {}) {
-    const parsed = parsePrepareOptions(options, this.policy, this.audit);
+    const parsed = parsePrepareOptions(options, this.policy, this.session);
     assertQos(parsed.destination !== this.publicKey, "SELF_TRANSFER_NOT_ALLOWED", "Native SOL destination must differ from the firmware signer");
     const [genesis, blockhashResult, currentSlot] = await Promise.all([
       this.assertCluster(),
@@ -258,7 +262,7 @@ export class QosService {
   }
 
   async prepareTokenIntent(options = {}) {
-    const parsed = parseTokenPrepareOptions(options, this.policy, this.audit);
+    const parsed = parseTokenPrepareOptions(options, this.policy, this.session);
     const source = this.tokenAddresses(this.publicKey).tokenAccount;
     const destinationTokenAccount = this.tokenAddresses(parsed.destination).tokenAccount;
     assertQos(source !== destinationTokenAccount, "DUPLICATE_TOKEN_ACCOUNT", "Token destination must not resolve to the signer token account");
@@ -310,12 +314,14 @@ export class QosService {
     ]);
     assertQos(genesis === intent?.clusterGenesis, "WRONG_CLUSTER", "Intent cluster does not match RPC cluster");
     const values = validateIntent(intent, this.policy, currentSlot);
+    const releaseAuthorization = this.session.begin(intent.requestNonce, this.policy.maxRequestsPerMinute);
+    let message;
+    try {
     if (values.kind === "native") {
       assertQos(intent.destination !== this.publicKey, "SELF_TRANSFER_NOT_ALLOWED", "Native SOL destination must differ from the firmware signer");
     }
     const blockhashValid = await this.rpc.isBlockhashValid(intent.recentBlockhash);
     assertQos(blockhashValid === true, "INVALID_BLOCKHASH", "Intent recentBlockhash is not valid on the pinned cluster");
-    let message;
     if (values.kind === "native") {
       message = buildNativeTransferMessage({
         payer: this.publicKey,
@@ -365,14 +371,6 @@ export class QosService {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
     }
     const signed = signMessage(message, this.privateKey);
-    this.audit.authorizeAndAppend({
-      requestNonce: intent.requestNonce,
-      intentDigest: digestCanonical(intent),
-      messageDigest: digestBytes(message),
-      signature: signed.signature,
-      publicKey: signed.publicKey,
-      feeLamports: feeLamports.toString(),
-    }, this.policy.maxRequestsPerMinute);
     const simulation = await this.rpc.simulateTransaction(signed.transactionBase64);
     assertQos(simulation && simulation.err === null, "SIMULATION_FAILED", "Solana preflight simulation rejected the transaction", {
       err: simulation?.err,
@@ -400,10 +398,16 @@ export class QosService {
       slot: status.slot,
       confirmationStatus: status.confirmationStatus,
       transactionBytes: signed.transactionBytes,
+      retention: "ephemeral-memory",
+      transactionRetained: false,
       explorerUrl: this.policy.cluster === "devnet"
         ? `https://explorer.solana.com/tx/${signed.signature}?cluster=devnet`
         : `https://explorer.solana.com/tx/${signed.signature}`,
     };
+    } finally {
+      if (Buffer.isBuffer(message)) message.fill(0);
+      releaseAuthorization();
+    }
   }
 
   publicPolicy() {
@@ -411,7 +415,16 @@ export class QosService {
       ...this.policy,
       rpcUrl: new URL(this.policy.rpcUrl).origin,
       signer: this.publicKey,
-      lastRequestNonce: this.audit.lastNonce().toString(),
+      ...this.session.status(),
+    };
+  }
+
+  privacyStatus() {
+    return {
+      ...this.session.status(),
+      transactionFiles: [],
+      persistentFiles: [this.paths.signerKey, this.paths.receiverKey, this.paths.policy].filter(existsSync),
+      note: "The signer and policy persist so the wallet keeps its identity; completed transaction details do not.",
     };
   }
 }

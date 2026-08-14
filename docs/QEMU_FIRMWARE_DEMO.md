@@ -53,17 +53,17 @@ retrieves the pinned dependencies during the first build.
 
 ## Provision the demo firmware
 
-Use the initialized `.qos-devnet` signer and its pinned destination. It does
+Use the initialized `.qos-ephemeral-devnet` signer and its pinned destination. It does
 not need funds for the offline rehearsal:
 
 ```sh
 node bin/qos-firmware-demo.js build
 ```
 
-This is explicitly a provisioning step. It reads `signer.pem`, extracts the
-standard 32-byte Ed25519 seed, compiles the seed and policy into the M-mode ELF,
-restricts the build-tree permissions, and writes a non-secret provisioning
-record containing the signer, policy, and firmware SHA-256 measurement.
+This is a policy provisioning step. It reads the signer only to record its
+public identity, compiles policy constants into the M-mode ELF, restricts the
+build-tree permissions, and writes a non-secret provisioning record. The
+Ed25519 seed is not passed to Cargo and is not embedded in the ELF.
 
 The build requires exactly one allowlisted destination. If `QOS_HOME` or
 `SOLANA_RPC_URL` was used for the host sandbox, export the same values here.
@@ -77,9 +77,9 @@ node bin/qos-firmware-demo.js run --offline --lamports 1000000
 Expected firmware portion:
 
 ```text
-QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer key=sealed-demo
+QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer retention=ephemeral-memory
 QOS_FW:SIGNER_HEX ...
-QOS_FW:ACCEPT index=0 tx_hex=...
+QOS_FW:ACCEPT index=0 tx_hex=<redacted-in-memory>
 QOS_FW:REJECT index=1 code=AMOUNT
 QOS_FW:REJECT index=2 code=NONCE_REPLAY
 QOS_FW:DONE
@@ -91,8 +91,9 @@ deterministic placeholder blockhash and slot, does not contact Solana, and does
 not claim that the transaction can land. It proves the actual QEMU firmware
 booted, enforced its policy, produced a valid Ed25519 signature, constructed
 the exact allowlisted instruction, and rejected the two negative cases. The
-run command reads the public policy and provisioning record but not
-`signer.pem`.
+run command reads signer.pem, verifies its public key against the provisioning
+record, copies its seed into an unlinked RAM-backed key mailbox, and wipes the
+host and guest mailbox buffers after firmware imports it.
 
 ## Verify against live Devnet without broadcasting
 
@@ -136,8 +137,8 @@ already have qOS associated token accounts. Provision a separate firmware ELF
 from that policy:
 
 ```sh
-node bin/qos-firmware-demo.js build --home .qos-mainnet
-node bin/qos-firmware-demo.js run --home .qos-mainnet \
+node bin/qos-firmware-demo.js build --home .qos-ephemeral-mainnet
+node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
   --asset token --amount 1000000 --offline
 ```
 
@@ -154,7 +155,7 @@ Only after reviewing the verification-only result, enable a mainnet broadcast:
 
 ```sh
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos-firmware-demo.js run --home .qos-mainnet \
+  node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
   --asset token --amount 1000000 --broadcast
 ```
 
@@ -170,17 +171,21 @@ Explain the boundary in four sentences while the command runs:
 ## Security limitations
 
 This is an engineering demonstration, not a custody product. QEMU's host can
-inspect guest memory, and the provisioned ELF contains the signing seed,
-the nonce is monotonic only during one boot, and the current slot comes from the
-untrusted host. Network blockhash expiry and the verifying relay limit those
-last two weaknesses, but they do not replace trusted time and rollback-safe
-storage. The ML-DSA secure-boot hooks in `firmware/secure_boot.c` remain
-unimplemented platform boundaries. Verification-only mode is preferred. If
-the mainnet path is demonstrated, use a new, deliberately capped signer that
-holds only the exact fee and token amount needed for the demo; do not use a
-treasury, operator, or production wallet.
+inspect guest memory and signer.pem exists on the host. The ELF contains no
+seed, but the host loads the seed into an unlinked tmpfs file descriptor at
+runtime. Linux tmpfs is RAM-backed but may use swap; disable swap and core
+dumps on a sensitive demo host. QOS_RAM_DIR may select another directory, but
+the runner rejects it unless Linux reports the tmpfs filesystem type.
 
-After the presentation, remove the secret-bearing build output with your normal
-secure artifact-cleanup procedure. `make clean` intentionally does not remove
-the firmware-demo target tree automatically because that deletion should be an
-explicit operator action.
+The nonce is monotonic only during one firmware boot and the current slot comes
+from the untrusted host. Network blockhash expiry and the verifying relay limit
+those weaknesses but do not replace trusted time and rollback-safe storage.
+The ML-DSA secure-boot hooks in firmware/secure_boot.c remain unimplemented
+platform boundaries. Use a new, deliberately capped demo signer, never a
+treasury or production wallet.
+
+The QEMU runner creates no transaction mailbox file in the repository and
+redacts the raw transaction from the displayed UART transcript. The complete
+transaction still exists briefly in host memory for independent verification,
+simulation, and optional broadcast. After broadcast it is public Solana ledger
+data and cannot be made private or forgotten.

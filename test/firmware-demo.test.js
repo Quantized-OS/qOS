@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { closeSync, readFileSync, readlinkSync } from "node:fs";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { MAINNET_GENESIS_HASH } from "../src/constants.js";
 import {
   clusterGenesisBytes,
+  encodeKeyMailbox,
   encodeIntentBundle,
   encodeIntentFrame,
+  openRamBackedFile,
   parseFirmwareOutput,
+  redactFirmwareOutput,
 } from "../bin/qos-firmware-demo.js";
 
 function frame(overrides = {}) {
@@ -33,6 +37,28 @@ test("firmware pads the canonical mainnet genesis identity to its 32-byte field"
   assert.deepEqual(bytes.subarray(0, 9), Buffer.alloc(9));
   assert.deepEqual(bytes.subarray(9), decoded);
   assert.deepEqual(frame({ clusterGenesis: MAINNET_GENESIS_HASH }).subarray(24, 56), bytes);
+});
+
+test("firmware key mailbox has a fixed typed format", () => {
+  const seed = Buffer.alloc(32, 9);
+  const mailbox = encodeKeyMailbox(seed);
+  assert.equal(mailbox.length, 40);
+  assert.equal(mailbox.subarray(0, 8).toString(), "QOSKEYV1");
+  assert.deepEqual(mailbox.subarray(8), seed);
+  mailbox.fill(0);
+  seed.fill(0);
+});
+
+test("QEMU mailbox is unlinked immediately from Linux tmpfs", { skip: process.platform !== "linux" }, () => {
+  const contents = Buffer.from("ephemeral-qos-test");
+  const fd = openRamBackedFile(contents, "test");
+  try {
+    assert.deepEqual(readFileSync("/proc/self/fd/" + fd), contents);
+    assert.match(readlinkSync("/proc/self/fd/" + fd), /\(deleted\)$/);
+  } finally {
+    closeSync(fd);
+    contents.fill(0);
+  }
 });
 
 test("firmware intent wire format is fixed-length and canonical", () => {
@@ -85,4 +111,7 @@ test("demo transcript must prove acceptance, tamper rejection, and replay reject
   assert.deepEqual(parseFirmwareOutput(output), Buffer.from([1, 2, 3]));
   assert.throws(() => parseFirmwareOutput(output.replace("NONCE_REPLAY", "OTHER")), { code: "FIRMWARE_REPLAY_TEST_FAILED" });
   assert.throws(() => parseFirmwareOutput(`${output}\nQOS_FW:ACCEPT index=2 tx_hex=04`), { code: "FIRMWARE_ACCEPT_SET_INVALID" });
+  const redacted = redactFirmwareOutput(output);
+  assert.equal(redacted.includes("010203"), false);
+  assert.match(redacted, /tx_hex=<redacted-in-memory>/);
 });

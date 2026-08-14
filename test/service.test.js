@@ -58,7 +58,7 @@ test("native SOL preparation rejects a transfer back to the signer", async () =>
   await assert.rejects(() => service.prepareIntent(), { code: "SELF_TRANSFER_NOT_ALLOWED" });
 });
 
-test("service prepares, signs, submits, confirms, and audits a real Solana transaction", async () => {
+test("service prepares, signs, submits, confirms, and forgets a real Solana transaction", async () => {
   const { service, initialized } = serviceWithMock();
   const intent = await service.prepareIntent({ lamports: "12345" });
   assert.equal(intent.destination, initialized.destination);
@@ -68,8 +68,11 @@ test("service prepares, signs, submits, confirms, and audits a real Solana trans
   assert.equal(result.confirmationStatus, "confirmed");
   assert.equal(result.signature.length > 80, true);
   assert.equal(service.rpc.sent.length, 1);
-  assert.equal(service.audit.readVerified().length, 1);
-  await assert.rejects(() => service.submitIntent(intent), { code: "NONCE_REPLAY" });
+  assert.equal(service.session.status().activeAuthorizations, 0);
+  assert.equal(result.retention, "ephemeral-memory");
+  assert.equal(result.transactionRetained, false);
+  assert.equal(existsSync(service.paths.legacyAuditKey), false);
+  assert.equal(existsSync(service.paths.legacyAuditLog), false);
 });
 
 test("service refuses an RPC endpoint on the wrong cluster", async () => {
@@ -78,12 +81,12 @@ test("service refuses an RPC endpoint on the wrong cluster", async () => {
   await assert.rejects(() => service.prepareIntent(), { code: "RPC_CLUSTER_MISMATCH" });
 });
 
-test("service refuses failed preflight and consumes the authorized nonce", async () => {
+test("service refuses failed preflight and releases volatile authorization state", async () => {
   const { service } = serviceWithMock();
   service.rpc.simulateTransaction = async () => ({ err: { InstructionError: [0, "Custom"] }, logs: ["failed"] });
   const intent = await service.prepareIntent();
   await assert.rejects(() => service.submitIntent(intent), { code: "SIMULATION_FAILED" });
-  assert.equal(service.audit.lastNonce(), 1n);
+  assert.equal(service.session.status().activeAuthorizations, 0);
 });
 
 test("service reports the exact SOL funding deficit before signing", async () => {
@@ -98,7 +101,7 @@ test("service reports the exact SOL funding deficit before signing", async () =>
       requiredLamports: "17345",
     },
   });
-  assert.equal(service.audit.readVerified().length, 0);
+  assert.equal(service.session.status().activeAuthorizations, 0);
 });
 
 function mintAccount() {
@@ -173,7 +176,7 @@ test("mainnet token submission fails before signing without explicit broadcast o
   delete process.env.QOS_ENABLE_MAINNET_BROADCAST;
   try {
     await assert.rejects(() => service.submitIntent(intent), { code: "MAINNET_BROADCAST_DISABLED" });
-    assert.equal(service.audit.readVerified().length, 0);
+    assert.equal(service.session.status().activeAuthorizations, 0);
     assert.equal(rpc.sent.length, 0);
   } finally {
     if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;

@@ -23,8 +23,9 @@ node bin/qos.js airdrop --lamports 200000000
 node bin/qos.js transfer --lamports 1000000
 ```
 
-`init` creates `.qos-devnet/` with mode-restricted, disposable signer and
-receiver keys, a separate audit authentication key, and an allowlist policy.
+`init` creates `.qos-ephemeral-devnet/` with mode-restricted, disposable
+signer and receiver keys plus an allowlist policy. It creates no transaction
+log or audit key.
 It refuses to overwrite an existing directory. The generated receiver is only
 for making the first sandbox transfer self-contained.
 
@@ -41,7 +42,13 @@ node bin/qos.js address
 node bin/qos.js balance
 ```
 
-Prepare an intent without signing it:
+The privacy-preserving path prepares and submits in one process:
+
+```sh
+node bin/qos.js transfer --lamports 1000000
+```
+
+The optional two-step path exposes the intent to the caller:
 
 ```sh
 node bin/qos.js prepare --lamports 1000000 > intent.json
@@ -53,12 +60,15 @@ Review `intent.json`, then submit it:
 node bin/qos.js submit --intent intent.json
 ```
 
-Every authorized nonce is consumed even if later simulation or submission
-fails. Prepare a new intent to receive the next nonce and a fresh blockhash.
-Verify the local audit chain at any time:
+The shell redirection above deliberately writes transaction details to
+intent.json and is therefore not ephemeral. Use the one-step transfer command
+when local transaction retention is unwanted. Volatile nonce state is held
+only while the process runs and is released on success or failure.
+
+Inspect the privacy boundary:
 
 ```sh
-node bin/qos.js audit-verify
+node bin/qos.js privacy-status
 ```
 
 To use a dedicated Devnet provider, set `SOLANA_RPC_URL`. The endpoint may
@@ -70,10 +80,10 @@ Create a separate home and explicitly select mainnet. Use a destination wallet
 whose qOS associated token account already exists:
 
 ```sh
-node bin/qos.js init --home .qos-mainnet --cluster mainnet-beta \
+node bin/qos.js init --home .qos-ephemeral-mainnet --cluster mainnet-beta \
   --destination YOUR_MAINNET_WALLET
-node bin/qos.js address --home .qos-mainnet
-node bin/qos.js token-address --home .qos-mainnet
+node bin/qos.js address --home .qos-ephemeral-mainnet
+node bin/qos.js token-address --home .qos-ephemeral-mainnet
 ```
 
 The policy pins:
@@ -89,15 +99,15 @@ associated token account. Then inspect its base-unit balance and prepare a
 one-token intent:
 
 ```sh
-node bin/qos.js token-balance --home .qos-mainnet
-node bin/qos.js token-prepare --home .qos-mainnet --amount 1000000 > token-intent.json
+node bin/qos.js token-balance --home .qos-ephemeral-mainnet
+node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
-Review the intent. Mainnet submission requires this exact additional opt-in:
+Mainnet submission requires this exact additional opt-in:
 
 ```sh
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos.js submit --home .qos-mainnet --intent token-intent.json
+  node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
 A different mainnet RPC can be supplied with `SOLANA_RPC_URL`; the client still
@@ -127,7 +137,7 @@ curl -sS http://127.0.0.1:8787/v1/intents/prepare \
   -d '{"lamports":"1000000"}' > intent.json
 ```
 
-Prepare a token intent when the server is using `.qos-mainnet`:
+Prepare a token intent when the server is using the mainnet home:
 
 ```sh
 curl -sS http://127.0.0.1:8787/v1/token-intents/prepare \
@@ -149,6 +159,11 @@ non-loopback address. Put TLS and additional authentication in front of any
 remote sandbox deployment; the built-in server intentionally does not provide
 TLS.
 
+HTTP request buffers are overwritten after parsing, but JSON strings are
+managed by the JavaScript garbage collector. Curl output redirection, reverse
+proxy access logs, application logging, terminal capture, and RPC-provider logs
+can all retain transaction details outside qOS.
+
 ## Enforced checks
 
 The signing path fails closed unless all of these conditions hold:
@@ -158,25 +173,45 @@ The signing path fails closed unless all of these conditions hold:
    `TokenTransferIntentV2`.
 3. Venue, market, mints, side, strategy, and destination are allowlisted.
 4. Amount, fee cap, compute price, relay tip, and slot TTL are within policy.
-5. The blockhash is currently valid and the nonce is strictly increasing.
+5. The blockhash is currently valid and the nonce is not already in flight in
+   the current process; firmware demo nonces are strictly increasing per boot.
 6. The internally built message self-parses as one System Program transfer or
    one Token-2022 `TransferChecked` instruction.
 7. Token mode verifies the mint owner, decimals, extension set, associated
    account derivations, account owners, account state, and source balance.
 8. RPC fee calculation fits both intent and policy limits.
 9. The Ed25519 signature verifies locally.
-10. The authorization is appended to the authenticated audit chain.
-11. Simulation succeeds, RPC returns the same signature, and the transaction
+10. Simulation succeeds, RPC returns the same signature, and the transaction
     reaches confirmed or finalized status before its blockhash expires.
+
+## Ephemeral retention model
+
+qOS writes no intent, message, blockhash, signature, or transaction audit
+record. The one-step CLI and QEMU demo keep those values in process or guest
+memory only and overwrite mutable buffers after the operation. The QEMU loader
+uses unlinked files on Linux tmpfs; no intents.bin file is created. The
+signer key, receiver key, policy, firmware ELF, and public provisioning record
+remain persistent by design.
+
+Existing v0.5 homes contain audit data and are rejected rather than silently
+ignored or deleted. The v0.6 defaults use new .qos-ephemeral-devnet and
+.qos-ephemeral-mainnet directories. Old homes remain untouched so the operator
+can archive or securely remove them.
 
 ## Security boundary
 
 This is a mock signer suitable for integration and policy development.
 The signer key exists in a local Node.js process and the operating system can
 read it. It is not a replacement for the firmware, PMP, HSM, TEE, MPC, or
-two-person controls described by the target architecture. Keep `.qos-devnet`
-and `.qos-mainnet` separate, use only deliberately capped keys, and never treat
+two-person controls described by the target architecture. Keep the Devnet and
+mainnet homes separate, use only deliberately capped keys, and never treat
 the public RPC endpoints or this prototype as production custody
 infrastructure. Mainnet submission is guarded by
 `QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`, but that guard is not a security
 boundary against a compromised operating system.
+
+For the strongest demonstration host, disable swap and core dumps, avoid shell
+history containing sensitive parameters, disable terminal recording, and use a
+dedicated RPC that does not retain request bodies. Broadcast Solana
+transactions are public and cannot be forgotten by qOS or removed from the
+ledger.

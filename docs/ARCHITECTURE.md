@@ -84,7 +84,7 @@ flowchart TD
     C --> D[Mock Ed25519 signer]
     D --> E[Simulation and RPC relay]
     E --> F[Confirmation monitor]
-    D --> G[Authenticated audit chain]
+    D --> G[Volatile authorization session]
 ```
 
 The sandbox has no arbitrary-message signing endpoint. `src/transaction.js`
@@ -103,15 +103,16 @@ recent blockhash with `isBlockhashValid`, bounds slot expiry, calculates the
 actual fee with `getFeeForMessage`, and self-parses its constructed message.
 Token mode also verifies the mint account and both token-account owners,
 states, mints, balances, and deterministic associated addresses.
-It records the intent and message digests in an HMAC-authenticated, chained
-audit log before release. The relay simulates with signature verification,
-submits with preflight enabled, checks the returned signature, and polls
-confirmation status. RPC responses are untrusted inputs and are shape-checked.
+It records no transaction audit log. The current authorization nonce and rate
+window exist only in process memory and the nonce is forgotten when the
+operation completes. The relay simulates with signature verification, submits
+with preflight enabled, checks the returned signature, and polls confirmation
+status. RPC responses are untrusted inputs and are shape-checked.
 
 The mock signer, relay, and API can run in one Node.js process for sandbox use.
 That is not a hardware isolation boundary. A production port must preserve the
-module interface while moving key loading, nonce state, policy, message
-construction, and audit authorization below the untrusted OS boundary.
+module interface while moving key loading, rollback-safe replay metadata,
+policy, and message construction below the untrusted OS boundary.
 
 ## QEMU M-mode signing demonstration
 
@@ -128,14 +129,17 @@ flowchart TD
 ```
 
 QEMU loads no operating system. The M-mode image parses a fixed 304-byte
-version-2 transfer frame from a read-only-by-convention demo mailbox, checks the
+version-2 transfer frame from an unlinked RAM-backed host mailbox, checks the
 provisioned cluster, destination, strategy, amount, fee ceiling, slot window,
 reserved fields, and monotonic in-boot nonce, then constructs either the single
 System Program transfer or the single pinned Token-2022 `TransferChecked`
 instruction. The token branch additionally compares the mint, token program,
 decimals, source token account, and destination token account with provisioned
-constants. Ed25519 is invoked only on that internal message. The UART response
-contains the public transaction and never the seed.
+constants. A separate runtime key mailbox supplies the seed; the ELF does not
+contain it. Ed25519 is invoked only on that internal message. The firmware
+wipes both mailboxes and all mutable frame, seed, message, signature, and
+transaction buffers. The host redacts the public transaction from the
+displayed UART transcript.
 
 The host relay validates the provisioned ELF SHA-256 measurement, verifies the
 firmware signature and parses the message against the original intent before
@@ -144,12 +148,19 @@ over-limit intent rejected with `AMOUNT`, and a replay rejected with
 `NONCE_REPLAY`.
 
 QEMU is not a hardware security boundary: its host can inspect guest memory and
-the demo seed is provisioned into the ELF. The demo proves that the real
+reads the demo key at runtime. The demo proves that the real
 bare-metal firmware code performs narrow policy signing; it does not prove
 physical key isolation, immutable boot ROM, power-loss-safe monotonic storage,
 or the unfinished ML-DSA stage-0 chain.
 
 ## Transaction routing and privacy
+
+The implemented sandbox retains signer identity and policy but no completed
+transaction records. Mutable host buffers are overwritten where possible;
+JavaScript strings remain subject to garbage collection. QEMU mailbox files
+are opened on Linux tmpfs, immediately unlinked, passed as inherited file
+descriptors, and closed after boot. Disable swap, core dumps, terminal
+recording, and request logging for the strongest practical demo boundary.
 
 A direct validator/block-engine route can reduce exposure before inclusion.
 It cannot make the resulting trade private after it lands.  Solana account
@@ -172,7 +183,7 @@ Post-quantum protection applies to:
 - Firmware and OS update signatures
 - Recovery authorization
 - Device-to-management-plane identity
-- Encrypted backups and long-term audit archives
+- Encrypted backups and long-term attestation archives that contain no trade data
 
 It does not apply to an ordinary Solana transaction until the Solana protocol
 accepts a post-quantum transaction signature scheme.  A local custom CPU

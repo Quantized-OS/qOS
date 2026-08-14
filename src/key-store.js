@@ -2,7 +2,6 @@ import {
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
-  randomBytes,
 } from "node:crypto";
 import {
   chmodSync,
@@ -40,30 +39,10 @@ export function writeNewEd25519Key(path) {
   return privateKey;
 }
 
-export function writeNewAuditKey(path) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  try {
-    writeFileSync(path, randomBytes(32), { flag: "wx", mode: 0o600 });
-    chmodSync(path, 0o600);
-  } catch (error) {
-    if (error.code === "EEXIST") {
-      throw new QosError("KEY_ALREADY_EXISTS", `Refusing to overwrite existing key: ${path}`);
-    }
-    throw error;
-  }
-}
-
 export function loadPrivateKey(path) {
   requirePrivatePermissions(path);
   const key = createPrivateKey(readFileSync(path));
   assertQos(key.asymmetricKeyType === "ed25519", "WRONG_KEY_TYPE", "Signer key must be Ed25519");
-  return key;
-}
-
-export function loadAuditKey(path) {
-  requirePrivatePermissions(path);
-  const key = readFileSync(path);
-  assertQos(key.length === 32, "INVALID_AUDIT_KEY", "Audit key must contain exactly 32 bytes");
   return key;
 }
 

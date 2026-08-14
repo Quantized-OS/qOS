@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, verify } from "node:crypto";
+import { createHash, randomBytes, verify } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
+  statfsSync,
   statSync,
+  unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,9 +35,10 @@ const FIRMWARE_DIR = join(ROOT, "firmware-demo");
 const BUILD_DIR = join(ROOT, "build", "firmware-demo");
 const FIRMWARE_ELF = join(FIRMWARE_DIR, "target", "riscv64imac-unknown-none-elf", "release", "qos-firmware-demo");
 const PROVISIONING_FILE = join(BUILD_DIR, "provisioning.json");
-const INTENT_FILE = join(BUILD_DIR, "intents.bin");
 const FRAME_SIZE = 304;
 const BUNDLE_MAGIC = Buffer.from("QOSINTV2");
+const KEY_MAGIC = Buffer.from("QOSKEYV1");
+const LINUX_TMPFS_MAGIC = 0x01021994;
 
 function usage() {
   return `qOS QEMU firmware transaction demo
@@ -44,8 +50,8 @@ Usage:
   node bin/qos-firmware-demo.js demo [--home PATH] [--asset sol|token]
                                       [--lamports N | --amount N] [--offline | --broadcast]
 
-build provisions the selected sandbox key and policy into an M-mode RV64 ELF.
-run never reads signer.pem; it passes typed intents to QEMU and relays the result.
+build provisions a key-independent M-mode RV64 ELF and records its measurement.
+run reads signer.pem only to create an unlinked RAM key mailbox for QEMU.
 `;
 }
 
@@ -74,7 +80,7 @@ function only(options, allowed) {
 }
 
 function homeOf(options) {
-  return resolve(options.home ?? process.env.QOS_HOME ?? ".qos-devnet");
+  return resolve(options.home ?? process.env.QOS_HOME ?? ".qos-ephemeral-devnet");
 }
 
 function policyPath(home) {
@@ -171,6 +177,44 @@ export function encodeIntentBundle(frames) {
   return Buffer.concat([header, ...frames]);
 }
 
+export function encodeKeyMailbox(seed) {
+  assertQos(Buffer.isBuffer(seed) && seed.length === 32, "INVALID_FIRMWARE_SEED", "Firmware seed must be exactly 32 bytes");
+  return Buffer.concat([KEY_MAGIC, seed]);
+}
+
+export function openRamBackedFile(bytes, label = "mailbox") {
+  assertQos(Buffer.isBuffer(bytes), "INVALID_RAM_FILE", "RAM-backed mailbox contents must be a Buffer");
+  const directory = resolve(process.env.QOS_RAM_DIR ?? "/dev/shm");
+  let fsType;
+  try {
+    fsType = Number(statfsSync(directory).type);
+  } catch {
+    assertQos(false, "RAM_FILESYSTEM_REQUIRED", "qOS requires a readable RAM-backed directory at /dev/shm or QOS_RAM_DIR");
+  }
+  assertQos(fsType === LINUX_TMPFS_MAGIC, "RAM_FILESYSTEM_REQUIRED", "QOS_RAM_DIR must be a Linux tmpfs RAM filesystem");
+  const path = join(directory, ".qos-" + process.pid + "-" + randomBytes(12).toString("hex") + "-" + label);
+  let fd;
+  try {
+    fd = openSync(path, "wx+", 0o600);
+    let written = 0;
+    while (written < bytes.length) {
+      const count = writeSync(fd, bytes, written, bytes.length - written, written);
+      assertQos(count > 0, "RAM_FILE_WRITE_FAILED", "Could not finish writing the RAM-backed mailbox");
+      written += count;
+    }
+    unlinkSync(path);
+    return fd;
+  } catch (error) {
+    if (existsSync(path)) unlinkSync(path);
+    if (fd !== undefined) closeSync(fd);
+    throw error;
+  }
+}
+
+export function redactFirmwareOutput(output) {
+  return output.replace(/(QOS_FW:ACCEPT index=[0-9]+ tx_hex=)[0-9a-f]+/g, "$1<redacted-in-memory>");
+}
+
 export function parseFirmwareOutput(output) {
   const accepted = [...output.matchAll(/QOS_FW:ACCEPT index=(\d+) tx_hex=([0-9a-f]+)/g)];
   assertQos(accepted.length === 1 && accepted[0][1] === "0", "FIRMWARE_ACCEPT_SET_INVALID", "Firmware must accept exactly the first intent and no others", { output });
@@ -201,7 +245,6 @@ function provisioningEnv(home, policy) {
     destinationTokenAccount,
     env: {
       ...process.env,
-      QOS_FW_SEED_HEX: privateKeySeed(privateKey).toString("hex"),
       QOS_FW_GENESIS_HEX: clusterGenesisBytes(policy.clusterGenesis).toString("hex"),
       QOS_FW_DESTINATION_HEX: decodeBase58(policy.allowedDestinations[0], 32).toString("hex"),
       QOS_FW_MAX_AMOUNT: policy.maxTransferLamports,
@@ -237,7 +280,7 @@ export function buildFirmware(home) {
   assertQos(existsSync(FIRMWARE_ELF), "FIRMWARE_BUILD_MISSING", "Cargo completed without producing the firmware ELF");
   restrictTree(join(FIRMWARE_DIR, "target"));
   const record = {
-    version: 2,
+    version: 3,
     firmwareElf: FIRMWARE_ELF,
     firmwareSha256: sha256File(FIRMWARE_ELF),
     signer: publicKeyAddress(privateKey),
@@ -262,7 +305,7 @@ export function buildFirmware(home) {
 function loadProvisioning(home, policy) {
   assertQos(existsSync(PROVISIONING_FILE) && existsSync(FIRMWARE_ELF), "FIRMWARE_NOT_PROVISIONED", "Run the firmware demo build command first");
   const record = JSON.parse(readFileSync(PROVISIONING_FILE, "utf8"));
-  assertQos(record.version === 2, "BAD_PROVISIONING_RECORD", "Unsupported firmware provisioning record");
+  assertQos(record.version === 3, "BAD_PROVISIONING_RECORD", "Unsupported firmware provisioning record");
   assertQos(record.firmwareSha256 === sha256File(FIRMWARE_ELF), "FIRMWARE_MEASUREMENT_MISMATCH", "Firmware ELF changed after provisioning");
   assertQos(record.clusterGenesis === policy.clusterGenesis, "PROVISIONING_POLICY_MISMATCH", "Provisioned cluster does not match current policy");
   assertQos(record.destination === policy.allowedDestinations[0], "PROVISIONING_POLICY_MISMATCH", "Provisioned destination does not match current policy");
@@ -306,6 +349,8 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   assertQos(!(offline && broadcast), "OFFLINE_BROADCAST_CONFLICT", "--offline cannot be combined with --broadcast");
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   const record = loadProvisioning(home, policy);
+  const privateKey = loadPrivateKey(join(home, "signer.pem"));
+  assertQos(publicKeyAddress(privateKey) === record.signer, "SIGNER_MEASUREMENT_MISMATCH", "Runtime signer does not match the provisioned firmware identity");
   assertQos(asset === "sol" || asset === "token", "INVALID_DEMO_ASSET", "--asset must be sol or token");
   assertQos(!(lamports !== undefined && amount !== undefined), "CONFLICTING_AMOUNT_OPTIONS", "Use --lamports for SOL or --amount for tokens, not both");
   const amountText = asset === "sol" ? (lamports ?? amount ?? "1000000") : (amount ?? lamports ?? "1000000");
@@ -366,27 +411,54 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   const tampered = encodeIntentFrame({ ...base, requestNonce: 2n, amount: overLimit, minimumOutput: overLimit });
   const replay = encodeIntentFrame(base);
   mkdirSync(BUILD_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(INTENT_FILE, encodeIntentBundle([valid, tampered, replay]), { mode: 0o600 });
-  chmodSync(INTENT_FILE, 0o600);
-
-  const qemuResult = spawnSync(qemu, [
+  const bundle = encodeIntentBundle([valid, tampered, replay]);
+  const seed = privateKeySeed(privateKey);
+  const keyBytes = encodeKeyMailbox(seed);
+  seed.fill(0);
+  let intentFd;
+  let keyFd;
+  let qemuResult;
+  try {
+    intentFd = openRamBackedFile(bundle, "intent");
+    keyFd = openRamBackedFile(keyBytes, "key");
+    qemuResult = spawnSync(qemu, [
     "-machine", "virt",
     "-cpu", "rv64",
     "-smp", "1",
     "-m", "128M",
     "-bios", "none",
     "-kernel", FIRMWARE_ELF,
-    "-device", `loader,file=${INTENT_FILE},addr=0x81000000,force-raw=on`,
+    "-device", "loader,file=/proc/self/fd/3,addr=0x81000000,force-raw=on",
+    "-device", "loader,file=/proc/self/fd/4,addr=0x81200000,force-raw=on",
     "-display", "none",
     "-serial", "stdio",
     "-monitor", "none",
     "-no-reboot",
-  ], { encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+    ], {
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe", intentFd, keyFd],
+    });
+  } finally {
+    if (intentFd !== undefined) {
+      try { closeSync(intentFd); } catch {}
+    }
+    if (keyFd !== undefined) {
+      try { closeSync(keyFd); } catch {}
+    }
+    bundle.fill(0);
+    keyBytes.fill(0);
+    valid.fill(0);
+    tampered.fill(0);
+    replay.fill(0);
+  }
   const firmwareOutput = `${qemuResult.stdout ?? ""}${qemuResult.stderr ?? ""}`;
-  process.stdout.write(firmwareOutput);
+  process.stdout.write(redactFirmwareOutput(firmwareOutput));
   assertQos(!qemuResult.error, "QEMU_FAILED", `QEMU execution failed: ${qemuResult.error?.message}`);
   assertQos(qemuResult.status === 0, "QEMU_FAILED", `QEMU exited with status ${qemuResult.status}`, { firmwareOutput });
   const transaction = parseFirmwareOutput(firmwareOutput);
+  try {
   const verified = verifyFirmwareTransaction(transaction, record, base);
   if (offline) {
     return {
@@ -396,17 +468,11 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
       broadcast: false,
       asset,
       signer: record.signer,
-      destination: record.destination,
-      ...(asset === "sol" ? { lamports: amountText } : {
-        mint: record.tokenTransfer.mint,
-        amount: amountText,
-        decimals: record.tokenTransfer.decimals,
-        sourceTokenAccount: record.tokenTransfer.sourceTokenAccount,
-        destinationTokenAccount: record.tokenTransfer.destinationTokenAccount,
-      }),
       feeLamports: null,
-      signature: verified.signature,
       firmwareSha256: record.firmwareSha256,
+      retention: "ephemeral-memory",
+      transactionRetained: false,
+      detailsReturned: false,
     };
   }
   const fee = await rpc.getFeeForMessage(verified.message.toString("base64"));
@@ -429,17 +495,11 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
       broadcast: false,
       asset,
       signer: record.signer,
-      destination: record.destination,
-      ...(asset === "sol" ? { lamports: amountText } : {
-        mint: record.tokenTransfer.mint,
-        amount: amountText,
-        decimals: record.tokenTransfer.decimals,
-        sourceTokenAccount: record.tokenTransfer.sourceTokenAccount,
-        destinationTokenAccount: record.tokenTransfer.destinationTokenAccount,
-      }),
       feeLamports: String(fee),
-      signature: verified.signature,
       firmwareSha256: record.firmwareSha256,
+      retention: "ephemeral-memory",
+      transactionRetained: false,
+      detailsReturned: false,
     };
   }
   if (policy.cluster === "mainnet-beta") {
@@ -471,10 +531,16 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     slot: status.slot,
     confirmationStatus: status.confirmationStatus,
     firmwareSha256: record.firmwareSha256,
+    retention: "ephemeral-memory",
+    transactionRetained: false,
+    ledgerVisibility: "public",
     explorerUrl: policy.cluster === "devnet"
       ? `https://explorer.solana.com/tx/${verified.signature}?cluster=devnet`
       : `https://explorer.solana.com/tx/${verified.signature}`,
   };
+  } finally {
+    transaction.fill(0);
+  }
 }
 
 async function main() {

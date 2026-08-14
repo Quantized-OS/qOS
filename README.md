@@ -37,7 +37,7 @@ Depending on the deployment, onchain commitments could include:
 * Security policy versions
 * Signed update and rollback records
 * Remote attestation proofs
-* Auditable signer-policy events with sensitive fields concealed
+* Privacy-preserving device and policy attestation events that contain no transaction details
 
 Firmware images, live keys, strategies, order flow, and private machine state remain offchain. Privacy is the default boundary rather than an optional application setting.
 
@@ -68,18 +68,39 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/ARCHITECTURE.md` — Trust domains and privacy boundaries
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
-* `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and audit modules
+* src/ — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
-* `test/` — Transaction, policy, audit, and relay integration tests
+* test/ — Transaction, policy, privacy, firmware-mailbox, and relay integration tests
 * `tests/static_checks.py` — Fail-closed starter invariants
 
 The firmware code is intentionally incomplete. It will not produce a deployable firmware image until the target platform provides working implementations of ML-DSA-65, SHA3-384, rollback storage, measured boot, PMP locking, and failure handling. There is no development-signature bypass.
 
-The repository now contains a working Solana sandbox. Devnet mode accepts typed `OrderIntentV1` requests and constructs one pinned System Program transfer. The explicit mainnet mode accepts `TokenTransferIntentV2` for the qOS mint `5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump` and constructs one Token-2022 `TransferChecked` instruction. Both paths sign with the isolated mock Ed25519 signer, simulate, submit, confirm, and record authorization in a keyed hash-chain audit log. Neither path accepts arbitrary serialized messages for signing.
+The repository now contains a working Solana sandbox. Devnet mode accepts typed OrderIntentV1 requests and constructs one pinned System Program transfer. The explicit mainnet mode accepts TokenTransferIntentV2 for the qOS mint 5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump and constructs one Token-2022 TransferChecked instruction. Both paths sign with the isolated mock Ed25519 signer, simulate, submit, confirm, and forget completed transaction state. Neither path accepts arbitrary serialized messages for signing.
+
+## Ephemeral transaction privacy
+
+qOS v0.6 does not create transaction audit logs. Intent, blockhash, serialized
+message, signature, and firmware mailbox data exist only while a request is
+active. Host buffers are overwritten where the runtime permits it, firmware
+mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
+its typed intent and runtime key through already-unlinked files on Linux tmpfs.
+The firmware ELF contains policy constants but no Ed25519 seed. Raw signed
+transactions are redacted from the QEMU terminal transcript.
+
+The signer key, receiver key, policy, public provisioning record, and firmware
+ELF remain on disk so the sandbox keeps a stable identity and can verify what
+booted. JavaScript strings are garbage-collected and cannot be given the same
+zeroization guarantee as native buffers. Use a minimal host with swap and core
+dumps disabled for the strongest demo boundary.
+
+Ephemeral local handling does not make a broadcast transaction secret. Once
+Solana accepts it, the signature, accounts, amount, and instruction are public
+ledger data. Shell redirection, terminal recording, RPC logging, and client
+code can also create copies outside qOS.
 
 ## Build the research starter
 
@@ -101,7 +122,7 @@ Do not use this repository with production keys or mainnet funds.
 
 ## Run a real Solana Devnet transaction
 
-Initialize disposable signer, receiver, audit, and policy files:
+Initialize disposable signer, receiver, and policy files:
 
 ```sh
 node bin/qos.js init
@@ -135,10 +156,10 @@ fails closed if they change.
 Initialize a separate mainnet sandbox with an allowlisted destination wallet:
 
 ```sh
-node bin/qos.js init --home .qos-mainnet --cluster mainnet-beta \
+node bin/qos.js init --home .qos-ephemeral-mainnet --cluster mainnet-beta \
   --destination YOUR_MAINNET_WALLET
-node bin/qos.js address --home .qos-mainnet
-node bin/qos.js token-address --home .qos-mainnet
+node bin/qos.js address --home .qos-ephemeral-mainnet
+node bin/qos.js token-address --home .qos-ephemeral-mainnet
 ```
 
 Fund the printed signer with enough SOL for fees and send qOS tokens to its
@@ -147,8 +168,8 @@ associated token account. Verify the source balance and prepare a one-token
 intent; token amounts are base units, so `1000000` is one token:
 
 ```sh
-node bin/qos.js token-balance --home .qos-mainnet
-node bin/qos.js token-prepare --home .qos-mainnet --amount 1000000
+node bin/qos.js token-balance --home .qos-ephemeral-mainnet
+node bin/qos.js token-prepare --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
 Mainnet broadcast requires both an explicit transfer command and a separate
@@ -156,10 +177,10 @@ environment opt-in:
 
 ```sh
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos.js token-transfer --home .qos-mainnet --amount 1000000
+  node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
-Review `.qos-mainnet/policy.json` before funding the signer. The included
+Review .qos-ephemeral-mainnet/policy.json before funding the signer. The included
 maximum is `1000000000` base units (1,000 tokens), and any policy edit requires
 rebuilding the firmware demo before it will run.
 
@@ -180,10 +201,11 @@ node bin/qos-firmware-demo.js run --lamports 1000000
 node bin/qos-firmware-demo.js run --lamports 1000000 --broadcast
 ```
 
-The first command is the provisioning/manufacturing step and reads the Devnet
-demo key. The runtime `run` command does not read `signer.pem`; it verifies the
-provisioned ELF measurement, executes the firmware, and independently verifies
-the signature and exact instruction. `--offline` is the deterministic stage
+The first command builds a measured, key-independent policy ELF. The runtime
+run command reads signer.pem only long enough to populate an unlinked
+RAM-backed key mailbox, verifies the provisioned ELF measurement, executes the
+firmware, and independently verifies the signature and exact instruction.
+Offline mode is the deterministic stage
 rehearsal: it requires no RPC, faucet, or funded signer and reports
 `networkVerified: false`. Without `--offline`, the host obtains a current
 blockhash, checks the signer balance, and simulates the transaction; with
@@ -195,11 +217,11 @@ For the qOS Token-2022 path, provision from the separate mainnet sandbox and
 run one token in verification-only mode before enabling broadcast:
 
 ```sh
-node bin/qos-firmware-demo.js build --home .qos-mainnet
-node bin/qos-firmware-demo.js run --home .qos-mainnet \
+node bin/qos-firmware-demo.js build --home .qos-ephemeral-mainnet
+node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
   --asset token --amount 1000000 --offline
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos-firmware-demo.js run --home .qos-mainnet \
+  node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
   --asset token --amount 1000000 --broadcast
 ```
 

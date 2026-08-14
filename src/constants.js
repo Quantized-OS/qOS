@@ -10,4 +10,3 @@ export const QOS_TOKEN_MINT = "5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump";
 export const VENUE_ID = "QOS_SOLANA_POLICY_TRANSFER";
 export const MARKET_ID = "SOLANA";
 export const MAX_TRANSACTION_BYTES = 1232;
-export const INITIAL_AUDIT_HASH = "0".repeat(64);
