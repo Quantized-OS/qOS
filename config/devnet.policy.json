@@ -1,7 +1,7 @@
 {
   "version": 1,
   "cluster": "devnet",
-  "clusterGenesis": "GH7ome3EiwEr7tu9JuTh2dpYWBJK3z69Xm1ZE3MEE6JC",
+  "clusterGenesis": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
   "rpcUrl": "https://api.devnet.solana.com",
   "venueId": "QOS_DEVNET_NATIVE_TRANSFER",
   "marketId": "SOL_DEVNET",
