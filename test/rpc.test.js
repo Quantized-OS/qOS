@@ -36,3 +36,16 @@ test("RPC client fails closed on JSON-RPC errors", async (t) => {
   const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
   await assert.rejects(() => rpc.sendTransaction("AA=="), { code: "RPC_ERROR" });
 });
+
+test("RPC confirmation waits for the configured finalized commitment", async () => {
+  const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000, commitment: "finalized" });
+  const statuses = [
+    { slot: 10, confirmationStatus: "confirmed", err: null },
+    { slot: 11, confirmationStatus: "finalized", err: null },
+  ];
+  let calls = 0;
+  rpc.call = async () => ({ value: [statuses[calls++]] });
+  const status = await rpc.confirmSignature("signature", { timeoutMs: 2000 });
+  assert.equal(calls, 2);
+  assert.equal(status.confirmationStatus, "finalized");
+});

@@ -106,6 +106,10 @@ def main() -> None:
         (
             "FIRMWARE_MEASUREMENT_MISMATCH",
             "verifyFirmwareTransaction",
+            "clusterGenesisBytes",
+            '"--locked"',
+            '"verified-offline"',
+            "networkVerified:",
             "simulateTransaction",
             "confirmSignature",
             "FIRMWARE_REPLAY_TEST_FAILED",

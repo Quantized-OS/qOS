@@ -108,7 +108,10 @@ export class SolanaRpc {
       if (status?.err) {
         throw new QosError("TRANSACTION_FAILED", "Solana transaction failed", { err: status.err, slot: status.slot });
       }
-      if (status && (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized")) {
+      const reachedCommitment = this.commitment === "finalized"
+        ? status?.confirmationStatus === "finalized"
+        : status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized";
+      if (reachedCommitment) {
         return status;
       }
       if (recentBlockhash && !(await this.isBlockhashValid(recentBlockhash))) {

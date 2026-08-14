@@ -15,8 +15,9 @@ One run produces all of these events:
 4. A previously accepted nonce is replayed and rejected.
 5. The host verifies the firmware signature and exact System Program or
    Token-2022 transfer.
-6. The host simulates the transaction and, with `--broadcast`, waits for a
-   confirmed result on the pinned cluster and prints the Explorer link.
+6. In live mode, the host simulates the transaction and, with `--broadcast`,
+   waits for the configured commitment on the pinned cluster and prints the
+   Explorer link.
 
 The visible rejection cases are part of the run. They are not prerecorded
 output and the host treats their absence as a failed demo.
@@ -47,12 +48,13 @@ cargo --version
 rustup target list --installed | grep riscv64imac-unknown-none-elf
 ```
 
-No RISC-V GCC toolchain is required. Cargo retrieves the pinned
-`ed25519-dalek` dependency during the first build.
+No RISC-V GCC toolchain is required. Cargo uses the committed `Cargo.lock` and
+retrieves the pinned dependencies during the first build.
 
 ## Provision the demo firmware
 
-Use the already-funded `.qos-devnet` signer and its pinned destination:
+Use the initialized `.qos-devnet` signer and its pinned destination. It does
+not need funds for the offline rehearsal:
 
 ```sh
 node bin/qos-firmware-demo.js build
@@ -69,7 +71,7 @@ The build requires exactly one allowlisted destination. If `QOS_HOME` or
 ## Rehearse without broadcasting
 
 ```sh
-node bin/qos-firmware-demo.js run --lamports 1000000
+node bin/qos-firmware-demo.js run --offline --lamports 1000000
 ```
 
 Expected firmware portion:
@@ -83,9 +85,29 @@ QOS_FW:REJECT index=2 code=NONCE_REPLAY
 QOS_FW:DONE
 ```
 
-The final JSON should report `"status": "verified"` and
-`"broadcast": false`. The run command reads the public policy and provisioning
-record but not `signer.pem`.
+The final JSON reports `"status": "verified-offline"`,
+`"networkVerified": false`, and `"broadcast": false`. This path uses a
+deterministic placeholder blockhash and slot, does not contact Solana, and does
+not claim that the transaction can land. It proves the actual QEMU firmware
+booted, enforced its policy, produced a valid Ed25519 signature, constructed
+the exact allowlisted instruction, and rejected the two negative cases. The
+run command reads the public policy and provisioning record but not
+`signer.pem`.
+
+## Verify against live Devnet without broadcasting
+
+Fund the signer, then run without either mode flag:
+
+```sh
+node bin/qos.js balance
+node bin/qos-firmware-demo.js run --lamports 1000000
+```
+
+This fetches a live blockhash and slot, calculates the fee, checks that the
+signer has enough SOL, and simulates the firmware-signed transaction. The
+result reports `"status": "verified"` and `"networkVerified": true`. A missing
+balance fails with `INSUFFICIENT_SOL_BALANCE` and the exact required and
+available lamports.
 
 ## Broadcast the firmware-signed transaction
 
@@ -116,14 +138,17 @@ from that policy:
 ```sh
 node bin/qos-firmware-demo.js build --home .qos-mainnet
 node bin/qos-firmware-demo.js run --home .qos-mainnet \
-  --asset token --amount 1000000
+  --asset token --amount 1000000 --offline
 ```
 
-The firmware pins the mint, Token-2022 program, six decimals, source associated
+The offline token rehearsal verifies the firmware's pinned mint, Token-2022
+program, six decimals, source associated
 token account, destination associated token account, destination owner, amount
 ceiling, fee ceiling, strategy, cluster, slot window, and nonce. The host also
 re-reads the three onchain accounts and rejects a changed mint extension set,
-owner, mint, state, or insufficient source balance before QEMU runs.
+owner, mint, state, or insufficient source balance before QEMU runs in live
+mode. Offline mode deliberately skips onchain account and balance checks and
+reports `networkVerified: false`.
 
 Only after reviewing the verification-only result, enable a mainnet broadcast:
 

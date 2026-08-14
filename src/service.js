@@ -3,6 +3,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -50,33 +52,41 @@ export function sandboxPaths(home) {
 export function initializeSandbox(home, destination = undefined, { cluster = "devnet" } = {}) {
   assertQos(!existsSync(home), "SANDBOX_ALREADY_EXISTS", `Refusing to overwrite existing sandbox: ${home}`);
   assertQos(cluster === "devnet" || cluster === "mainnet-beta", "UNSUPPORTED_CLUSTER", "Cluster must be devnet or mainnet-beta");
-  mkdirSync(home, { recursive: false, mode: 0o700 });
-  chmodSync(home, 0o700);
-  const paths = sandboxPaths(home);
-  const signerKey = writeNewEd25519Key(paths.signerKey);
-  writeNewAuditKey(paths.auditKey);
-  let receiver;
-  if (destination === undefined) {
-    const receiverKey = writeNewEd25519Key(paths.receiverKey);
-    receiver = publicKeyAddress(receiverKey);
-  } else {
-    decodeBase58(destination, 32);
-    receiver = destination;
-  }
   const policyFile = cluster === "devnet" ? "devnet.policy.json" : "mainnet.policy.json";
-  const template = JSON.parse(readFileSync(join(PROJECT_ROOT, "config", policyFile), "utf8"));
-  template.allowedDestinations = [receiver];
-  validatePolicy(template);
-  writeFileSync(paths.policy, `${JSON.stringify(template, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-  chmodSync(paths.policy, 0o600);
-  return {
-    home,
-    signer: publicKeyAddress(signerKey),
-    destination: receiver,
-    cluster: template.cluster,
-    clusterGenesis: template.clusterGenesis,
-    tokenTransfer: template.tokenTransfer,
-  };
+  const templateText = readFileSync(join(PROJECT_ROOT, "config", policyFile), "utf8");
+  if (destination !== undefined) decodeBase58(destination, 32);
+  const preflightPolicy = JSON.parse(templateText);
+  preflightPolicy.allowedDestinations = [destination ?? "11111111111111111111111111111111"];
+  validatePolicy(preflightPolicy);
+
+  const stagingHome = `${home}.init-${process.pid}-${Date.now()}`;
+  assertQos(!existsSync(stagingHome), "SANDBOX_INIT_COLLISION", "Could not allocate a unique sandbox staging path");
+  try {
+    mkdirSync(stagingHome, { recursive: false, mode: 0o700 });
+    chmodSync(stagingHome, 0o700);
+    const stagingPaths = sandboxPaths(stagingHome);
+    const signerKey = writeNewEd25519Key(stagingPaths.signerKey);
+    writeNewAuditKey(stagingPaths.auditKey);
+    const receiver = destination ?? publicKeyAddress(writeNewEd25519Key(stagingPaths.receiverKey));
+    const template = JSON.parse(templateText);
+    template.allowedDestinations = [receiver];
+    validatePolicy(template);
+    writeFileSync(stagingPaths.policy, `${JSON.stringify(template, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    chmodSync(stagingPaths.policy, 0o600);
+    assertQos(!existsSync(home), "SANDBOX_ALREADY_EXISTS", `Refusing to overwrite existing sandbox: ${home}`);
+    renameSync(stagingHome, home);
+    return {
+      home,
+      signer: publicKeyAddress(signerKey),
+      destination: receiver,
+      cluster: template.cluster,
+      clusterGenesis: template.clusterGenesis,
+      tokenTransfer: template.tokenTransfer,
+    };
+  } catch (error) {
+    rmSync(stagingHome, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function parsePrepareOptions(options, policy, audit) {
@@ -184,6 +194,7 @@ export class QosService {
 
   async prepareIntent(options = {}) {
     const parsed = parsePrepareOptions(options, this.policy, this.audit);
+    assertQos(parsed.destination !== this.publicKey, "SELF_TRANSFER_NOT_ALLOWED", "Native SOL destination must differ from the firmware signer");
     const [genesis, blockhashResult, currentSlot] = await Promise.all([
       this.assertCluster(),
       this.rpc.getLatestBlockhash(),
@@ -299,6 +310,9 @@ export class QosService {
     ]);
     assertQos(genesis === intent?.clusterGenesis, "WRONG_CLUSTER", "Intent cluster does not match RPC cluster");
     const values = validateIntent(intent, this.policy, currentSlot);
+    if (values.kind === "native") {
+      assertQos(intent.destination !== this.publicKey, "SELF_TRANSFER_NOT_ALLOWED", "Native SOL destination must differ from the firmware signer");
+    }
     const blockhashValid = await this.rpc.isBlockhashValid(intent.recentBlockhash);
     assertQos(blockhashValid === true, "INVALID_BLOCKHASH", "Intent recentBlockhash is not valid on the pinned cluster");
     let message;
@@ -340,6 +354,13 @@ export class QosService {
     const feeLamports = BigInt(fee);
     assertQos(feeLamports <= values.maxFee, "ACTUAL_FEE_LIMIT_EXCEEDED", "Calculated transaction fee exceeds intent limit");
     assertQos(feeLamports <= BigInt(this.policy.maxFeeLamports), "POLICY_FEE_LIMIT_EXCEEDED", "Calculated transaction fee exceeds policy limit");
+    const availableLamports = await this.balance();
+    const requiredLamports = feeLamports + (values.kind === "native" ? values.amount : 0n);
+    assertQos(availableLamports >= requiredLamports, "INSUFFICIENT_SOL_BALANCE", "Signer needs more SOL for the transfer and network fee", {
+      signer: this.publicKey,
+      availableLamports: availableLamports.toString(),
+      requiredLamports: requiredLamports.toString(),
+    });
     if (this.policy.cluster === "mainnet-beta") {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
     }

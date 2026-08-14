@@ -1,5 +1,5 @@
 # qOS
-   
+
 ### Verifiable firmware for private crypto trading systems
 
 qOS is a secure firmware project for dedicated crypto trading machines.
@@ -175,15 +175,19 @@ After installing QEMU, Rust, and the `riscv64imac-unknown-none-elf` Rust target:
 
 ```sh
 node bin/qos-firmware-demo.js build
+node bin/qos-firmware-demo.js run --offline --lamports 1000000
 node bin/qos-firmware-demo.js run --lamports 1000000
 node bin/qos-firmware-demo.js run --lamports 1000000 --broadcast
 ```
 
 The first command is the provisioning/manufacturing step and reads the Devnet
 demo key. The runtime `run` command does not read `signer.pem`; it verifies the
-provisioned ELF measurement, obtains a current Devnet blockhash, executes the
-firmware, independently verifies the signature and exact instruction, then
-simulates and optionally broadcasts it. See
+provisioned ELF measurement, executes the firmware, and independently verifies
+the signature and exact instruction. `--offline` is the deterministic stage
+rehearsal: it requires no RPC, faucet, or funded signer and reports
+`networkVerified: false`. Without `--offline`, the host obtains a current
+blockhash, checks the signer balance, and simulates the transaction; with
+`--broadcast`, it also relays and confirms it. See
 [`docs/QEMU_FIRMWARE_DEMO.md`](docs/QEMU_FIRMWARE_DEMO.md) for setup, expected
 terminal output, and the precise security boundary.
 
@@ -193,7 +197,7 @@ run one token in verification-only mode before enabling broadcast:
 ```sh
 node bin/qos-firmware-demo.js build --home .qos-mainnet
 node bin/qos-firmware-demo.js run --home .qos-mainnet \
-  --asset token --amount 1000000
+  --asset token --amount 1000000 --offline
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
   node bin/qos-firmware-demo.js run --home .qos-mainnet \
   --asset token --amount 1000000 --broadcast

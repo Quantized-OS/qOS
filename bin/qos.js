@@ -52,8 +52,9 @@ function only(options, allowed) {
   if (unknown.length > 0) throw new QosError("UNKNOWN_ARGUMENT", `Unknown option(s): ${unknown.map((name) => `--${name}`).join(", ")}`);
 }
 
-function homeOf(options) {
-  return resolve(options.home ?? process.env.QOS_HOME ?? ".qos-devnet");
+function homeOf(options, cluster = "devnet") {
+  const defaultHome = cluster === "mainnet-beta" ? ".qos-mainnet" : ".qos-devnet";
+  return resolve(options.home ?? process.env.QOS_HOME ?? defaultHome);
 }
 
 function print(value) {
@@ -75,7 +76,8 @@ async function main() {
 
   if (command === "init") {
     only(options, ["home", "destination", "cluster"]);
-    print(initializeSandbox(homeOf(options), options.destination, { cluster: options.cluster ?? "devnet" }));
+    const cluster = options.cluster ?? "devnet";
+    print(initializeSandbox(homeOf(options, cluster), options.destination, { cluster }));
     return;
   }
 

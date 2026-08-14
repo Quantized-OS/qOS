@@ -40,9 +40,9 @@ function usage() {
 Usage:
   node bin/qos-firmware-demo.js build [--home PATH]
   node bin/qos-firmware-demo.js run [--home PATH] [--asset sol|token]
-                                     [--lamports N | --amount N] [--broadcast]
+                                     [--lamports N | --amount N] [--offline | --broadcast]
   node bin/qos-firmware-demo.js demo [--home PATH] [--asset sol|token]
-                                      [--lamports N | --amount N] [--broadcast]
+                                      [--lamports N | --amount N] [--offline | --broadcast]
 
 build provisions the selected sandbox key and policy into an M-mode RV64 ELF.
 run never reads signer.pem; it passes typed intents to QEMU and relays the result.
@@ -57,7 +57,7 @@ function parseArgs(argv) {
     assertQos(token.startsWith("--"), "INVALID_ARGUMENT", `Unexpected argument: ${token}`);
     const name = token.slice(2);
     assertQos(!Object.hasOwn(options, name), "DUPLICATE_ARGUMENT", `Duplicate --${name}`);
-    if (name === "broadcast") {
+    if (name === "broadcast" || name === "offline") {
       options[name] = true;
       continue;
     }
@@ -102,10 +102,19 @@ function restrictTree(path) {
 
 function writeU128LE(buffer, value, offset) {
   let remaining = BigInt(value);
+  assertQos(remaining >= 0n && remaining < (1n << 128n), "INTEGER_OUT_OF_RANGE", "requestNonce does not fit in u128");
   for (let index = 0; index < 16; index += 1) {
     buffer[offset + index] = Number(remaining & 0xffn);
     remaining >>= 8n;
   }
+}
+
+export function clusterGenesisBytes(clusterGenesis) {
+  const decoded = decodeBase58(clusterGenesis);
+  assertQos(decoded.length <= 32, "INVALID_CLUSTER_GENESIS", "Cluster genesis identity exceeds the 32-byte firmware field");
+  const field = Buffer.alloc(32);
+  decoded.copy(field, field.length - decoded.length);
+  return field;
 }
 
 export function encodeIntentFrame({
@@ -131,7 +140,7 @@ export function encodeIntentFrame({
   frame.writeUInt32LE(2, 0);
   frame.writeUInt32LE(asset === "token" ? 1 : 0, 4);
   writeU128LE(frame, requestNonce, 8);
-  decodeBase58(clusterGenesis, 32).copy(frame, 24);
+  clusterGenesisBytes(clusterGenesis).copy(frame, 24);
   decodeBase58(destination, 32).copy(frame, 56);
   frame.writeBigUInt64LE(BigInt(amount), 88);
   frame.writeBigUInt64LE(BigInt(minimumOutput), 96);
@@ -154,6 +163,7 @@ export function encodeIntentFrame({
 
 export function encodeIntentBundle(frames) {
   assertQos(Array.isArray(frames) && frames.length >= 1 && frames.length <= 4, "INVALID_DEMO_BUNDLE", "Firmware demo bundle must contain one to four frames");
+  assertQos(frames.every((frame) => Buffer.isBuffer(frame) && frame.length === FRAME_SIZE), "INVALID_DEMO_FRAME", `Every firmware intent frame must be exactly ${FRAME_SIZE} bytes`);
   const header = Buffer.alloc(16);
   BUNDLE_MAGIC.copy(header, 0);
   header.writeUInt32LE(frames.length, 8);
@@ -162,12 +172,12 @@ export function encodeIntentBundle(frames) {
 }
 
 export function parseFirmwareOutput(output) {
-  const accepted = output.match(/QOS_FW:ACCEPT index=0 tx_hex=([0-9a-f]+)/);
-  assertQos(accepted, "FIRMWARE_NO_TRANSACTION", "Firmware did not return the authorized transaction", { output });
+  const accepted = [...output.matchAll(/QOS_FW:ACCEPT index=(\d+) tx_hex=([0-9a-f]+)/g)];
+  assertQos(accepted.length === 1 && accepted[0][1] === "0", "FIRMWARE_ACCEPT_SET_INVALID", "Firmware must accept exactly the first intent and no others", { output });
   assertQos(/QOS_FW:REJECT index=1 code=AMOUNT/.test(output), "FIRMWARE_TAMPER_TEST_FAILED", "Firmware did not reject the over-limit amount");
   assertQos(/QOS_FW:REJECT index=2 code=NONCE_REPLAY/.test(output), "FIRMWARE_REPLAY_TEST_FAILED", "Firmware did not reject the replayed nonce");
   assertQos(/QOS_FW:DONE/.test(output), "FIRMWARE_DID_NOT_FINISH", "Firmware did not reach a clean completion");
-  return Buffer.from(accepted[1], "hex");
+  return Buffer.from(accepted[0][2], "hex");
 }
 
 function provisioningEnv(home, policy) {
@@ -192,7 +202,7 @@ function provisioningEnv(home, policy) {
     env: {
       ...process.env,
       QOS_FW_SEED_HEX: privateKeySeed(privateKey).toString("hex"),
-      QOS_FW_GENESIS_HEX: decodeBase58(policy.clusterGenesis, 32).toString("hex"),
+      QOS_FW_GENESIS_HEX: clusterGenesisBytes(policy.clusterGenesis).toString("hex"),
       QOS_FW_DESTINATION_HEX: decodeBase58(policy.allowedDestinations[0], 32).toString("hex"),
       QOS_FW_MAX_AMOUNT: policy.maxTransferLamports,
       QOS_FW_MAX_FEE: policy.maxFeeLamports,
@@ -210,6 +220,8 @@ function provisioningEnv(home, policy) {
 }
 
 export function buildFirmware(home) {
+  assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
+  assertQos(existsSync(join(home, "signer.pem")), "SANDBOX_NOT_INITIALIZED", `No qOS signer found in ${home}; run node bin/qos.js init first`);
   assertQos(commandAvailable("cargo"), "CARGO_REQUIRED", "Install Rust/Cargo before building the firmware demo");
   assertQos(commandAvailable("rustup"), "RUSTUP_REQUIRED", "Install rustup before building the firmware demo");
   const targets = execFileSync("rustup", ["target", "list", "--installed"], { encoding: "utf8" });
@@ -217,7 +229,7 @@ export function buildFirmware(home) {
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   const { privateKey, sourceTokenAccount, destinationTokenAccount, env } = provisioningEnv(home, policy);
   mkdirSync(BUILD_DIR, { recursive: true, mode: 0o700 });
-  execFileSync("cargo", ["build", "--release"], {
+  execFileSync("cargo", ["build", "--release", "--locked"], {
     cwd: FIRMWARE_DIR,
     env,
     stdio: "inherit",
@@ -287,9 +299,11 @@ function verifyFirmwareTransaction(transaction, record, intent) {
   return { signature: encodeBase58(signature), message, transactionBase64: transaction.toString("base64") };
 }
 
-export async function runFirmware(home, { asset = "sol", lamports = undefined, amount = undefined, broadcast = false } = {}) {
+export async function runFirmware(home, { asset = "sol", lamports = undefined, amount = undefined, broadcast = false, offline = false } = {}) {
   const qemu = process.env.QOS_FIRMWARE_DEMO_QEMU ?? "qemu-system-riscv64";
+  assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
   assertQos(commandAvailable(qemu), "QEMU_REQUIRED", "Install qemu-system-riscv64 before running the firmware demo");
+  assertQos(!(offline && broadcast), "OFFLINE_BROADCAST_CONFLICT", "--offline cannot be combined with --broadcast");
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   const record = loadProvisioning(home, policy);
   assertQos(asset === "sol" || asset === "token", "INVALID_DEMO_ASSET", "--asset must be sol or token");
@@ -299,15 +313,24 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   const maxAmount = asset === "sol" ? BigInt(record.maxTransferLamports) : BigInt(record.tokenTransfer?.maxTransferAmount ?? "0");
   assertQos(asset !== "token" || record.tokenTransfer !== null, "TOKEN_TRANSFERS_DISABLED", "Provisioned firmware does not enable token transfers");
   assertQos(transferAmount > 0n && transferAmount <= maxAmount, "AMOUNT_LIMIT_EXCEEDED", "Demo transfer exceeds provisioned firmware policy");
-  const rpc = new SolanaRpc(policy.rpcUrl, { timeoutMs: policy.rpcTimeoutMs, commitment: policy.commitment });
-  const [genesis, latest, currentSlot] = await Promise.all([
-    rpc.getGenesisHash(),
-    rpc.getLatestBlockhash(),
-    rpc.getSlot(),
-  ]);
-  assertQos(genesis === record.clusterGenesis, "RPC_CLUSTER_MISMATCH", "RPC endpoint does not match provisioned firmware cluster");
-  assertQos(typeof latest?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid blockhash");
-  if (asset === "token") {
+  const rpc = offline ? null : new SolanaRpc(policy.rpcUrl, { timeoutMs: policy.rpcTimeoutMs, commitment: policy.commitment });
+  let genesis = record.clusterGenesis;
+  let latest = {
+    value: {
+      blockhash: encodeBase58(createHash("sha256").update("qOS deterministic offline firmware demo v1").digest()),
+    },
+  };
+  let currentSlot = 1_000_000;
+  if (!offline) {
+    [genesis, latest, currentSlot] = await Promise.all([
+      rpc.getGenesisHash(),
+      rpc.getLatestBlockhash(),
+      rpc.getSlot(),
+    ]);
+    assertQos(genesis === record.clusterGenesis, "RPC_CLUSTER_MISMATCH", "RPC endpoint does not match provisioned firmware cluster");
+    assertQos(typeof latest?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid blockhash");
+  }
+  if (asset === "token" && !offline) {
     await verifyTokenTransferAccounts({
       rpc,
       tokenPolicy: policy.tokenTransfer,
@@ -339,7 +362,7 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     } : {}),
   };
   const valid = encodeIntentFrame(base);
-  const overLimit = maxAmount + 1n;
+  const overLimit = maxAmount === ((1n << 64n) - 1n) ? 0n : maxAmount + 1n;
   const tampered = encodeIntentFrame({ ...base, requestNonce: 2n, amount: overLimit, minimumOutput: overLimit });
   const replay = encodeIntentFrame(base);
   mkdirSync(BUILD_DIR, { recursive: true, mode: 0o700 });
@@ -365,13 +388,44 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   assertQos(qemuResult.status === 0, "QEMU_FAILED", `QEMU exited with status ${qemuResult.status}`, { firmwareOutput });
   const transaction = parseFirmwareOutput(firmwareOutput);
   const verified = verifyFirmwareTransaction(transaction, record, base);
+  if (offline) {
+    return {
+      status: "verified-offline",
+      offline: true,
+      networkVerified: false,
+      broadcast: false,
+      asset,
+      signer: record.signer,
+      destination: record.destination,
+      ...(asset === "sol" ? { lamports: amountText } : {
+        mint: record.tokenTransfer.mint,
+        amount: amountText,
+        decimals: record.tokenTransfer.decimals,
+        sourceTokenAccount: record.tokenTransfer.sourceTokenAccount,
+        destinationTokenAccount: record.tokenTransfer.destinationTokenAccount,
+      }),
+      feeLamports: null,
+      signature: verified.signature,
+      firmwareSha256: record.firmwareSha256,
+    };
+  }
   const fee = await rpc.getFeeForMessage(verified.message.toString("base64"));
   assertQos(Number.isSafeInteger(fee) && BigInt(fee) <= BigInt(record.maxFeeLamports), "FEE_LIMIT_EXCEEDED", "Live fee exceeds provisioned firmware policy");
+  const balance = await rpc.getBalance(record.signer);
+  assertQos(Number.isSafeInteger(balance?.value) && balance.value >= 0, "RPC_INVALID_BALANCE", "RPC returned an invalid signer balance");
+  const requiredLamports = BigInt(fee) + (asset === "sol" ? transferAmount : 0n);
+  assertQos(BigInt(balance.value) >= requiredLamports, "INSUFFICIENT_SOL_BALANCE", "Firmware signer needs more SOL for the transfer and network fee", {
+    signer: record.signer,
+    availableLamports: String(balance.value),
+    requiredLamports: requiredLamports.toString(),
+  });
   const simulation = await rpc.simulateTransaction(verified.transactionBase64);
   assertQos(simulation?.err === null, "SIMULATION_FAILED", "Firmware-signed transaction failed simulation", { err: simulation?.err, logs: simulation?.logs });
   if (!broadcast) {
     return {
       status: "verified",
+      offline: false,
+      networkVerified: true,
       broadcast: false,
       asset,
       signer: record.signer,
@@ -399,6 +453,8 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   });
   return {
     status: "confirmed",
+    offline: false,
+    networkVerified: true,
     broadcast: true,
     asset,
     signer: record.signer,
@@ -435,23 +491,25 @@ async function main() {
     return;
   }
   if (command === "run") {
-    only(options, ["home", "asset", "lamports", "amount", "broadcast"]);
+    only(options, ["home", "asset", "lamports", "amount", "broadcast", "offline"]);
     process.stdout.write(`${JSON.stringify(await runFirmware(home, {
       asset: options.asset,
       lamports: options.lamports,
       amount: options.amount,
       broadcast: options.broadcast === true,
+      offline: options.offline === true,
     }), null, 2)}\n`);
     return;
   }
   if (command === "demo") {
-    only(options, ["home", "asset", "lamports", "amount", "broadcast"]);
+    only(options, ["home", "asset", "lamports", "amount", "broadcast", "offline"]);
     buildFirmware(home);
     process.stdout.write(`${JSON.stringify(await runFirmware(home, {
       asset: options.asset,
       lamports: options.lamports,
       amount: options.amount,
       broadcast: options.broadcast === true,
+      offline: options.offline === true,
     }), null, 2)}\n`);
     return;
   }

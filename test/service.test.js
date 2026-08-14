@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
@@ -38,6 +38,26 @@ function serviceWithMock() {
   return { service, initialized };
 }
 
+test("sandbox initialization validates inputs before creating any key material", () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-init-atomic-"));
+  const home = join(parent, "sandbox");
+  assert.throws(() => initializeSandbox(home, "not-a-solana-address"));
+  assert.equal(existsSync(home), false);
+});
+
+test("native SOL preparation rejects a transfer back to the signer", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-self-transfer-"));
+  const home = join(parent, "sandbox");
+  const initialized = initializeSandbox(home);
+  const policyPath = join(home, "policy.json");
+  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  policy.allowedDestinations = [initialized.signer];
+  writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+  const service = QosService.open(home);
+  service.rpc = new MockRpc();
+  await assert.rejects(() => service.prepareIntent(), { code: "SELF_TRANSFER_NOT_ALLOWED" });
+});
+
 test("service prepares, signs, submits, confirms, and audits a real Solana transaction", async () => {
   const { service, initialized } = serviceWithMock();
   const intent = await service.prepareIntent({ lamports: "12345" });
@@ -64,6 +84,21 @@ test("service refuses failed preflight and consumes the authorized nonce", async
   const intent = await service.prepareIntent();
   await assert.rejects(() => service.submitIntent(intent), { code: "SIMULATION_FAILED" });
   assert.equal(service.audit.lastNonce(), 1n);
+});
+
+test("service reports the exact SOL funding deficit before signing", async () => {
+  const { service } = serviceWithMock();
+  const intent = await service.prepareIntent({ lamports: "12345" });
+  service.rpc.getBalance = async () => ({ value: 1000 });
+  await assert.rejects(() => service.submitIntent(intent), {
+    code: "INSUFFICIENT_SOL_BALANCE",
+    details: {
+      signer: service.publicKey,
+      availableLamports: "1000",
+      requiredLamports: "17345",
+    },
+  });
+  assert.equal(service.audit.readVerified().length, 0);
 });
 
 function mintAccount() {

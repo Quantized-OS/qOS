@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { encodeBase58 } from "../src/base58.js";
+import { decodeBase58, encodeBase58 } from "../src/base58.js";
+import { MAINNET_GENESIS_HASH } from "../src/constants.js";
 import {
+  clusterGenesisBytes,
   encodeIntentBundle,
   encodeIntentFrame,
   parseFirmwareOutput,
@@ -23,6 +25,16 @@ function frame(overrides = {}) {
   });
 }
 
+test("firmware pads the canonical mainnet genesis identity to its 32-byte field", () => {
+  const decoded = decodeBase58(MAINNET_GENESIS_HASH);
+  assert.equal(decoded.length, 23);
+  const bytes = clusterGenesisBytes(MAINNET_GENESIS_HASH);
+  assert.equal(bytes.length, 32);
+  assert.deepEqual(bytes.subarray(0, 9), Buffer.alloc(9));
+  assert.deepEqual(bytes.subarray(9), decoded);
+  assert.deepEqual(frame({ clusterGenesis: MAINNET_GENESIS_HASH }).subarray(24, 56), bytes);
+});
+
 test("firmware intent wire format is fixed-length and canonical", () => {
   const encoded = frame();
   assert.equal(encoded.length, 304);
@@ -39,6 +51,11 @@ test("firmware bundle declares exact frame count and size", () => {
   assert.equal(bundle.readUInt32LE(8), 2);
   assert.equal(bundle.readUInt32LE(12), 304);
   assert.equal(bundle.length, 16 + 2 * 304);
+  assert.throws(() => encodeIntentBundle([Buffer.alloc(303)]), { code: "INVALID_DEMO_FRAME" });
+});
+
+test("firmware frame rejects a nonce that cannot fit in the wire format", () => {
+  assert.throws(() => frame({ requestNonce: 1n << 128n }), { code: "INTEGER_OUT_OF_RANGE" });
 });
 
 test("firmware token frame pins mint, token accounts, program, and decimals", () => {
@@ -67,4 +84,5 @@ test("demo transcript must prove acceptance, tamper rejection, and replay reject
   ].join("\n");
   assert.deepEqual(parseFirmwareOutput(output), Buffer.from([1, 2, 3]));
   assert.throws(() => parseFirmwareOutput(output.replace("NONCE_REPLAY", "OTHER")), { code: "FIRMWARE_REPLAY_TEST_FAILED" });
+  assert.throws(() => parseFirmwareOutput(`${output}\nQOS_FW:ACCEPT index=2 tx_hex=04`), { code: "FIRMWARE_ACCEPT_SET_INVALID" });
 });

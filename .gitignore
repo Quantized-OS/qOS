@@ -1,0 +1,8 @@
+build/
+.qos-devnet/
+.qos-mainnet/
+*.pem
+*.key
+*.log
+node_modules/
+firmware-demo/target/
