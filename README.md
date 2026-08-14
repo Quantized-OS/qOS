@@ -1,5 +1,5 @@
 # qOS
-
+   
 ### Verifiable firmware for private crypto trading systems
 
 qOS is a secure firmware project for dedicated crypto trading machines.
