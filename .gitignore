@@ -9,3 +9,5 @@ build/
 *.log
 node_modules/
 firmware-demo/target/
+release-artifacts/
+.idea/

@@ -13,8 +13,8 @@ One run produces all of these events:
 2. A valid typed intent is accepted and signed.
 3. The same policy receives an over-limit amount and rejects it.
 4. A previously accepted nonce is replayed and rejected.
-5. The host verifies the firmware signature and exact System Program or
-   Token-2022 transfer.
+5. The host verifies the firmware signature against the exact System Program
+   or Token-2022 transfer expected from the typed intent.
 6. In live mode, the host simulates the transaction and, with `--broadcast`,
    waits for the configured commitment on the pinned cluster and prints the
    Explorer link.
@@ -87,7 +87,7 @@ Expected firmware portion:
 ```text
 QOS_FW:BOOT mode=M policy=typed-sol-or-token-transfer retention=ephemeral-memory
 QOS_FW:SIGNER_HEX ...
-QOS_FW:ACCEPT index=0 tx_hex=<redacted-in-memory>
+QOS_FW:ACCEPT index=0 signature_hex=<redacted-in-memory>
 QOS_FW:REJECT index=1 code=AMOUNT
 QOS_FW:REJECT index=2 code=NONCE_REPLAY
 QOS_FW:DONE
@@ -192,8 +192,8 @@ The ML-DSA secure-boot hooks in firmware/secure_boot.c remain unimplemented
 platform boundaries. Use a new, deliberately capped demo signer, never a
 treasury or production wallet.
 
-The QEMU runner creates no transaction mailbox file in the repository and
-redacts the raw transaction from the displayed UART transcript. The complete
-transaction still exists briefly in host memory for independent verification,
-simulation, and optional broadcast. After broadcast it is public Solana ledger
-data and cannot be made private or forgotten.
+The QEMU runner creates no transaction mailbox file in the repository and does
+not send the raw transaction over the displayed UART. The complete transaction
+still exists briefly in host memory for independent verification, simulation,
+and optional broadcast. After broadcast it is public Solana ledger data and
+cannot be made private or forgotten.

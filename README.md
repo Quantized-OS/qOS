@@ -86,13 +86,14 @@ The repository now contains a working Solana sandbox. Devnet mode accepts typed 
 
 ## Ephemeral transaction privacy
 
-qOS v0.7 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.7.1 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
 its typed intent and runtime key through already-unlinked files on Linux tmpfs.
 The firmware ELF contains policy constants but no Ed25519 seed. Raw signed
-transactions are redacted from the QEMU terminal transcript.
+the firmware's public signature is redacted from the QEMU terminal transcript;
+the raw transaction is never sent over that display channel.
 
 The policy, public provisioning record, and firmware ELF remain on disk so the
 sandbox keeps a stable identity and can verify what booted. External-signer
@@ -170,6 +171,14 @@ make build/reset.o build/secure_boot.o
 
 Do not use this repository with production keys or mainnet funds.
 
+## Build the research release media
+
+After the host checks pass, `make release-media` creates a deterministic source
+archive, checksums, and `release-artifacts/qos-0.7.1-research-media.iso`. The
+ISO is valid ISO-9660 data media for offline review; it is not a bootable
+production firmware installer. Read [`RELEASE_READINESS.md`](RELEASE_READINESS.md)
+before treating any qOS image as more than a research demonstration.
+
 ## Run a real Solana Devnet transaction
 
 Initialize disposable signer, receiver, and policy files:
@@ -238,9 +247,10 @@ rebuilding the firmware demo before it will run.
 
 The QEMU demonstration moves policy enforcement, Solana message construction,
 and Ed25519 signing into a bare-metal RV64 M-mode firmware image. The host
-loads fixed-size typed intent frames into a mailbox and receives a completed
-signed transaction over the emulated UART. The firmware also rejects an
-over-limit amount and a replayed nonce on screen before QEMU exits.
+loads fixed-size typed intent frames into a mailbox and receives only the
+firmware signature over the emulated UART; it reconstructs the pinned message
+locally for independent verification and optional relay. The firmware also
+rejects an over-limit amount and a replayed nonce on screen before QEMU exits.
 
 After installing QEMU, Rust, and the `riscv64imac-unknown-none-elf` Rust target:
 

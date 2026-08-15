@@ -141,9 +141,10 @@ instruction. The token branch additionally compares the mint, token program,
 decimals, source token account, and destination token account with provisioned
 constants. A separate runtime key mailbox supplies the seed; the ELF does not
 contain it. Ed25519 is invoked only on that internal message. The firmware
-wipes both mailboxes and all mutable frame, seed, message, signature, and
-transaction buffers. The host redacts the public transaction from the
-displayed UART transcript.
+also pins the provisioned signer identity and emits only the public signature
+over the UART display channel; the host reconstructs the expected transaction
+for independent verification. The firmware wipes both mailboxes and all
+mutable frame, seed, message, and signature buffers.
 
 The host relay validates the provisioned ELF SHA-256 measurement, verifies the
 firmware signature and parses the message against the original intent before
