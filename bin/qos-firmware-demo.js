@@ -28,7 +28,12 @@ import {
 } from "../src/key-store.js";
 import { loadPolicy, parseUnsigned } from "../src/policy.js";
 import { SolanaRpc } from "../src/rpc.js";
-import { parseNativeTransferMessage, parseTokenTransferCheckedMessage } from "../src/transaction.js";
+import {
+  buildNativeTransferMessage,
+  buildTokenTransferCheckedMessage,
+  parseNativeTransferMessage,
+  parseTokenTransferCheckedMessage,
+} from "../src/transaction.js";
 import { associatedTokenAddress, verifyTokenTransferAccounts } from "../src/token.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -214,11 +219,11 @@ export function openRamBackedFile(bytes, label = "mailbox") {
 }
 
 export function redactFirmwareOutput(output) {
-  return output.replace(/(QOS_FW:ACCEPT index=[0-9]+ tx_hex=)[0-9a-f]+/g, "$1<redacted-in-memory>");
+  return output.replace(/(QOS_FW:ACCEPT index=[0-9]+ signature_hex=)[0-9a-f]+/g, "$1<redacted-in-memory>");
 }
 
 export function parseFirmwareOutput(output) {
-  const accepted = [...output.matchAll(/QOS_FW:ACCEPT index=(\d+) tx_hex=([0-9a-f]+)/g)];
+  const accepted = [...output.matchAll(/QOS_FW:ACCEPT index=(\d+) signature_hex=([0-9a-f]{128})(?![0-9a-f])/g)];
   assertQos(accepted.length === 1 && accepted[0][1] === "0", "FIRMWARE_ACCEPT_SET_INVALID", "Firmware must accept exactly the first intent and no others", { output: redactFirmwareOutput(output) });
   assertQos(/QOS_FW:REJECT index=1 code=AMOUNT/.test(output), "FIRMWARE_TAMPER_TEST_FAILED", "Firmware did not reject the over-limit amount");
   assertQos(/QOS_FW:REJECT index=2 code=NONCE_REPLAY/.test(output), "FIRMWARE_REPLAY_TEST_FAILED", "Firmware did not reject the replayed nonce");
@@ -248,6 +253,7 @@ function provisioningEnv(home, policy) {
     destinationTokenAccount,
     env: {
       ...process.env,
+      QOS_FW_SIGNER_HEX: decodeBase58(signer, 32).toString("hex"),
       QOS_FW_GENESIS_HEX: clusterGenesisBytes(policy.clusterGenesis).toString("hex"),
       QOS_FW_DESTINATION_HEX: decodeBase58(policy.allowedDestinations[0], 32).toString("hex"),
       QOS_FW_MAX_AMOUNT: policy.maxTransferLamports,
@@ -308,6 +314,7 @@ export function buildFirmware(home) {
 export function validateProvisioningRecord(record, policy, firmwareSha256) {
   assertQos(record && typeof record === "object" && !Array.isArray(record), "BAD_PROVISIONING_RECORD", "Firmware provisioning record must be an object");
   assertQos(record.version === 3, "BAD_PROVISIONING_RECORD", "Unsupported firmware provisioning record");
+  decodeBase58(record.signer, 32).fill(0);
   assertQos(record.firmwareSha256 === firmwareSha256, "FIRMWARE_MEASUREMENT_MISMATCH", "Firmware ELF changed after provisioning");
   assertQos(policy.allowedDestinations.length === 1, "PROVISIONING_POLICY_MISMATCH", "Firmware demo policy must still contain exactly one destination");
   assertQos(policy.allowedStrategyIds.length === 1, "PROVISIONING_POLICY_MISMATCH", "Firmware demo policy must still contain exactly one strategy ID");
@@ -330,27 +337,57 @@ function loadProvisioning(home, policy) {
   return validateProvisioningRecord(record, policy, sha256File(FIRMWARE_ELF));
 }
 
-function verifyFirmwareTransaction(transaction, record, intent) {
-  assertQos(transaction.length >= 66 && transaction[0] === 1, "BAD_FIRMWARE_TRANSACTION", "Firmware returned a malformed transaction");
-  const signature = transaction.subarray(1, 65);
-  const message = transaction.subarray(65);
+function verifyFirmwareTransaction(signature, record, intent) {
+  assertQos(Buffer.isBuffer(signature) && signature.length === 64, "BAD_FIRMWARE_SIGNATURE", "Firmware returned a malformed Ed25519 signature");
   const signer = decodeBase58(record.signer, 32);
-  assertQos(verify(null, message, publicKeyObjectFromRaw(signer), signature), "BAD_FIRMWARE_SIGNATURE", "Firmware Ed25519 signature did not verify");
-  if (intent.asset === "sol") {
-    const parsed = parseNativeTransferMessage(message);
-    assertQos(parsed.payer === record.signer, "BAD_FIRMWARE_PAYER", "Firmware transaction payer is not provisioned signer");
-    assertQos(parsed.destination === intent.destination, "BAD_FIRMWARE_DESTINATION", "Firmware transaction destination differs from intent");
-    assertQos(parsed.lamports === BigInt(intent.amount), "BAD_FIRMWARE_AMOUNT", "Firmware transaction amount differs from intent");
-    assertQos(parsed.recentBlockhash === intent.recentBlockhash, "BAD_FIRMWARE_BLOCKHASH", "Firmware transaction blockhash differs from intent");
-  } else {
-    const parsed = parseTokenTransferCheckedMessage(message);
-    assertQos(parsed.payer === record.signer, "BAD_FIRMWARE_PAYER", "Firmware token payer is not provisioned signer");
-    assertQos(parsed.sourceTokenAccount === intent.sourceTokenAccount && parsed.destinationTokenAccount === intent.destinationTokenAccount, "BAD_FIRMWARE_TOKEN_ACCOUNTS", "Firmware token accounts differ from intent");
-    assertQos(parsed.mint === intent.mint && parsed.tokenProgram === intent.tokenProgram && parsed.decimals === intent.decimals, "BAD_FIRMWARE_TOKEN_POLICY", "Firmware token instruction differs from provisioned policy");
-    assertQos(parsed.amount === BigInt(intent.amount), "BAD_FIRMWARE_AMOUNT", "Firmware token amount differs from intent");
-    assertQos(parsed.recentBlockhash === intent.recentBlockhash, "BAD_FIRMWARE_BLOCKHASH", "Firmware transaction blockhash differs from intent");
+  let message;
+  try {
+    if (intent.asset === "sol") {
+      message = buildNativeTransferMessage({
+        payer: record.signer,
+        destination: intent.destination,
+        lamports: BigInt(intent.amount),
+        recentBlockhash: intent.recentBlockhash,
+      });
+    } else {
+      message = buildTokenTransferCheckedMessage({
+        payer: record.signer,
+        sourceTokenAccount: intent.sourceTokenAccount,
+        destinationTokenAccount: intent.destinationTokenAccount,
+        mint: intent.mint,
+        tokenProgram: intent.tokenProgram,
+        amount: BigInt(intent.amount),
+        decimals: intent.decimals,
+        recentBlockhash: intent.recentBlockhash,
+      });
+    }
+    assertQos(verify(null, message, publicKeyObjectFromRaw(signer), signature), "BAD_FIRMWARE_SIGNATURE", "Firmware Ed25519 signature did not verify");
+    if (intent.asset === "sol") {
+      const parsed = parseNativeTransferMessage(message);
+      assertQos(parsed.payer === record.signer, "BAD_FIRMWARE_PAYER", "Firmware transaction payer is not provisioned signer");
+      assertQos(parsed.destination === intent.destination, "BAD_FIRMWARE_DESTINATION", "Firmware transaction destination differs from intent");
+      assertQos(parsed.lamports === BigInt(intent.amount), "BAD_FIRMWARE_AMOUNT", "Firmware transaction amount differs from intent");
+      assertQos(parsed.recentBlockhash === intent.recentBlockhash, "BAD_FIRMWARE_BLOCKHASH", "Firmware transaction blockhash differs from intent");
+    } else {
+      const parsed = parseTokenTransferCheckedMessage(message);
+      assertQos(parsed.payer === record.signer, "BAD_FIRMWARE_PAYER", "Firmware token payer is not provisioned signer");
+      assertQos(parsed.sourceTokenAccount === intent.sourceTokenAccount && parsed.destinationTokenAccount === intent.destinationTokenAccount, "BAD_FIRMWARE_TOKEN_ACCOUNTS", "Firmware token accounts differ from intent");
+      assertQos(parsed.mint === intent.mint && parsed.tokenProgram === intent.tokenProgram && parsed.decimals === intent.decimals, "BAD_FIRMWARE_TOKEN_POLICY", "Firmware token instruction differs from provisioned policy");
+      assertQos(parsed.amount === BigInt(intent.amount), "BAD_FIRMWARE_AMOUNT", "Firmware token amount differs from intent");
+      assertQos(parsed.recentBlockhash === intent.recentBlockhash, "BAD_FIRMWARE_BLOCKHASH", "Firmware transaction blockhash differs from intent");
+    }
+    const transaction = Buffer.concat([Buffer.from([1]), signature, message]);
+    try {
+      return { signature: encodeBase58(signature), message, transactionBase64: transaction.toString("base64") };
+    } finally {
+      transaction.fill(0);
+    }
+  } catch (error) {
+    message?.fill(0);
+    throw error;
+  } finally {
+    signer.fill(0);
   }
-  return { signature: encodeBase58(signature), message, transactionBase64: transaction.toString("base64") };
 }
 
 export async function runFirmware(home, { asset = "sol", lamports = undefined, amount = undefined, broadcast = false, offline = false } = {}) {
@@ -469,9 +506,10 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   process.stdout.write(safeFirmwareOutput);
   assertQos(!qemuResult.error, "QEMU_FAILED", `QEMU execution failed: ${qemuResult.error?.message}`);
   assertQos(qemuResult.status === 0, "QEMU_FAILED", `QEMU exited with status ${qemuResult.status}`, { firmwareOutput: safeFirmwareOutput });
-  const transaction = parseFirmwareOutput(firmwareOutput);
+  const firmwareSignature = parseFirmwareOutput(firmwareOutput);
   try {
-  const verified = verifyFirmwareTransaction(transaction, record, base);
+  const verified = verifyFirmwareTransaction(firmwareSignature, record, base);
+  try {
   if (offline) {
     return {
       status: "verified-offline",
@@ -498,7 +536,7 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     requiredLamports: requiredLamports.toString(),
   });
   const simulation = await rpc.simulateTransaction(verified.transactionBase64);
-  assertQos(simulation?.err === null, "SIMULATION_FAILED", "Firmware-signed transaction failed simulation", { err: simulation?.err, logs: simulation?.logs });
+  assertQos(simulation?.err === null, "SIMULATION_FAILED", "Firmware-signed transaction failed simulation");
   if (!broadcast) {
     return {
       status: "verified",
@@ -551,7 +589,10 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
       : `https://explorer.solana.com/tx/${verified.signature}`,
   };
   } finally {
-    transaction.fill(0);
+    verified.message.fill(0);
+  }
+  } finally {
+    firmwareSignature.fill(0);
   }
 }
 
