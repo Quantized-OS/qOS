@@ -76,6 +76,7 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
 * `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
 * `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
+* `bin/qos-agent-external-setup.js` — Public-only external-signer home setup
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
@@ -278,6 +279,28 @@ verifies the external-signer file boundary, attacks malicious proposal output,
 and checks the live-broadcast gate. It never reads a real home, contacts
 Solana, or broadcasts a transaction. See
 [`docs/AGENT_SECURITY_TEST.md`](docs/AGENT_SECURITY_TEST.md).
+
+## Create an external-signer home
+
+The public key must come from the external signer, HSM, or reviewed adapter and
+must correspond to the private key held there. qOS cannot derive this public
+key from a plaintext home without reusing the unsafe key custody profile.
+
+The setup helper can reuse the existing home’s allowlisted destination, but it
+never reads or copies `signer.pem`:
+
+```sh
+npm run setup:agent-external -- \
+  --public-key EXTERNAL_SIGNER_PUBLIC_KEY \
+  --source-home .qos-ephemeral-mainnet \
+  --home .qos-ephemeral-mainnet-external \
+  --signer-command /absolute/path/to/reviewed-signer-adapter \
+  --create
+```
+
+It creates only `signer.json` and `policy.json`, prints the new signer token
+account, and does not fund, migrate, or broadcast anything. Review the output
+and run `privacy-status` on the new home before funding it.
 
 ## Demo firmware signing the transaction
 

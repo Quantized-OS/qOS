@@ -51,6 +51,20 @@ profile, the agent may still request policy-compliant actions, so the external
 adapter must independently enforce the same typed policy and remain isolated
 from the agent.
 
+To create a new public-only external-signer home from an existing policy:
+
+```sh
+npm run setup:agent-external -- \
+  --public-key EXTERNAL_SIGNER_PUBLIC_KEY \
+  --source-home .qos-ephemeral-mainnet \
+  --home .qos-ephemeral-mainnet-external \
+  --signer-command /absolute/path/to/reviewed-signer-adapter \
+  --create
+```
+
+The public key must be supplied by the external signer. The helper refuses to
+generate, import, copy, or expose a private key and does not transfer balances.
+
 This is a basic boundary test, not an independent audit. It does not test a
 kernel, hypervisor, DMA, firmware fault injection, side channels, a production
 HSM, or a real model's ability to exploit an operating-system vulnerability.

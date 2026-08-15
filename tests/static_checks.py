@@ -222,6 +222,25 @@ def main() -> None:
             "runAgentSecurityAnalysis",
         ),
     )
+    require(
+        "src/external-setup.js",
+        (
+            "PUBLIC_KEY_REQUIRED",
+            "EXTERNAL_HOME_PRIVATE_FILES",
+            "associatedTokenAddress",
+            "signerPublicKey",
+        ),
+    )
+    require(
+        "bin/qos-agent-external-setup.js",
+        (
+            "never reads signer.pem",
+            "--public-key",
+            "--create",
+            "createExternalSignerHome",
+        ),
+    )
+    forbid("bin/qos-agent-external-setup.js", ("writeNewEd25519Key", "loadPrivateKey", "sendTransaction", "QOS_ENABLE_MAINNET_BROADCAST"))
     forbid("src/agent-security.js", ("sendTransaction", "mainnet-beta", "QOS_ENABLE_MAINNET_BROADCAST"))
     require(
         "run-demo.sh",
