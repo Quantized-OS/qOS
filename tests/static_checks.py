@@ -147,6 +147,7 @@ def main() -> None:
         "firmware-demo/src/main.rs",
         (
             "QOS_FW:BOOT",
+            "POLICY_SIGNER",
             "POLICY_DESTINATION",
             "NONCE_REPLAY",
             "build_transfer_message",
@@ -172,6 +173,7 @@ def main() -> None:
             "FIRMWARE_REPLAY_TEST_FAILED",
             "openRamBackedFile",
             "redactFirmwareOutput",
+            "signature_hex",
         ),
     )
     require(
@@ -186,6 +188,7 @@ def main() -> None:
     forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
     forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))
     forbid("src/subprocess.js", ("shell: true",))
+    forbid("firmware-demo/src/main.rs", ("tx_hex=",))
     forbid_path("src/audit.js")
     forbid_path("test/audit.test.js")
     print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")
