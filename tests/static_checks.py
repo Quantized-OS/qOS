@@ -177,6 +177,26 @@ def main() -> None:
         ),
     )
     require(
+        "bin/qos-agent-demo.js",
+        (
+            "QosService",
+            "confirm-live",
+            "QOS_ENABLE_MAINNET_BROADCAST",
+            "prepareTokenIntent",
+            "submitIntent",
+        ),
+    )
+    require(
+        "src/agent.js",
+        (
+            "transfer_qos",
+            "AGENT_DESTINATION_FORBIDDEN",
+            "AGENT_AMOUNT_MISMATCH",
+            "AGENT_MODEL_REMOTE_FORBIDDEN",
+        ),
+    )
+    forbid("bin/qos-agent-demo.js", ("signer.pem", "privateKey", "signerKey"))
+    require(
         "run-demo.sh",
         (
             "required_commands=(node cargo rustup make python3)",
