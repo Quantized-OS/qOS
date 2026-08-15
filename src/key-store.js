@@ -9,6 +9,7 @@ import {
 } from "node:crypto";
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   statSync,
@@ -28,8 +29,10 @@ const SCRYPT_P = 1;
 const SCRYPT_MAXMEM = 512 * 1024 * 1024;
 
 function requirePrivatePermissions(path) {
+  const metadata = lstatSync(path);
+  assertQos(metadata.isFile(), "INSECURE_KEY_FILE", `${path} must be a regular file`);
   if (process.platform === "win32") return;
-  const mode = statSync(path).mode & 0o777;
+  const mode = metadata.mode & 0o777;
   assertQos((mode & 0o077) === 0, "INSECURE_KEY_PERMISSIONS", `${path} must not be accessible by group or other users`);
 }
 
