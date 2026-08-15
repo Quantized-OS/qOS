@@ -68,10 +68,15 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/ARCHITECTURE.md` — Trust domains and privacy boundaries
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
+* `docs/AGENT_DEMO.md` — Agent-directed qOS Token-2022 transfer rehearsal
+* `docs/AGENT_SECURITY_TEST.md` — Synthetic red-team test for agent/key boundaries
 * `docs/PRIVACY_ZK_CUSTODY.md` — Agent-safe key custody, AES-256-GCM keys, and SNARK verifier contract
 * src/ — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
+* `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
+* `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
+* `bin/qos-agent-external-setup.js` — Public-only external-signer home setup
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
@@ -176,7 +181,7 @@ Do not use this repository with production keys or mainnet funds.
 After the host checks pass, `make release-media` creates a deterministic source
 archive, checksums, and `release-artifacts/qos-0.7.1-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
-production firmware installer. Read [`RELEASE_READINESS.md`](RELEASE_READINESS.md)
+production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.
 
 ## Run a real Solana Devnet transaction
@@ -242,6 +247,60 @@ QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
 Review .qos-ephemeral-mainnet/policy.json before funding the signer. The included
 maximum is `1000000000` base units (1,000 tokens), and any policy edit requires
 rebuilding the firmware demo before it will run.
+
+## Agent-directed transfer demo
+
+`bin/qos-agent-demo.js` connects either a deterministic basic agent or a local
+3B-class OpenAI-compatible model to the pinned qOS Token-2022 transfer path.
+The agent proposes a typed action; qOS remains authoritative for the mint,
+destination, amount, accounts, fees, simulation, signing, and confirmation.
+The default is validation-only:
+
+```sh
+node bin/qos-agent-demo.js --home .qos-ephemeral-mainnet --amount 1000000
+```
+
+See [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for local-model setup and the
+explicit `--broadcast --confirm-live` mainnet gates. This is an agent-directed
+Token-2022 transfer, not a DEX swap; the reviewed DEX instruction adapter is
+still a roadmap item.
+
+## Synthetic agent security analysis
+
+Run the red-team harness before giving any automation access to a qOS host:
+
+```sh
+node bin/qos-agent-security-audit.js
+```
+
+It creates disposable synthetic keys only. The harness demonstrates why
+plaintext and passphrase-accessible software-key homes are unsafe for agents,
+verifies the external-signer file boundary, attacks malicious proposal output,
+and checks the live-broadcast gate. It never reads a real home, contacts
+Solana, or broadcasts a transaction. See
+[`docs/AGENT_SECURITY_TEST.md`](docs/AGENT_SECURITY_TEST.md).
+
+## Create an external-signer home
+
+The public key must come from the external signer, HSM, or reviewed adapter and
+must correspond to the private key held there. qOS cannot derive this public
+key from a plaintext home without reusing the unsafe key custody profile.
+
+The setup helper can reuse the existing home’s allowlisted destination, but it
+never reads or copies `signer.pem`:
+
+```sh
+npm run setup:agent-external -- \
+  --public-key EXTERNAL_SIGNER_PUBLIC_KEY \
+  --source-home .qos-ephemeral-mainnet \
+  --home .qos-ephemeral-mainnet-external \
+  --signer-command /absolute/path/to/reviewed-signer-adapter \
+  --create
+```
+
+It creates only `signer.json` and `policy.json`, prints the new signer token
+account, and does not fund, migrate, or broadcast anything. Review the output
+and run `privacy-status` on the new home before funding it.
 
 ## Demo firmware signing the transaction
 

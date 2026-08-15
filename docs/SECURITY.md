@@ -25,6 +25,11 @@ application process from reading or exporting the private key. It does not
 make a signing capability harmless. The signer-side policy boundary must reject
 arbitrary messages and independently validate every typed authorization.
 
+Run `node bin/qos-agent-security-audit.js` to exercise this boundary with
+synthetic disposable keys. The harness intentionally proves that plaintext
+software keys and exposed passphrases are recoverable by a process with file
+access; those profiles are not acceptable for an agent deployment.
+
 The encrypted software profile protects offline key bytes against file theft
 without the passphrase. It does not protect the decrypted key from a compromised
 qOS process, kernel, hypervisor, debugger, DMA-capable device, or physical

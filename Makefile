@@ -5,7 +5,7 @@ CFLAGS := -march=rv64im_zicsr -mabi=lp64 -mcmodel=medany \
 	-Os -g -Wall -Wextra -Werror -Ifirmware/include
 LDFLAGS := -nostdlib -nostartfiles -static -T firmware/linker.ld
 
-.PHONY: all check test sandbox-init firmware-demo-build firmware-demo firmware-demo-live firmware-demo-broadcast release-media clean
+.PHONY: all check test sandbox-init firmware-demo-build firmware-demo firmware-demo-live firmware-demo-broadcast agent-security-test agent-external-setup release-media clean
 
 all: build/stage0.elf
 
@@ -28,6 +28,9 @@ check:
 	python3 tests/static_checks.py
 	node --check bin/qos.js
 	node --check bin/qos-firmware-demo.js
+	node --check bin/qos-agent-demo.js
+	node --check bin/qos-agent-security-audit.js
+	node --check bin/qos-agent-external-setup.js
 	node --test
 
 test:
@@ -47,6 +50,12 @@ firmware-demo-live:
 
 firmware-demo-broadcast:
 	node bin/qos-firmware-demo.js run --broadcast
+
+agent-security-test:
+	node bin/qos-agent-security-audit.js
+
+agent-external-setup:
+	node bin/qos-agent-external-setup.js --help
 
 release-media: check
 	python3 scripts/build-release.py

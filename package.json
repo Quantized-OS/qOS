@@ -1,19 +1,24 @@
 {
   "name": "qos-solana-sandbox",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "Policy signer for native SOL and the pinned qOS Token-2022 mint",
   "type": "module",
   "bin": {
     "qos": "./bin/qos.js",
-    "qos-firmware-demo": "./bin/qos-firmware-demo.js"
+    "qos-firmware-demo": "./bin/qos-firmware-demo.js",
+    "qos-agent-demo": "./bin/qos-agent-demo.js",
+    "qos-agent-security-audit": "./bin/qos-agent-security-audit.js",
+    "qos-agent-external-setup": "./bin/qos-agent-external-setup.js"
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",
     "demo": "bash ./run-demo.sh",
     "demo:build": "bash ./run-demo.sh --build-only",
+    "security:agent": "node ./bin/qos-agent-security-audit.js",
+    "setup:agent-external": "node ./bin/qos-agent-external-setup.js",
     "test": "node --test",
-    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --test"
+    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --check ./bin/qos-agent-security-audit.js && node --check ./bin/qos-agent-external-setup.js && node --test"
   },
   "engines": {
     "node": ">=20"

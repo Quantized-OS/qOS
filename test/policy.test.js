@@ -78,6 +78,10 @@ function tokenIntent(overrides = {}) {
   };
 }
 
+test("mainnet policy pins the complete Solana mainnet genesis hash", () => {
+  assert.equal(MAINNET_GENESIS_HASH, "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d");
+});
+
 test("policy accepts the exact sandbox intent", () => {
   const values = validateIntent(intent(), policy(), 100);
   assert.equal(values.amount, 1000n);

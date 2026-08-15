@@ -31,13 +31,12 @@ function frame(overrides = {}) {
   });
 }
 
-test("firmware pads the canonical mainnet genesis identity to its 32-byte field", () => {
+test("firmware encodes the canonical mainnet genesis identity in its 32-byte field", () => {
   const decoded = decodeBase58(MAINNET_GENESIS_HASH);
-  assert.equal(decoded.length, 23);
+  assert.equal(decoded.length, 32);
   const bytes = clusterGenesisBytes(MAINNET_GENESIS_HASH);
   assert.equal(bytes.length, 32);
-  assert.deepEqual(bytes.subarray(0, 9), Buffer.alloc(9));
-  assert.deepEqual(bytes.subarray(9), decoded);
+  assert.deepEqual(bytes, decoded);
   assert.deepEqual(frame({ clusterGenesis: MAINNET_GENESIS_HASH }).subarray(24, 56), bytes);
 });
 
