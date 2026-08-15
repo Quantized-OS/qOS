@@ -24,6 +24,7 @@ fn bytes(value: &[u8; 32]) -> String {
 }
 
 fn main() {
+    let signer = parse_hex_32("QOS_FW_SIGNER_HEX");
     let genesis = parse_hex_32("QOS_FW_GENESIS_HEX");
     let destination = parse_hex_32("QOS_FW_DESTINATION_HEX");
     let token_mint = parse_hex_32("QOS_FW_TOKEN_MINT_HEX");
@@ -42,7 +43,8 @@ fn main() {
     let token_decimals = required("QOS_FW_TOKEN_DECIMALS").parse::<u8>().expect("invalid QOS_FW_TOKEN_DECIMALS");
     let max_token_amount = required("QOS_FW_MAX_TOKEN_AMOUNT").parse::<u64>().expect("invalid QOS_FW_MAX_TOKEN_AMOUNT");
     let generated = format!(
-        "pub const POLICY_GENESIS: [u8; 32] = {};\n\
+        "pub const POLICY_SIGNER: [u8; 32] = {};\n\
+         pub const POLICY_GENESIS: [u8; 32] = {};\n\
          pub const POLICY_DESTINATION: [u8; 32] = {};\n\
          pub const POLICY_TOKEN_MINT: [u8; 32] = {};\n\
          pub const POLICY_TOKEN_PROGRAM: [u8; 32] = {};\n\
@@ -55,6 +57,7 @@ fn main() {
          pub const POLICY_TOKEN_ENABLED: bool = {token_enabled};\n\
          pub const POLICY_TOKEN_DECIMALS: u8 = {token_decimals};\n\
          pub const POLICY_MAX_TOKEN_AMOUNT: u64 = {max_token_amount};\n",
+        bytes(&signer),
         bytes(&genesis),
         bytes(&destination),
         bytes(&token_mint),
