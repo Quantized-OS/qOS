@@ -356,6 +356,7 @@ export class QosService {
     const values = validateIntent(intent, this.policy, currentSlot);
     const releaseAuthorization = this.session.begin(intent.requestNonce, this.policy.maxRequestsPerMinute);
     let message;
+    let signature;
     try {
     const proofResult = await this.proofGate.verify(intent, privacyProof, {
       policy: this.policy,
@@ -414,7 +415,7 @@ export class QosService {
     if (this.policy.cluster === "mainnet-beta") {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
     }
-    const signature = await this.signer.sign(message, {
+    signature = await this.signer.sign(message, {
       version: 1,
       intent,
       intentCommitment: intentCommitment(intent),
@@ -422,11 +423,8 @@ export class QosService {
       privacyProofVerified: proofResult.verified,
     });
     const signed = assembleSignedTransaction(message, decodeBase58(this.publicKey, 32), signature);
-    signature.fill(0);
     const simulation = await this.rpc.simulateTransaction(signed.transactionBase64);
-    assertQos(simulation && simulation.err === null, "SIMULATION_FAILED", "Solana preflight simulation rejected the transaction", {
-      err: simulation?.err,
-    });
+    assertQos(simulation && simulation.err === null, "SIMULATION_FAILED", "Solana preflight simulation rejected the transaction");
     const rpcSignature = await this.rpc.sendTransaction(signed.transactionBase64);
     assertQos(rpcSignature === signed.signature, "SIGNATURE_MISMATCH", "RPC returned a different transaction signature");
     const status = await this.rpc.confirmSignature(signed.signature, {
@@ -458,6 +456,7 @@ export class QosService {
     };
     } finally {
       if (Buffer.isBuffer(message)) message.fill(0);
+      if (Buffer.isBuffer(signature)) signature.fill(0);
       releaseAuthorization();
     }
   }
