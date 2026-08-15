@@ -37,6 +37,28 @@ test("RPC client fails closed on JSON-RPC errors", async (t) => {
   await assert.rejects(() => rpc.sendTransaction("AA=="), { code: "RPC_ERROR" });
 });
 
+test("RPC errors do not reflect untrusted provider messages", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const secretProviderMessage = "provider-internal\n" + "x".repeat(100_000);
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      jsonrpc: "2.0",
+      id: request.id,
+      error: { code: -32099, message: secretProviderMessage },
+    }), { status: 200 });
+  };
+  const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
+  await assert.rejects(
+    () => rpc.sendTransaction("AA=="),
+    (error) => error.code === "RPC_ERROR"
+      && error.message === "Solana RPC sendTransaction failed"
+      && error.details.rpcCode === -32099
+      && !error.message.includes("provider-internal"),
+  );
+});
+
 test("RPC client rejects oversized responses before parsing", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
