@@ -6,14 +6,15 @@
   "type": "module",
   "bin": {
     "qos": "./bin/qos.js",
-    "qos-firmware-demo": "./bin/qos-firmware-demo.js"
+    "qos-firmware-demo": "./bin/qos-firmware-demo.js",
+    "qos-agent-demo": "./bin/qos-agent-demo.js"
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",
     "demo": "bash ./run-demo.sh",
     "demo:build": "bash ./run-demo.sh --build-only",
     "test": "node --test",
-    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --test"
+    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --test"
   },
   "engines": {
     "node": ">=20"

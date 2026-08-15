@@ -28,6 +28,7 @@ check:
 	python3 tests/static_checks.py
 	node --check bin/qos.js
 	node --check bin/qos-firmware-demo.js
+	node --check bin/qos-agent-demo.js
 	node --test
 
 test:
