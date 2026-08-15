@@ -197,6 +197,33 @@ def main() -> None:
     )
     forbid("bin/qos-agent-demo.js", ("signer.pem", "privateKey", "signerKey"))
     require(
+        "src/agent-security.js",
+        (
+            "synthetic-disposable-only",
+            "PLAINTEXT_PRIVATE_KEY_EXPOSURE",
+            "PASSPHRASE_EXPOSURE_DECRYPTS_KEY",
+            "EXTERNAL_SIGNER_KEY_BOUNDARY",
+            "MODEL_PROMPT_NO_KEY_MATERIAL",
+        ),
+    )
+    require(
+        "tests/agent-key-probe.js",
+        (
+            "qos-agent-security-",
+            "emittedSecretBytes: false",
+            "loadEncryptedPrivateKey",
+        ),
+    )
+    require(
+        "bin/qos-agent-security-audit.js",
+        (
+            "synthetic qOS homes",
+            "never reads a user-supplied home",
+            "runAgentSecurityAnalysis",
+        ),
+    )
+    forbid("src/agent-security.js", ("sendTransaction", "mainnet-beta", "QOS_ENABLE_MAINNET_BROADCAST"))
+    require(
         "run-demo.sh",
         (
             "required_commands=(node cargo rustup make python3)",
