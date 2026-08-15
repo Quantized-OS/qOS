@@ -1,7 +1,7 @@
 {
   "version": 2,
   "cluster": "mainnet-beta",
-  "clusterGenesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  "clusterGenesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   "rpcUrl": "https://api.mainnet-beta.solana.com",
   "venueId": "QOS_SOLANA_POLICY_TRANSFER",
   "marketId": "SOLANA",
