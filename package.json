@@ -7,14 +7,16 @@
   "bin": {
     "qos": "./bin/qos.js",
     "qos-firmware-demo": "./bin/qos-firmware-demo.js",
-    "qos-agent-demo": "./bin/qos-agent-demo.js"
+    "qos-agent-demo": "./bin/qos-agent-demo.js",
+    "qos-agent-security-audit": "./bin/qos-agent-security-audit.js"
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",
     "demo": "bash ./run-demo.sh",
     "demo:build": "bash ./run-demo.sh --build-only",
+    "security:agent": "node ./bin/qos-agent-security-audit.js",
     "test": "node --test",
-    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --test"
+    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --check ./bin/qos-agent-security-audit.js && node --test"
   },
   "engines": {
     "node": ">=20"

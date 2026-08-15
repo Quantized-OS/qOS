@@ -69,11 +69,13 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
 * `docs/AGENT_DEMO.md` — Agent-directed qOS Token-2022 transfer rehearsal
+* `docs/AGENT_SECURITY_TEST.md` — Synthetic red-team test for agent/key boundaries
 * `docs/PRIVACY_ZK_CUSTODY.md` — Agent-safe key custody, AES-256-GCM keys, and SNARK verifier contract
 * src/ — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
 * `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
+* `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
@@ -261,6 +263,21 @@ See [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for local-model setup and the
 explicit `--broadcast --confirm-live` mainnet gates. This is an agent-directed
 Token-2022 transfer, not a DEX swap; the reviewed DEX instruction adapter is
 still a roadmap item.
+
+## Synthetic agent security analysis
+
+Run the red-team harness before giving any automation access to a qOS host:
+
+```sh
+node bin/qos-agent-security-audit.js
+```
+
+It creates disposable synthetic keys only. The harness demonstrates why
+plaintext and passphrase-accessible software-key homes are unsafe for agents,
+verifies the external-signer file boundary, attacks malicious proposal output,
+and checks the live-broadcast gate. It never reads a real home, contacts
+Solana, or broadcasts a transaction. See
+[`docs/AGENT_SECURITY_TEST.md`](docs/AGENT_SECURITY_TEST.md).
 
 ## Demo firmware signing the transaction
 
