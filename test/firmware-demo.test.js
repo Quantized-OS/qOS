@@ -104,26 +104,27 @@ test("firmware token frame pins mint, token accounts, program, and decimals", ()
 });
 
 test("demo transcript must prove acceptance, tamper rejection, and replay rejection", () => {
+  const signatureHex = "ab".repeat(64);
   const output = [
-    "QOS_FW:ACCEPT index=0 tx_hex=010203",
+    `QOS_FW:ACCEPT index=0 signature_hex=${signatureHex}`,
     "QOS_FW:REJECT index=1 code=AMOUNT",
     "QOS_FW:REJECT index=2 code=NONCE_REPLAY",
     "QOS_FW:DONE",
   ].join("\n");
-  assert.deepEqual(parseFirmwareOutput(output), Buffer.from([1, 2, 3]));
+  assert.deepEqual(parseFirmwareOutput(output), Buffer.alloc(64, 0xab));
   assert.throws(() => parseFirmwareOutput(output.replace("NONCE_REPLAY", "OTHER")), { code: "FIRMWARE_REPLAY_TEST_FAILED" });
   let failure;
   try {
-    parseFirmwareOutput(`${output}\nQOS_FW:ACCEPT index=2 tx_hex=04`);
+    parseFirmwareOutput(`${output}\nQOS_FW:ACCEPT index=2 signature_hex=${"cd".repeat(64)}`);
   } catch (error) {
     failure = error;
   }
   assert.equal(failure?.code, "FIRMWARE_ACCEPT_SET_INVALID");
-  assert.equal(failure.details.output.includes("010203"), false);
-  assert.match(failure.details.output, /tx_hex=<redacted-in-memory>/);
+  assert.equal(failure.details.output.includes(signatureHex), false);
+  assert.match(failure.details.output, /signature_hex=<redacted-in-memory>/);
   const redacted = redactFirmwareOutput(output);
-  assert.equal(redacted.includes("010203"), false);
-  assert.match(redacted, /tx_hex=<redacted-in-memory>/);
+  assert.equal(redacted.includes(signatureHex), false);
+  assert.match(redacted, /signature_hex=<redacted-in-memory>/);
 });
 
 test("provisioning validation binds the firmware to the sole policy strategy", () => {
