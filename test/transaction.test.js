@@ -34,6 +34,26 @@ test("native transfer message exactly round-trips the pinned template", () => {
   });
 });
 
+test("message parsers reject non-canonical compact lengths", () => {
+  const message = buildNativeTransferMessage({
+    payer: encodeBase58(Buffer.alloc(32, 7)),
+    destination: encodeBase58(Buffer.alloc(32, 8)),
+    lamports: 1n,
+    recentBlockhash: encodeBase58(Buffer.alloc(32, 9)),
+  });
+  const nonCanonical = Buffer.concat([message.subarray(0, 3), Buffer.from([0x83, 0]), message.subarray(4)]);
+  assert.throws(() => parseNativeTransferMessage(nonCanonical), { code: "NON_CANONICAL_SHORTVEC" });
+});
+
+test("transaction builders reject values outside u64", () => {
+  assert.throws(() => buildNativeTransferMessage({
+    payer: encodeBase58(Buffer.alloc(32, 7)),
+    destination: encodeBase58(Buffer.alloc(32, 8)),
+    lamports: -1n,
+    recentBlockhash: encodeBase58(Buffer.alloc(32, 9)),
+  }), { code: "INTEGER_OUT_OF_RANGE" });
+});
+
 test("signed transaction has a verifiable Ed25519 signature", () => {
   const { privateKey } = generateKeyPairSync("ed25519");
   const payer = encodeBase58(rawPublicKey(privateKey));
