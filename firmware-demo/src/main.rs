@@ -245,6 +245,11 @@ extern "C" fn rust_main() -> ! {
     wipe(&mut seed);
 
     let payer = signing_key.verifying_key().to_bytes();
+    if payer != POLICY_SIGNER {
+        drop(signing_key);
+        uart_str("QOS_FW:FATAL signer-mismatch\n");
+        finish(false);
+    }
     uart_str("QOS_FW:SIGNER_HEX ");
     uart_hex(&payer);
     uart_str("\n");
@@ -353,19 +358,14 @@ extern "C" fn rust_main() -> ! {
             )
         };
         let mut signature = signing_key.sign(&message[..message_length]).to_bytes();
-        let mut transaction = [0u8; 384];
-        transaction[0] = 1;
-        transaction[1..65].copy_from_slice(&signature);
-        transaction[65..65 + message_length].copy_from_slice(&message[..message_length]);
 
         uart_str("QOS_FW:ACCEPT index=");
         uart_index(index);
-        uart_str(" tx_hex=");
-        uart_hex(&transaction[..65 + message_length]);
+        uart_str(" signature_hex=");
+        uart_hex(&signature);
         uart_str("\n");
         last_nonce = nonce;
         signed_count += 1;
-        wipe(&mut transaction);
         wipe(&mut signature);
         wipe(&mut message);
         wipe(&mut destination);
