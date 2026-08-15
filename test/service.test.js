@@ -114,6 +114,26 @@ test("service reports the exact SOL funding deficit before signing", async () =>
   assert.equal(service.session.status().activeAuthorizations, 0);
 });
 
+test("service wipes a signer response when transaction assembly fails", async () => {
+  const { service } = serviceWithMock();
+  const intent = await service.prepareIntent({ lamports: "12345" });
+  const signature = Buffer.alloc(64, 0x5a);
+  service.signer = {
+    publicKey: service.publicKey,
+    async sign() { return signature; },
+    status() { return { backend: "test", custody: "test", keyExportableToAgentProcess: false }; },
+  };
+  const originalGetBalance = service.rpc.getBalance.bind(service.rpc);
+  service.rpc.getBalance = async (...args) => {
+    const result = await originalGetBalance(...args);
+    service.publicKey = "not-a-public-key";
+    return result;
+  };
+  await assert.rejects(() => service.submitIntent(intent), { code: "INVALID_BASE58" });
+  assert.equal(signature.every((byte) => byte === 0), true);
+  assert.equal(service.session.status().activeAuthorizations, 0);
+});
+
 function mintAccount() {
   const bytes = Buffer.alloc(174);
   bytes.writeBigUInt64LE(1_000_000_000_000_000n, 36);
