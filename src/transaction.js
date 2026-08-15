@@ -22,8 +22,10 @@ export function encodeShortVec(value) {
 }
 
 function u64le(value) {
+  const integer = BigInt(value);
+  assertQos(integer >= 0n && integer < (1n << 64n), "INTEGER_OUT_OF_RANGE", "u64 value is outside the unsigned 64-bit range");
   const output = Buffer.alloc(8);
-  output.writeBigUInt64LE(BigInt(value));
+  output.writeBigUInt64LE(integer);
   return output;
 }
 
@@ -96,37 +98,45 @@ export function buildTokenTransferCheckedMessage({
 
 export function signMessage(message, privateKey) {
   const publicKeyBytes = rawPublicKey(privateKey);
-  const signature = sign(null, message, privateKey);
-  const result = assembleSignedTransaction(message, publicKeyBytes, signature);
-  signature.fill(0);
-  publicKeyBytes.fill(0);
-  return result;
+  let signature;
+  try {
+    signature = sign(null, message, privateKey);
+    return assembleSignedTransaction(message, publicKeyBytes, signature);
+  } finally {
+    signature?.fill(0);
+    publicKeyBytes.fill(0);
+  }
 }
 
 export function assembleSignedTransaction(message, publicKeyBytes, signatureBytes) {
   const publicKey = Buffer.from(publicKeyBytes);
   const signature = Buffer.from(signatureBytes);
-  assertQos(publicKey.length === 32, "INVALID_PUBLIC_KEY", "Ed25519 public key must be 32 bytes");
-  assertQos(signature.length === 64, "INVALID_SIGNATURE", "Ed25519 signer returned a non-64-byte signature");
-  assertQos(verify(null, message, publicKeyObjectFromRaw(publicKey), signature), "SIGNATURE_SELF_CHECK_FAILED", "Generated signature did not verify");
-  const transaction = Buffer.concat([encodeShortVec(1), signature, message]);
-  assertQos(transaction.length <= MAX_TRANSACTION_BYTES, "TRANSACTION_TOO_LARGE", "Serialized transaction exceeds Solana's 1232-byte limit");
-  const result = {
-    signature: encodeBase58(signature),
-    publicKey: encodeBase58(publicKey),
-    messageBase64: Buffer.from(message).toString("base64"),
-    transactionBase64: transaction.toString("base64"),
-    transactionBytes: transaction.length,
-  };
-  signature.fill(0);
-  publicKey.fill(0);
-  transaction.fill(0);
-  return result;
+  let transaction;
+  try {
+    assertQos(publicKey.length === 32, "INVALID_PUBLIC_KEY", "Ed25519 public key must be 32 bytes");
+    assertQos(signature.length === 64, "INVALID_SIGNATURE", "Ed25519 signer returned a non-64-byte signature");
+    assertQos(verify(null, message, publicKeyObjectFromRaw(publicKey), signature), "SIGNATURE_SELF_CHECK_FAILED", "Generated signature did not verify");
+    transaction = Buffer.concat([encodeShortVec(1), signature, message]);
+    assertQos(transaction.length <= MAX_TRANSACTION_BYTES, "TRANSACTION_TOO_LARGE", "Serialized transaction exceeds Solana's 1232-byte limit");
+    return {
+      signature: encodeBase58(signature),
+      publicKey: encodeBase58(publicKey),
+      messageBase64: Buffer.from(message).toString("base64"),
+      transactionBase64: transaction.toString("base64"),
+      transactionBytes: transaction.length,
+    };
+  } finally {
+    signature.fill(0);
+    publicKey.fill(0);
+    transaction?.fill(0);
+  }
 }
 
 class Reader {
   constructor(buffer) {
-    this.buffer = Buffer.from(buffer);
+    const bytes = Buffer.from(buffer);
+    assertQos(bytes.length <= MAX_TRANSACTION_BYTES - 65, "TRANSACTION_TOO_LARGE", "Serialized message exceeds the pinned Solana transaction limit");
+    this.buffer = bytes;
     this.offset = 0;
   }
   bytes(length) {
@@ -139,13 +149,17 @@ class Reader {
     return this.bytes(1)[0];
   }
   shortVec() {
+    const start = this.offset;
     let value = 0;
-    let shift = 0;
+    let multiplier = 1;
     for (let i = 0; i < 4; i += 1) {
       const byte = this.byte();
-      value |= (byte & 0x7f) << shift;
-      if ((byte & 0x80) === 0) return value;
-      shift += 7;
+      value += (byte & 0x7f) * multiplier;
+      if ((byte & 0x80) === 0) {
+        assertQos(encodeShortVec(value).equals(this.buffer.subarray(start, this.offset)), "NON_CANONICAL_SHORTVEC", "Serialized message contains a non-canonical compact length");
+        return value;
+      }
+      multiplier *= 128;
     }
     assertQos(false, "INVALID_SHORTVEC", "shortvec is too long");
   }
@@ -167,8 +181,9 @@ export function parseNativeTransferMessage(message) {
   const dataLength = reader.shortVec();
   const data = reader.bytes(dataLength);
   assertQos(reader.offset === reader.buffer.length, "TRAILING_TRANSACTION_DATA", "Message contains trailing bytes");
-  assertQos(accounts[programIndex] === SYSTEM_PROGRAM_ID, "WRONG_PROGRAM", "Only the System Program is allowed");
-  assertQos(indexes[0] === 0 && indexes[1] < accounts.length, "WRONG_ACCOUNTS", "Transfer accounts do not match the pinned template");
+  assertQos(programIndex === accounts.length - 1 && accounts[programIndex] === SYSTEM_PROGRAM_ID, "WRONG_PROGRAM", "Only the System Program is allowed");
+  const expectedDestinationIndex = accountCount === 2 ? 0 : 1;
+  assertQos(indexes[0] === 0 && indexes[1] === expectedDestinationIndex, "WRONG_ACCOUNTS", "Transfer accounts do not match the pinned template");
   assertQos(data.length === 12 && data.readUInt32LE(0) === 2, "WRONG_INSTRUCTION", "Only SystemProgram.transfer is allowed");
   return {
     payer: accounts[0],
