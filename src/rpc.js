@@ -63,15 +63,14 @@ export class SolanaRpc {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
-      throw new QosError("RPC_UNAVAILABLE", `Solana RPC request failed: ${error.message}`);
+      throw new QosError("RPC_UNAVAILABLE", "Solana RPC request failed");
     }
     assertQos(response.ok, "RPC_HTTP_ERROR", `Solana RPC returned HTTP ${response.status}`);
     const payload = await readBoundedJson(response);
     assertQos(payload && payload.jsonrpc === "2.0" && payload.id === id, "RPC_INVALID_RESPONSE", "Solana RPC response envelope is invalid");
     if (payload.error) {
-      throw new QosError("RPC_ERROR", `Solana RPC ${method} failed: ${payload.error.message ?? "unknown error"}`, {
-        rpcCode: payload.error.code,
-      });
+      const rpcCode = Number.isSafeInteger(payload.error.code) ? payload.error.code : undefined;
+      throw new QosError("RPC_ERROR", `Solana RPC ${method} failed`, rpcCode === undefined ? undefined : { rpcCode });
     }
     assertQos(Object.hasOwn(payload, "result"), "RPC_MISSING_RESULT", "Solana RPC response has no result");
     return payload.result;
@@ -140,7 +139,9 @@ export class SolanaRpc {
       const statuses = await this.call("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
       const status = statuses.value?.[0];
       if (status?.err) {
-        throw new QosError("TRANSACTION_FAILED", "Solana transaction failed", { err: status.err, slot: status.slot });
+        throw new QosError("TRANSACTION_FAILED", "Solana transaction failed", {
+          ...(Number.isSafeInteger(status.slot) ? { slot: status.slot } : {}),
+        });
       }
       const reachedCommitment = this.commitment === "finalized"
         ? status?.confirmationStatus === "finalized"
