@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPrivateKey, generateKeyPairSync } from "node:crypto";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -38,4 +38,15 @@ test("AES-256-GCM encrypted Ed25519 keys authenticate metadata and passphrase", 
   const loaded = loadEncryptedPrivateKey(keyPath, passphrasePath);
   assert.equal(publicKeyAddress(loaded), publicKeyAddress(created));
   assert.throws(() => loadEncryptedPrivateKey(keyPath, wrongPath), { code: "KEY_DECRYPTION_FAILED" });
+});
+
+test("private key loaders reject symlinked key paths", { skip: process.platform === "win32" }, () => {
+  const home = mkdtempSync(join(tmpdir(), "qos-key-symlink-"));
+  const passphrasePath = join(home, "passphrase");
+  const keyPath = join(home, "signer.qkey");
+  const linkPath = join(home, "linked.qkey");
+  writeFileSync(passphrasePath, "a secure random passphrase with 32 bytes\n", { mode: 0o600 });
+  writeNewEncryptedEd25519Key(keyPath, passphrasePath);
+  symlinkSync(keyPath, linkPath);
+  assert.throws(() => loadEncryptedPrivateKey(linkPath, passphrasePath), { code: "INSECURE_KEY_FILE" });
 });
