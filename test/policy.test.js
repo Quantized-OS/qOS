@@ -98,6 +98,11 @@ test("policy permits plaintext RPC only on IPv4 or IPv6 loopback", () => {
   remote.allowedDestinations = [destination];
   remote.rpcUrl = "http://192.0.2.1:8899";
   assert.throws(() => validatePolicy(remote), { code: "INSECURE_RPC_URL" });
+
+  const hostname = JSON.parse(readFileSync(new URL("../config/devnet.policy.json", import.meta.url), "utf8"));
+  hostname.allowedDestinations = [destination];
+  hostname.rpcUrl = "http://localhost:8899";
+  assert.throws(() => validatePolicy(hostname), { code: "INSECURE_RPC_URL" });
 });
 
 test("policy rejects unknown fields", () => {
@@ -115,6 +120,12 @@ test("policy rejects wrong cluster, destination, amount, fee, and stale intent",
 test("policy rejects non-canonical integer encodings", () => {
   assert.throws(() => validateIntent(intent({ requestNonce: "01" }), policy(), 100), { code: "INVALID_INTEGER" });
   assert.throws(() => validateIntent(intent({ inputAmount: 1000 }), policy(), 100), { code: "INVALID_INTEGER" });
+});
+
+test("intent validation rejects malformed RPC slot values", () => {
+  assert.throws(() => validateIntent(intent(), policy(), "100"), { code: "RPC_INVALID_SLOT" });
+  assert.throws(() => validateIntent(intent(), policy(), -1), { code: "RPC_INVALID_SLOT" });
+  assert.throws(() => validateIntent(intent(), policy(), Number.MAX_SAFE_INTEGER + 1), { code: "RPC_INVALID_SLOT" });
 });
 
 test("policy accepts the exact qOS Token-2022 transfer intent", () => {

@@ -1,17 +1,19 @@
-import { readFileSync } from "node:fs";
+import { TextDecoder } from "node:util";
 import { decodeBase58 } from "./base58.js";
 import { hasExactKeys } from "./canonical.js";
 import {
   DEVNET_GENESIS_HASH,
   MAINNET_GENESIS_HASH,
   MARKET_ID,
+  QOS_TOKEN_DECIMALS,
   QOS_TOKEN_MINT,
+  QOS_TOKEN_MINT_EXTENSIONS,
   TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
   VENUE_ID,
   WRAPPED_SOL_MINT,
 } from "./constants.js";
 import { assertQos } from "./errors.js";
+import { readSecureFile } from "./secure-file.js";
 
 export const INTENT_KEYS = [
   "version",
@@ -96,6 +98,7 @@ export function parseUnsigned(text, bits, field) {
 }
 
 function validateRpcUrl(rpcUrl) {
+  assertQos(typeof rpcUrl === "string" && rpcUrl.length <= 2048, "INVALID_RPC_URL", "rpcUrl is not a valid URL");
   let url;
   try {
     url = new URL(rpcUrl);
@@ -104,11 +107,16 @@ function validateRpcUrl(rpcUrl) {
   }
   // Node preserves brackets in URL.hostname for IPv6 literals.
   const local = url.hostname === "127.0.0.1"
-    || url.hostname === "localhost"
     || url.hostname === "::1"
     || url.hostname === "[::1]";
   assertQos(url.protocol === "https:" || (local && url.protocol === "http:"), "INSECURE_RPC_URL", "RPC must use HTTPS unless it is loopback");
   assertQos(!url.username && !url.password, "RPC_CREDENTIALS_IN_URL", "Do not put credentials in rpcUrl");
+  assertQos(url.hash === "", "INVALID_RPC_URL", "rpcUrl must not contain a fragment");
+}
+
+export function parseRpcSlot(value, field = "currentSlot") {
+  assertQos(Number.isSafeInteger(value) && value >= 0, "RPC_INVALID_SLOT", `${field} must be a non-negative safe integer`);
+  return BigInt(value);
 }
 
 export function validatePolicy(policy) {
@@ -123,9 +131,9 @@ export function validatePolicy(policy) {
     assertQos(policy.cluster === "mainnet-beta", "TOKEN_CLUSTER_MISMATCH", "The pinned qOS token is only enabled on mainnet-beta");
     assertQos(hasExactKeys(policy.tokenTransfer, TOKEN_POLICY_KEYS), "INVALID_TOKEN_POLICY_SHAPE", "tokenTransfer has missing or unknown fields");
     assertQos(policy.tokenTransfer.mint === QOS_TOKEN_MINT, "UNSUPPORTED_MINT", "This build only supports the pinned qOS token mint");
-    assertQos(policy.tokenTransfer.tokenProgram === TOKEN_PROGRAM_ID || policy.tokenTransfer.tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "Token policy must pin the Token or Token-2022 program");
+    assertQos(policy.tokenTransfer.tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "The pinned qOS mint requires the Token-2022 program");
     decodeBase58(policy.tokenTransfer.mint, 32);
-    assertQos(Number.isInteger(policy.tokenTransfer.decimals) && policy.tokenTransfer.decimals >= 0 && policy.tokenTransfer.decimals <= 255, "INVALID_TOKEN_DECIMALS", "Token decimals must fit in u8");
+    assertQos(policy.tokenTransfer.decimals === QOS_TOKEN_DECIMALS, "INVALID_TOKEN_DECIMALS", "The pinned qOS mint must use six decimals");
     parseUnsigned(policy.tokenTransfer.maxTransferAmount, 64, "policy.tokenTransfer.maxTransferAmount");
     assertQos(Array.isArray(policy.tokenTransfer.allowedMintExtensions), "INVALID_MINT_EXTENSIONS", "allowedMintExtensions must be an array");
     for (const extension of policy.tokenTransfer.allowedMintExtensions) {
@@ -133,12 +141,20 @@ export function validatePolicy(policy) {
     }
     const canonicalExtensions = [...new Set(policy.tokenTransfer.allowedMintExtensions)].sort((left, right) => left - right);
     assertQos(canonicalExtensions.length === policy.tokenTransfer.allowedMintExtensions.length && canonicalExtensions.every((value, index) => value === policy.tokenTransfer.allowedMintExtensions[index]), "INVALID_MINT_EXTENSIONS", "Mint extension identifiers must be sorted and unique");
+    assertQos(
+      canonicalExtensions.length === QOS_TOKEN_MINT_EXTENSIONS.length
+        && canonicalExtensions.every((value, index) => value === QOS_TOKEN_MINT_EXTENSIONS[index]),
+      "INVALID_MINT_EXTENSIONS",
+      "The pinned qOS mint must use only metadata-pointer and token-metadata extensions",
+    );
   }
   validateRpcUrl(policy.rpcUrl);
   assertQos(Array.isArray(policy.allowedDestinations) && policy.allowedDestinations.length > 0, "EMPTY_DESTINATION_ALLOWLIST", "Policy must allow at least one destination");
+  assertQos(policy.allowedDestinations.length <= 64, "DESTINATION_ALLOWLIST_TOO_LARGE", "Policy may allow at most 64 destinations");
   for (const address of policy.allowedDestinations) decodeBase58(address, 32);
   assertQos(new Set(policy.allowedDestinations).size === policy.allowedDestinations.length, "DUPLICATE_DESTINATION", "Destination allowlist contains duplicates");
   assertQos(Array.isArray(policy.allowedStrategyIds) && policy.allowedStrategyIds.length > 0, "EMPTY_STRATEGY_ALLOWLIST", "Policy must allow at least one strategy ID");
+  assertQos(policy.allowedStrategyIds.length <= 64, "STRATEGY_ALLOWLIST_TOO_LARGE", "Policy may allow at most 64 strategy IDs");
   for (const id of policy.allowedStrategyIds) {
     assertQos(Number.isInteger(id) && id >= 0 && id <= 0xffffffff, "INVALID_STRATEGY_ID", "Strategy IDs must be u32 integers");
   }
@@ -162,7 +178,17 @@ export function validatePolicy(policy) {
 }
 
 export function loadPolicy(path, rpcOverride = undefined) {
-  const policy = JSON.parse(readFileSync(path, "utf8"));
+  const bytes = readSecureFile(path, {
+    maxBytes: 256 * 1024,
+    errorCode: "INSECURE_POLICY_FILE",
+    label: "Policy file",
+  });
+  let policy;
+  try {
+    policy = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } finally {
+    bytes.fill(0);
+  }
   if (rpcOverride !== undefined) policy.rpcUrl = rpcOverride;
   return validatePolicy(policy);
 }
@@ -188,7 +214,7 @@ function validateCommonIntent(intent, policy, currentSlot) {
   assertQos(policy.allowedDestinations.includes(intent.destination), "DESTINATION_NOT_ALLOWED", "Destination is not allowlisted");
   decodeBase58(intent.recentBlockhash, 32);
   const expiresAtSlot = parseUnsigned(intent.expiresAtSlot, 64, "expiresAtSlot");
-  const now = BigInt(currentSlot);
+  const now = parseRpcSlot(currentSlot);
   assertQos(expiresAtSlot > now, "INTENT_EXPIRED", "Intent has expired");
   assertQos(expiresAtSlot <= now + BigInt(policy.maxIntentTtlSlots), "INTENT_TTL_EXCEEDED", "Intent expiry exceeds policy TTL");
   assertQos(Number.isInteger(intent.strategyId) && policy.allowedStrategyIds.includes(intent.strategyId), "STRATEGY_NOT_ALLOWED", "Strategy is not allowlisted");

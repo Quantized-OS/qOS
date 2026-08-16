@@ -33,6 +33,7 @@ test("Token-2022 account verifies mint, owner, state, and immutable-owner extens
     field: "tokenAccount",
   });
   assert.equal(account.amount, 0n);
+  assert.deepEqual(account.extensions, [7]);
 });
 
 test("mint verification fails closed if extension policy changes", () => {
@@ -41,4 +42,24 @@ test("mint verification fails closed if extension policy changes", () => {
     decimals: 6,
     allowedMintExtensions: [18],
   }), { code: "MINT_EXTENSIONS_MISMATCH" });
+});
+
+test("Token-2022 account rejects delegates and unexpected extensions", () => {
+  const delegated = Buffer.from(TOKEN_DATA, "base64");
+  delegated.writeUInt32LE(1, 72);
+  delegated.fill(1, 76, 108);
+  assert.throws(() => parseTokenAccount(rpcAccount(delegated.toString("base64")), {
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    mint: QOS_TOKEN_MINT,
+    owner: OWNER,
+    field: "tokenAccount",
+  }), { code: "TOKEN_ACCOUNT_DELEGATE_PRESENT" });
+
+  const extraExtension = Buffer.concat([Buffer.from(TOKEN_DATA, "base64"), Buffer.from([8, 0, 0, 0])]);
+  assert.throws(() => parseTokenAccount(rpcAccount(extraExtension.toString("base64")), {
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    mint: QOS_TOKEN_MINT,
+    owner: OWNER,
+    field: "tokenAccount",
+  }), { code: "TOKEN_ACCOUNT_EXTENSIONS_MISMATCH" });
 });

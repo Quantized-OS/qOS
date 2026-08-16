@@ -39,12 +39,19 @@ def main() -> None:
             "manifest_shape_is_valid",
             "secure_zero",
             "volatile uint8_t",
+            "snapshot_manifest",
+            "platform_lock_boot_source",
+            "platform_validate_measure_and_lock_fdt",
             "platform_verify_mldsa65_manifest",
             "platform_commit_security_version",
             "platform_lock_root_secrets",
             "platform_configure_and_lock_pmp",
         ),
     )
+    secure_boot = (ROOT / "firmware/secure_boot.c").read_text()
+    assert secure_boot.index("platform_lock_boot_source(") < secure_boot.index("snapshot_manifest(&manifest)"), "boot source must be locked before manifest snapshot"
+    assert secure_boot.index("snapshot_manifest(&manifest)") < secure_boot.index("platform_sha3_384("), "manifest snapshot must precede image hashing"
+    forbid("firmware/include/platform.h", ("uint64_t platform_read_security_version(void)",))
     require(
         "docs/SIGNER_POLICY.md",
         (
@@ -67,6 +74,7 @@ def main() -> None:
             "transactionRetained",
             "openSigner",
             "SnarkProofGate",
+            "MAINNET_EXTERNAL_SIGNER_REQUIRED",
         ),
     )
     require("src/session.js", ("NONCE_REPLAY", "createHmac", "randomBytes(16)"))
@@ -107,6 +115,9 @@ def main() -> None:
             "API_TOKEN_REQUIRED",
             'new TextDecoder("utf-8", { fatal: true })',
             "maxRequestsPerSocket",
+            "QOS_API_TOKEN_FILE",
+            "TRANSFER_ENCODING_FORBIDDEN",
+            "CONTENT_LENGTH_REQUIRED",
         ),
     )
     require(
@@ -140,7 +151,21 @@ def main() -> None:
             "verifyTokenTransferAccounts",
             "MINT_EXTENSIONS_MISMATCH",
             "TOKEN_ACCOUNT_OWNER_MISMATCH",
+            "TOKEN_ACCOUNT_DELEGATE_PRESENT",
+            "TOKEN_ACCOUNT_EXTENSIONS_MISMATCH",
             "INSUFFICIENT_TOKEN_BALANCE",
+        ),
+    )
+    require(
+        "src/secure-file.js",
+        (
+            "O_NOFOLLOW",
+            "sameFile",
+            "sameVersion",
+            "readSync",
+            "metadata.nlink === 1",
+            "requireSingleLink",
+            "assertPrivateDirectory",
         ),
     )
     require(
@@ -174,6 +199,11 @@ def main() -> None:
             "openRamBackedFile",
             "redactFirmwareOutput",
             "signature_hex",
+            "MAINNET_QEMU_BROADCAST_FORBIDDEN",
+            "isolatedCargo: true",
+            "SAFE_TOOL_PATH",
+            "CARGO_FIRMWARE_ELF",
+            "installFirmwareElf",
         ),
     )
     require(
@@ -257,6 +287,23 @@ def main() -> None:
     forbid("firmware-demo/src/main.rs", ("tx_hex=",))
     forbid_path("src/audit.js")
     forbid_path("test/audit.test.js")
+    require(
+        "scripts/build-release.py",
+        (
+            "validate_release_tree",
+            "PRIVATE_KEY_MARKERS",
+            'ROOT / "docs" / "reports" / "RELEASE_READINESS.md"',
+        ),
+    )
+    forbid(
+        "scripts/setup-ubuntu-20.04.sh",
+        (
+            "nodesource.com/setup_",
+            "https://sh.rustup.rs",
+            'source "${cargo_home}/env"',
+        ),
+    )
+    forbid("run-demo.sh", ('source "${cargo_home}/env"',))
     print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")
 
 

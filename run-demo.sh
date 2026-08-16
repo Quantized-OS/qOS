@@ -128,10 +128,7 @@ if (( ! skip_setup )); then
 fi
 
 cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
-if [[ -r "${cargo_home}/env" ]]; then
-  # shellcheck disable=SC1090
-  source "${cargo_home}/env"
-fi
+export PATH="${cargo_home}/bin:${PATH}"
 
 if (( setup_only )); then
   log "Setup-only run completed."

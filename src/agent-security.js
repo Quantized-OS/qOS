@@ -215,11 +215,9 @@ async function agentPolicyFindings() {
 
   const originalFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: { content: JSON.stringify({ action: "transfer_qos", amount: "1000001", destination: DESTINATION }) } }] }),
-    });
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ action: "transfer_qos", amount: "1000001", destination: DESTINATION }) } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
     await expectRejected(
       findings,
       "MODEL_AMOUNT_ESCALATION_REJECTED",
@@ -232,11 +230,9 @@ async function agentPolicyFindings() {
     let capturedRequest;
     globalThis.fetch = async (_url, init) => {
       capturedRequest = JSON.parse(init.body);
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ choices: [{ message: { content: JSON.stringify({ action: "transfer_qos", amount: AGENT_CONTEXT.amount, destination: DESTINATION }) } }] }),
-      };
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ action: "transfer_qos", amount: AGENT_CONTEXT.amount, destination: DESTINATION }) } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
     };
     await modelAgentPlan({ ...AGENT_CONTEXT, url: "http://127.0.0.1:11434/v1/chat/completions" });
     const promptText = JSON.stringify(capturedRequest);

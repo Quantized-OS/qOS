@@ -24,6 +24,10 @@ export function encodeBase58(input) {
 
 export function decodeBase58(text, expectedLength = undefined) {
   assertQos(typeof text === "string" && text.length > 0, "INVALID_BASE58", "Expected a non-empty base58 string");
+  const maximumTextLength = expectedLength === undefined
+    ? 128
+    : Math.ceil((expectedLength * 8) / Math.log2(58));
+  assertQos(text.length <= maximumTextLength, "BASE58_TOO_LONG", "Base58 value exceeds the bounded encoded length");
   let value = 0n;
   for (const character of text) {
     const digit = LOOKUP.get(character);

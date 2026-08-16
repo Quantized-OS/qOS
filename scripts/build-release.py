@@ -16,6 +16,29 @@ from pathlib import Path
 
 SECTOR_SIZE = 2048
 ROOT = Path(__file__).resolve().parents[1]
+FORBIDDEN_RELEASE_NAMES = {
+    ".env",
+    "audit.key",
+    "api-token",
+    "id_ed25519",
+    "id_rsa",
+    "passphrase",
+    "provisioning.json",
+    "receiver.pem",
+    "receiver.qkey",
+    "signer.json",
+    "signer.pem",
+    "signer.qkey",
+}
+FORBIDDEN_RELEASE_SUFFIXES = (".key", ".pem", ".qkey")
+FORBIDDEN_RELEASE_NAME_PARTS = ("api-token", "passphrase")
+PRIVATE_KEY_MARKERS = (
+    b"-----BEGIN " b"PRIVATE KEY-----",
+    b"-----BEGIN " b"ENCRYPTED PRIVATE KEY-----",
+    b"-----BEGIN " b"OPENSSH PRIVATE KEY-----",
+    b"-----BEGIN " b"EC PRIVATE KEY-----",
+    b"-----BEGIN " b"RSA PRIVATE KEY-----",
+)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -52,6 +75,23 @@ def archive_entries() -> list[Path]:
     return entries
 
 
+def validate_release_tree(entries: list[Path]) -> None:
+    for path in entries:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(ROOT)
+        lower_name = path.name.lower()
+        if (
+            lower_name in FORBIDDEN_RELEASE_NAMES
+            or lower_name.endswith(FORBIDDEN_RELEASE_SUFFIXES)
+            or any(part in lower_name for part in FORBIDDEN_RELEASE_NAME_PARTS)
+        ):
+            raise ValueError(f"release tree contains runtime secret file: {relative}")
+        data = path.read_bytes()
+        if any(marker in data for marker in PRIVATE_KEY_MARKERS):
+            raise ValueError(f"release tree contains private-key material: {relative}")
+
+
 def normalized_tar_info(tar: tarfile.TarFile, path: Path, arcname: str) -> tarfile.TarInfo:
     info = tar.gettarinfo(str(path), arcname=arcname)
     info.uid = 0
@@ -62,12 +102,19 @@ def normalized_tar_info(tar: tarfile.TarFile, path: Path, arcname: str) -> tarfi
     if info.isdir():
         info.mode = 0o755
     else:
-        info.mode = 0o755 if path.suffix in {".sh", ".py", ".js", ".S"} or path.name in {"Makefile"} else 0o644
+        relative = path.relative_to(ROOT)
+        executable = path.name == "run-demo.sh" or (
+            relative.parts[0] in {"bin", "fixtures", "scripts"}
+            and path.suffix in {".sh", ".py", ".js"}
+        )
+        info.mode = 0o755 if executable else 0o644
     return info
 
 
 def build_source_archive(version: str) -> bytes:
     root_name = f"qos-{version}"
+    entries = archive_entries()
+    validate_release_tree(entries)
     tar_bytes = io.BytesIO()
     with tarfile.open(fileobj=tar_bytes, mode="w", format=tarfile.USTAR_FORMAT) as tar:
         root_info = tarfile.TarInfo(root_name)
@@ -79,7 +126,7 @@ def build_source_archive(version: str) -> bytes:
         root_info.gname = "root"
         root_info.mtime = 0
         tar.addfile(root_info)
-        for path in archive_entries():
+        for path in entries:
             relative = path.relative_to(ROOT).as_posix()
             info = normalized_tar_info(tar, path, f"{root_name}/{relative}")
             if info.isreg():
@@ -226,12 +273,12 @@ def build_release(output: Path, version: str) -> None:
     source_bytes = build_source_archive(version)
     source_path.write_bytes(source_bytes)
     source_hash = sha256_bytes(source_bytes)
-    readiness = (ROOT / "RELEASE_READINESS.md").read_bytes()
+    readiness = (ROOT / "docs" / "reports" / "RELEASE_READINESS.md").read_bytes()
     iso_readme = (
         f"qOS {version} research release media\n\n"
         "This ISO-9660 image is data media, not a bootable production firmware installer.\n"
         "It contains the deterministic source archive and the readiness report.\n"
-        "Read RELEASE_READINESS.md in the source archive before any use.\n\n"
+        "Read docs/reports/RELEASE_READINESS.md in the source archive before any use.\n\n"
         f"Source archive SHA-256: {source_hash}\n"
     ).encode("utf-8")
     source_checksum = f"{source_hash}  {source_name}\n".encode("ascii")

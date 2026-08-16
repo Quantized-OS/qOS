@@ -18,13 +18,19 @@ flowchart TD
 
 The immutable boot ROM or first mutable stage performs these operations:
 
-1. Validate fixed partition bounds before hashing any image.
-2. Hash the next stage with SHA3-384.
-3. Verify an ML-DSA-65 signature rooted in an immutable public key.
-4. Reject rollback below a hardware monotonic security version.
-5. Extend a measured-boot register.
-6. Lock root secrets and PMP configuration.
-7. Enter verified OpenSBI, which supplies the standard interface between
+1. Quiesce DMA and lock the manifest plus candidate image window before the
+   first read.
+2. Snapshot the manifest once and validate fixed partition bounds.
+3. Read rollback state through a fallible interface and reject older images.
+4. Hash the next stage with SHA3-384.
+5. Verify an ML-DSA-65 signature over a canonical, domain-separated manifest
+   rooted in an immutable public key.
+6. Extend a measured-boot register with every signed manifest field.
+7. Authenticate or bind the handoff FDT to ROM-owned data, measure it, and lock
+   it against mutation.
+8. Lock root secrets and PMP configuration.
+9. Atomically commit rollback state only after every preceding check succeeds.
+10. Enter verified OpenSBI, which supplies the standard interface between
    machine-mode firmware and the supervisor-mode OS.
 
 For resilience during migration, a production update format can require both
@@ -110,7 +116,8 @@ with preflight enabled, checks the returned signature, and polls confirmation
 status. RPC responses are untrusted inputs and are shape-checked.
 
 The compatibility software signer, relay, and API can run in one Node.js
-process for sandbox use. The preferred external-command mode keeps the private
+process for Devnet sandbox use. Mainnet submission rejects software signers.
+The external-command mode keeps the private
 key outside that process and verifies every returned Ed25519 signature against
 the provisioned public key. The signer adapter must independently pin and
 enforce the typed policy; otherwise it is only key isolation, not an
@@ -156,7 +163,8 @@ QEMU is not a hardware security boundary: its host can inspect guest memory and
 reads the demo key at runtime. The demo proves that the real
 bare-metal firmware code performs narrow policy signing; it does not prove
 physical key isolation, immutable boot ROM, power-loss-safe monotonic storage,
-or the unfinished ML-DSA stage-0 chain.
+or the unfinished ML-DSA stage-0 chain. The runner therefore refuses mainnet
+broadcast.
 
 ## Transaction routing and privacy
 

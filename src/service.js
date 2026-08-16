@@ -16,7 +16,7 @@ import {
   writeNewEncryptedEd25519Key,
   writeNewEd25519Key,
 } from "./key-store.js";
-import { loadPolicy, parseUnsigned, validateIntent, validatePolicy } from "./policy.js";
+import { loadPolicy, parseRpcSlot, parseUnsigned, validateIntent, validatePolicy } from "./policy.js";
 import { SolanaRpc } from "./rpc.js";
 import { EphemeralSession } from "./session.js";
 import {
@@ -34,6 +34,7 @@ import {
   verifyTokenTransferAccounts,
 } from "./token.js";
 import { intentCommitment, policyCommitment, SnarkProofGate, unwrapProofRequest } from "./zk.js";
+import { assertPrivateDirectory } from "./secure-file.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -169,6 +170,7 @@ export class QosService {
   }
 
   static open(home, { rpcUrl = process.env.SOLANA_RPC_URL } = {}) {
+    assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
     const paths = sandboxPaths(home);
     const legacyFiles = [paths.legacyAuditKey, paths.legacyAuditLog, paths.legacyAuditLock].filter(existsSync);
     assertQos(
@@ -244,6 +246,7 @@ export class QosService {
       this.rpc.getSlot(),
     ]);
     assertQos(typeof blockhashResult?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid latest blockhash");
+    const slot = parseRpcSlot(currentSlot);
     const intent = {
       version: 1,
       requestNonce: parsed.requestNonce,
@@ -260,7 +263,7 @@ export class QosService {
       maxRelayTip: "0",
       destination: parsed.destination,
       recentBlockhash: blockhashResult.value.blockhash,
-      expiresAtSlot: (BigInt(currentSlot) + BigInt(this.policy.maxIntentTtlSlots)).toString(),
+      expiresAtSlot: (slot + BigInt(this.policy.maxIntentTtlSlots)).toString(),
       strategyId: parsed.strategyId,
       operatorApproval: null,
     };
@@ -311,6 +314,7 @@ export class QosService {
       this.rpc.getSlot(),
     ]);
     assertQos(typeof blockhashResult?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid latest blockhash");
+    const slot = parseRpcSlot(currentSlot);
     const intent = {
       version: 2,
       requestNonce: parsed.requestNonce,
@@ -329,7 +333,7 @@ export class QosService {
       tokenProgram: this.policy.tokenTransfer.tokenProgram,
       decimals: this.policy.tokenTransfer.decimals,
       recentBlockhash: blockhashResult.value.blockhash,
-      expiresAtSlot: (BigInt(currentSlot) + BigInt(this.policy.maxIntentTtlSlots)).toString(),
+      expiresAtSlot: (slot + BigInt(this.policy.maxIntentTtlSlots)).toString(),
       strategyId: parsed.strategyId,
       operatorApproval: null,
     };
@@ -414,6 +418,11 @@ export class QosService {
     });
     if (this.policy.cluster === "mainnet-beta") {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
+      assertQos(
+        this.signer.status()?.keyExportableToAgentProcess === false,
+        "MAINNET_EXTERNAL_SIGNER_REQUIRED",
+        "Mainnet signing requires a non-exportable external signer that independently enforces the qOS typed policy",
+      );
     }
     signature = await this.signer.sign(message, {
       version: 1,

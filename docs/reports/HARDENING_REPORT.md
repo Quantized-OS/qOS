@@ -1,4 +1,4 @@
-# qOS v0.7.1 hardening report
+# qOS v0.7.2 hardening report
 
 Date: 2026-08-15
 
@@ -10,6 +10,35 @@ privacy controls, and regression coverage for the defects found during review.
 It also bounds and canonicalizes transaction parsing, removes provider error
 reflection, pins the QEMU demo signer inside the firmware image, and keeps raw
 signed transactions off the demo UART display channel.
+
+Version 0.7.2 adds the production-preparation pass: security-sensitive file
+reads are inode-bound and size-bounded; mainnet submission requires an external
+non-exportable signer; mainnet HTTP mode requires a secure token file; RPC,
+model, subprocess, token-account, and release inputs fail closed more narrowly;
+the stage-0 interface locks boot inputs before reading them; and the host-readable
+QEMU path can no longer broadcast on mainnet.
+
+## v0.7.2 production-preparation changes
+
+- Secure file helper with `O_NOFOLLOW`, regular-file and hard-link checks,
+  ownership/permission policy, before/open/after inode binding, bounded reads,
+  and concurrent-change rejection.
+- Strict API token file, duplicate authorization-header rejection, loopback
+  peer validation, origin-form request targets, and bounded headers/connections.
+- Redirect-free, JSON-only, bounded RPC and local-model clients; literal
+  loopback model URLs; safe integer slot parsing; and reduced DNS ambiguity.
+- Rooted external authorization envelope with recomputed intent commitment,
+  trusted executable validation, minimal subprocess environments, fixed working
+  directory, and stricter output cleanup.
+- Mainnet rejection of every software signer and QEMU mainnet broadcast.
+- Token-2022 mint authority, freeze authority, account delegate, native state,
+  close authority, delegated amount, and extension-set validation.
+- Pre-read boot-source/DMA lock hook, one-time volatile manifest snapshot,
+  fallible rollback read, canonical manifest measurement hook, authenticated
+  FDT hook, and manifest wipe before handoff.
+- Sanitized Cargo/QEMU launch environments, an isolated build-local Cargo home,
+  atomic provisioning record writes, remote-bootstrap removal, and release-tree
+  secret scanning.
 
 ## Implemented security changes
 
@@ -85,13 +114,14 @@ signed transactions off the demo UART display channel.
 ## Verification performed
 
 - `make check` passes.
-- 63 Node.js tests pass, including encryption/decryption failure, external
+- 85 Node.js tests pass, including encryption/decryption failure, external
   signer isolation, SNARK request binding, replay rejection, canonicalization,
   RPC size limits, HTTP bind restrictions, provisioning-policy binding,
   failure-output redaction, IPv6 loopback handling, nested sandbox
   initialization, firmware CLI help, canonical compact-length rejection,
   exceptional signature cleanup, provider-error redaction, and symlink
-  rejection.
+  rejection, plus Cargo hard-link normalization into a private single-link
+  runtime ELF.
 - Host C syntax checks pass with GCC, `-Wall -Wextra -Werror`.
 - Python firmware/static fail-closed invariants pass.
 - JavaScript syntax checks pass.
@@ -112,4 +142,5 @@ the host sandbox has no rollback-safe persistent nonce counter, JavaScript and
 native runtime internals cannot guarantee complete zeroization, QEMU is not a
 hardware boundary, and the package does not bundle a production SNARK circuit,
 ceremony, proving key, or verifier. See `SECURITY.md` for the deployment threat
-model and required controls.
+model and required controls, and `PRODUCTION_SECURITY_REVIEW.md` for the release
+decision and production acceptance criteria.

@@ -8,10 +8,20 @@ function sleep(milliseconds) {
 }
 
 async function readBoundedJson(response) {
+  const contentType = response.headers.get("content-type");
+  assertQos(
+    typeof contentType === "string" && /^application\/json(?:\s*;|$)/i.test(contentType),
+    "RPC_INVALID_CONTENT_TYPE",
+    "Solana RPC response must use application/json",
+  );
+  const contentEncoding = response.headers.get("content-encoding");
+  assertQos(contentEncoding === null || contentEncoding === "identity", "RPC_UNSUPPORTED_CONTENT_ENCODING", "Solana RPC response compression is not accepted");
   const contentLength = response.headers.get("content-length");
+  let expectedLength;
   if (contentLength !== null) {
     assertQos(/^(0|[1-9][0-9]*)$/.test(contentLength), "RPC_INVALID_LENGTH", "Solana RPC returned an invalid Content-Length");
     assertQos(Number(contentLength) <= MAX_RPC_RESPONSE_BYTES, "RPC_RESPONSE_TOO_LARGE", "Solana RPC response exceeds 2 MiB");
+    expectedLength = Number(contentLength);
   }
   assertQos(response.body !== null, "RPC_EMPTY_RESPONSE", "Solana RPC returned an empty response");
   const chunks = [];
@@ -26,6 +36,7 @@ async function readBoundedJson(response) {
       }
       chunks.push(bytes);
     }
+    assertQos(expectedLength === undefined || length === expectedLength, "RPC_INVALID_LENGTH", "Solana RPC response length does not match Content-Length");
     const body = Buffer.concat(chunks);
     try {
       const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
@@ -53,20 +64,31 @@ export class SolanaRpc {
   }
 
   async call(method, params = []) {
+    assertQos(this.id < Number.MAX_SAFE_INTEGER, "RPC_ID_EXHAUSTED", "Solana RPC request identifier space is exhausted");
     const id = ++this.id;
     let response;
     try {
       response = await fetch(this.url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "accept": "application/json", "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        redirect: "error",
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       throw new QosError("RPC_UNAVAILABLE", "Solana RPC request failed");
     }
-    assertQos(response.ok, "RPC_HTTP_ERROR", `Solana RPC returned HTTP ${response.status}`);
-    const payload = await readBoundedJson(response);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      assertQos(false, "RPC_HTTP_ERROR", `Solana RPC returned HTTP ${response.status}`);
+    }
+    let payload;
+    try {
+      payload = await readBoundedJson(response);
+    } catch (error) {
+      await response.body?.cancel().catch(() => {});
+      throw error;
+    }
     assertQos(payload && payload.jsonrpc === "2.0" && payload.id === id, "RPC_INVALID_RESPONSE", "Solana RPC response envelope is invalid");
     if (payload.error) {
       const rpcCode = Number.isSafeInteger(payload.error.code) ? payload.error.code : undefined;
@@ -137,10 +159,17 @@ export class SolanaRpc {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const statuses = await this.call("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
-      const status = statuses.value?.[0];
-      if (status?.err) {
+      assertQos(statuses && typeof statuses === "object" && Array.isArray(statuses.value) && statuses.value.length === 1, "RPC_INVALID_STATUS", "Solana RPC returned an invalid signature-status envelope");
+      const status = statuses.value[0];
+      if (status !== null && status !== undefined) {
+        assertQos(status && typeof status === "object" && !Array.isArray(status), "RPC_INVALID_STATUS", "Solana RPC returned an invalid signature status");
+        assertQos(Object.hasOwn(status, "err"), "RPC_INVALID_STATUS", "Solana RPC signature status omitted the transaction result");
+        assertQos(Number.isSafeInteger(status.slot) && status.slot >= 0, "RPC_INVALID_STATUS", "Solana RPC signature status returned an invalid slot");
+        assertQos([null, "processed", "confirmed", "finalized"].includes(status.confirmationStatus), "RPC_INVALID_STATUS", "Solana RPC returned an invalid confirmation status");
+      }
+      if (status && status.err !== null) {
         throw new QosError("TRANSACTION_FAILED", "Solana transaction failed", {
-          ...(Number.isSafeInteger(status.slot) ? { slot: status.slot } : {}),
+          slot: status.slot,
         });
       }
       const reachedCommitment = this.commitment === "finalized"

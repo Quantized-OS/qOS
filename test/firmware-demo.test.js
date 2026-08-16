@@ -1,19 +1,63 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { closeSync, readFileSync, readlinkSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  linkSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH } from "../src/constants.js";
 import {
+  assertFirmwareBroadcastAllowed,
   clusterGenesisBytes,
   encodeKeyMailbox,
   encodeIntentBundle,
   encodeIntentFrame,
+  installFirmwareElf,
   openRamBackedFile,
   parseFirmwareOutput,
   redactFirmwareOutput,
   validateProvisioningRecord,
 } from "../bin/qos-firmware-demo.js";
+
+test("firmware installation normalizes Cargo hard links into one private runtime ELF", { skip: process.platform === "win32" }, (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "qos-firmware-install-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  chmodSync(directory, 0o700);
+  const cargoOutput = join(directory, "cargo-output");
+  const cargoDependencyLink = join(directory, "cargo-dependency-link");
+  const installed = join(directory, "qos-firmware-demo.elf");
+  const contents = Buffer.from("synthetic-riscv-elf");
+  writeFileSync(cargoOutput, contents, { mode: 0o700 });
+  linkSync(cargoOutput, cargoDependencyLink);
+  assert.equal(lstatSync(cargoOutput).nlink, 2);
+
+  assert.equal(installFirmwareElf(cargoOutput, installed), installed);
+  assert.deepEqual(readFileSync(installed), contents);
+  assert.equal(lstatSync(cargoOutput).nlink, 2);
+  assert.equal(lstatSync(installed).nlink, 1);
+  assert.equal(lstatSync(installed).mode & 0o077, 0);
+  assert.notEqual(lstatSync(installed).mode & 0o100, 0);
+  contents.fill(0);
+});
+
+test("QEMU demo forbids mainnet broadcast because its seed is host-readable", () => {
+  assert.doesNotThrow(() => assertFirmwareBroadcastAllowed({ cluster: "mainnet-beta" }, false));
+  assert.doesNotThrow(() => assertFirmwareBroadcastAllowed({ cluster: "devnet" }, true));
+  assert.throws(
+    () => assertFirmwareBroadcastAllowed({ cluster: "mainnet-beta" }, true),
+    { code: "MAINNET_QEMU_BROADCAST_FORBIDDEN" },
+  );
+});
 
 function frame(overrides = {}) {
   return encodeIntentFrame({

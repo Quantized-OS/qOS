@@ -34,16 +34,22 @@ struct srtm_manifest {
  * port should bind them to ROM keys, one-time-programmable rollback state,
  * a vetted FIPS 204 implementation, measured boot storage, and RISC-V PMP.
  */
+bool platform_lock_boot_source(uintptr_t manifest_address,
+                               size_t manifest_length,
+                               uintptr_t image_address,
+                               size_t image_max_length);
+
 bool platform_sha3_384(const void *data, size_t length,
                        uint8_t digest[SRTM_SHA3_384_BYTES]);
 
 bool platform_verify_mldsa65_manifest(const struct srtm_manifest *manifest);
 
-uint64_t platform_read_security_version(void);
+bool platform_read_security_version(uint64_t *security_version);
 bool platform_commit_security_version(uint64_t new_version);
 
-bool platform_extend_boot_measurement(
-    const uint8_t digest[SRTM_SHA3_384_BYTES]);
+bool platform_extend_boot_measurement(const struct srtm_manifest *manifest);
+
+bool platform_validate_measure_and_lock_fdt(uintptr_t fdt_address);
 
 bool platform_lock_root_secrets(void);
 bool platform_configure_and_lock_pmp(uintptr_t image_address,

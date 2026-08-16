@@ -28,15 +28,14 @@ On Ubuntu or Debian, install QEMU's miscellaneous system targets:
 
 ```sh
 sudo apt-get update
-sudo apt-get install qemu-system-misc curl build-essential
+sudo apt-get install qemu-system-misc build-essential
 ```
 
-Install Rust with rustup if it is not already installed, then add the bare-metal
-RISC-V target:
+Install a pinned Rust/rustup release from a verified package source if it is not
+already installed. qOS intentionally does not download and execute a remote
+bootstrap script. Then add the bare-metal RISC-V target:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-. "$HOME/.cargo/env"
 rustup target add riscv64imac-unknown-none-elf
 ```
 
@@ -49,7 +48,10 @@ rustup target list --installed | grep riscv64imac-unknown-none-elf
 ```
 
 No RISC-V GCC toolchain is required. Cargo uses the committed `Cargo.lock` and
-retrieves the pinned dependencies during the first build.
+retrieves its locked dependencies during the first build. Production build
+infrastructure must additionally pin and verify the Rust toolchain and
+dependency source artifacts. The demo uses an isolated build-local Cargo home
+so user-level Cargo configuration, wrappers, and credentials are not inherited.
 
 Run `node bin/qos-firmware-demo.js --help` for the complete command-line
 surface. The repository wrapper also supports a build-only path that does not
@@ -72,6 +74,12 @@ This is a policy provisioning step. It reads the signer only to record its
 public identity, compiles policy constants into the M-mode ELF, restricts the
 build-tree permissions, and writes a non-secret provisioning record. The
 Ed25519 seed is not passed to Cargo and is not embedded in the ELF.
+
+Cargo may hard-link its final output to an internal dependency artifact. qOS
+therefore reads that output with inode, ownership, permission, stability, and
+size checks, atomically installs a separate owner-only ELF under
+`build/firmware-demo`, and requires that installed ELF to have exactly one hard
+link before it is measured or run.
 
 The build requires exactly one allowlisted destination. If `QOS_HOME` or
 `SOLANA_RPC_URL` was used for the host sandbox, export the same values here.
@@ -139,14 +147,14 @@ simulation differs from the provisioned policy. A successful result includes
 
 ## Rehearse the qOS token path
 
-Create and fund the separate mainnet sandbox as described in
-[`SANDBOX.md`](SANDBOX.md). Its signer and allowlisted destination must both
-already have qOS associated token accounts. Provision a separate firmware ELF
-from that policy:
+Create a separate disposable software-key demo home. Do not reuse the external
+mainnet custody home described in [`SANDBOX.md`](SANDBOX.md):
 
 ```sh
-node bin/qos-firmware-demo.js build --home .qos-ephemeral-mainnet
-node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
+node bin/qos.js init --home .qos-qemu-mainnet-demo --cluster mainnet-beta \
+  --destination YOUR_DEMO_DESTINATION
+node bin/qos-firmware-demo.js build --home .qos-qemu-mainnet-demo
+node bin/qos-firmware-demo.js run --home .qos-qemu-mainnet-demo \
   --asset token --amount 1000000 --offline
 ```
 
@@ -159,13 +167,10 @@ owner, mint, state, or insufficient source balance before QEMU runs in live
 mode. Offline mode deliberately skips onchain account and balance checks and
 reports `networkVerified: false`.
 
-Only after reviewing the verification-only result, enable a mainnet broadcast:
-
-```sh
-QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
-  --asset token --amount 1000000 --broadcast
-```
+The QEMU runner refuses mainnet broadcast. Its runtime Ed25519 seed is readable
+by the host, so an environment opt-in cannot turn it into a custody boundary.
+Use this path only with a disposable, capped demo signer for offline rehearsal
+or live simulation.
 
 ## Presenter script
 
@@ -178,7 +183,8 @@ Explain the boundary in four sentences while the command runs:
 
 ## Security limitations
 
-This is an engineering demonstration, not a custody product. QEMU's host can
+This is an engineering demonstration, not a custody product. Mainnet broadcast
+is disabled. QEMU's host can
 inspect guest memory and signer.pem exists on the host. The ELF contains no
 seed, but the host loads the seed into an unlinked tmpfs file descriptor at
 runtime. Linux tmpfs is RAM-backed but may use swap; disable swap and core

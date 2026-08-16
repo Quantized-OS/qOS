@@ -16,15 +16,20 @@ The agent proposes only this typed action:
 ```
 
 qOS then performs the authoritative checks: mainnet cluster identity, pinned
-qOS mint, Token-2022 program, decimals, mint extensions, associated token
-accounts, destination allowlist, transfer limit, source balance, fee, fresh
-blockhash, simulation, signature verification, and confirmation.
+qOS mint, Token-2022 program, decimals, mint authorities/extensions, associated
+token accounts, delegates/close authorities/extensions, destination allowlist,
+transfer limit, source balance, fee, fresh blockhash, simulation, signature
+verification, and confirmation.
 
 ## Prerequisites
 
-Use a separate mainnet home. Review its `policy.json`, and use an external
-non-exportable signer for an agent deployment. The plaintext-development key
-profile is disposable-demo only.
+Use a separate mainnet home and review its `policy.json`. Mainnet submission
+requires an external non-exportable signer; software-key profiles are rejected.
+Configure the reviewed adapter before running any example:
+
+```sh
+export QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter
+```
 
 The signer needs enough SOL for one transaction fee and enough qOS base units.
 The destination owner must already have its qOS associated token account. qOS

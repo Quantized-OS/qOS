@@ -27,6 +27,7 @@ This demo transfers the pinned qOS Token-2022 asset; it is not a DEX swap.
 
 function parseArgs(argv) {
   const options = { agent: "basic" };
+  const seen = new Set();
   const valueOptions = new Set(["home", "amount", "agent", "model-url", "model", "destination"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -35,18 +36,25 @@ function parseArgs(argv) {
       process.exit(0);
     }
     if (arg === "--broadcast" || arg === "--confirm-live") {
-      options[arg.slice(2)] = true;
+      const key = arg.slice(2);
+      assertQos(!seen.has(key), "DUPLICATE_ARGUMENT", `Duplicate --${key}`);
+      seen.add(key);
+      options[key] = true;
       continue;
     }
     const match = arg.match(/^--([^=]+)=(.*)$/);
     if (match) {
       assertQos(valueOptions.has(match[1]), "CLI_ARGUMENT_INVALID", `Unknown option: --${match[1]}`);
+      assertQos(!seen.has(match[1]), "DUPLICATE_ARGUMENT", `Duplicate --${match[1]}`);
+      seen.add(match[1]);
       options[match[1]] = match[2];
       continue;
     }
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       assertQos(valueOptions.has(key), "CLI_ARGUMENT_INVALID", `Unknown option: --${key}`);
+      assertQos(!seen.has(key), "DUPLICATE_ARGUMENT", `Duplicate --${key}`);
+      seen.add(key);
       const value = argv[index + 1];
       assertQos(value && !value.startsWith("--"), "CLI_ARGUMENT_INVALID", `Missing value for --${key}`);
       options[key] = value;
@@ -63,6 +71,7 @@ function printEvent(event, details = {}) {
 }
 
 async function main() {
+  process.umask(0o077);
   const options = parseArgs(process.argv.slice(2));
   assertQos(typeof options.home === "string", "CLI_ARGUMENT_INVALID", "--home is required");
   assertQos(typeof options.amount === "string", "CLI_ARGUMENT_INVALID", "--amount is required");

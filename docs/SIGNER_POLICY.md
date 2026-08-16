@@ -112,6 +112,13 @@ expiry slot, calculated fee, and its own serialized message before it releases
 the transaction. A send RPC response is not considered success; the relay
 waits for `confirmed` or `finalized` status.
 
+Mainnet submission is permitted only through a signer that reports a
+non-exportable external custody boundary. The external adapter receives the
+typed intent, intent commitment, policy commitment, proof status, and proposed
+message. It must reconstruct the exact message from protected policy and compare
+the result byte-for-byte before authorizing the Ed25519 operation. A generic
+byte-signing adapter does not satisfy this contract.
+
 ## Explicitly forbidden interfaces
 
 - Sign arbitrary bytes

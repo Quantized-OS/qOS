@@ -5,18 +5,19 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readdirSync,
+  renameSync,
   statfsSync,
-  statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TextDecoder } from "node:util";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { canonicalJson } from "../src/canonical.js";
 import { assertQos, publicError, QosError } from "../src/errors.js";
@@ -26,7 +27,7 @@ import {
   publicKeyAddress,
   publicKeyObjectFromRaw,
 } from "../src/key-store.js";
-import { loadPolicy, parseUnsigned } from "../src/policy.js";
+import { loadPolicy, parseRpcSlot, parseUnsigned } from "../src/policy.js";
 import { SolanaRpc } from "../src/rpc.js";
 import {
   buildNativeTransferMessage,
@@ -35,16 +36,21 @@ import {
   parseTokenTransferCheckedMessage,
 } from "../src/transaction.js";
 import { associatedTokenAddress, verifyTokenTransferAccounts } from "../src/token.js";
+import { assertPrivateDirectory, readSecureFile } from "../src/secure-file.js";
+import { assertTrustedExecutable } from "../src/subprocess.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const FIRMWARE_DIR = join(ROOT, "firmware-demo");
 const BUILD_DIR = join(ROOT, "build", "firmware-demo");
-const FIRMWARE_ELF = join(FIRMWARE_DIR, "target", "riscv64imac-unknown-none-elf", "release", "qos-firmware-demo");
+const CARGO_FIRMWARE_ELF = join(FIRMWARE_DIR, "target", "riscv64imac-unknown-none-elf", "release", "qos-firmware-demo");
+const FIRMWARE_ELF = join(BUILD_DIR, "qos-firmware-demo.elf");
 const PROVISIONING_FILE = join(BUILD_DIR, "provisioning.json");
 const FRAME_SIZE = 304;
 const BUNDLE_MAGIC = Buffer.from("QOSINTV2");
 const KEY_MAGIC = Buffer.from("QOSKEYV1");
 const LINUX_TMPFS_MAGIC = 0x01021994;
+const DEFAULT_QEMU = "/usr/bin/qemu-system-riscv64";
+const SAFE_TOOL_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 function usage() {
   return `qOS QEMU firmware transaction demo
@@ -58,6 +64,7 @@ Usage:
 
 build provisions a key-independent M-mode RV64 ELF and records its measurement.
 run reads signer.pem only to create an unlinked RAM key mailbox for QEMU.
+Mainnet broadcast is forbidden because that software seed is host-readable.
 `;
 }
 
@@ -93,24 +100,82 @@ function policyPath(home) {
   return join(home, "policy.json");
 }
 
+function toolEnvironment({ isolatedCargo = false } = {}) {
+  const installedCargoHome = resolve(process.env.CARGO_HOME ?? join(process.env.HOME ?? "/", ".cargo"));
+  return {
+    ...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
+    CARGO_HOME: isolatedCargo ? join(BUILD_DIR, "cargo-home") : installedCargoHome,
+    ...(process.env.RUSTUP_HOME === undefined ? {} : { RUSTUP_HOME: process.env.RUSTUP_HOME }),
+    PATH: `${join(installedCargoHome, "bin")}:${SAFE_TOOL_PATH}`,
+    LANG: "C",
+    LC_ALL: "C",
+  };
+}
+
 function commandAvailable(command) {
-  const result = spawnSync(command, ["--version"], { stdio: "ignore", timeout: 5_000 });
+  const result = spawnSync(command, ["--version"], {
+    cwd: "/",
+    env: toolEnvironment(),
+    stdio: "ignore",
+    timeout: 5_000,
+  });
   return result.error === undefined && result.status === 0;
 }
 
 function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  const bytes = readSecureFile(path, {
+    privateFile: true,
+    maxBytes: 64 * 1024 * 1024,
+    errorCode: "INSECURE_FIRMWARE_FILE",
+    label: "Firmware ELF",
+  });
+  try {
+    return createHash("sha256").update(bytes).digest("hex");
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 function restrictTree(path) {
   if (!existsSync(path)) return;
-  const metadata = statSync(path);
+  const metadata = lstatSync(path);
+  assertQos(!metadata.isSymbolicLink(), "UNSAFE_BUILD_OUTPUT", "Firmware build output must not contain symbolic links");
   if (!metadata.isDirectory()) {
     chmodSync(path, (metadata.mode & 0o111) === 0 ? 0o600 : 0o700);
     return;
   }
   chmodSync(path, 0o700);
   for (const entry of readdirSync(path)) restrictTree(join(path, entry));
+}
+
+export function installFirmwareElf(source, destination) {
+  assertQos(resolve(source) !== resolve(destination), "INVALID_FIRMWARE_INSTALL", "Cargo output and installed firmware paths must differ");
+  assertPrivateDirectory(dirname(destination), {
+    errorCode: "INSECURE_FIRMWARE_INSTALL_DIRECTORY",
+    label: "Firmware install directory",
+  });
+  const bytes = readSecureFile(source, {
+    privateFile: true,
+    requireSingleLink: false,
+    maxBytes: 64 * 1024 * 1024,
+    errorCode: "INSECURE_FIRMWARE_BUILD_OUTPUT",
+    label: "Cargo firmware ELF",
+  });
+  const temporary = `${destination}.tmp-${process.pid}-${randomBytes(12).toString("hex")}`;
+  try {
+    writeFileSync(temporary, bytes, { flag: "wx", mode: 0o700 });
+    chmodSync(temporary, 0o700);
+    renameSync(temporary, destination);
+    return destination;
+  } catch (error) {
+    if (error instanceof QosError) throw error;
+    throw new QosError("FIRMWARE_INSTALL_FAILED", "Could not install the private firmware ELF");
+  } finally {
+    bytes.fill(0);
+    if (existsSync(temporary)) {
+      try { unlinkSync(temporary); } catch {}
+    }
+  }
 }
 
 function writeU128LE(buffer, value, offset) {
@@ -123,8 +188,7 @@ function writeU128LE(buffer, value, offset) {
 }
 
 export function clusterGenesisBytes(clusterGenesis) {
-  const decoded = decodeBase58(clusterGenesis);
-  assertQos(decoded.length <= 32, "INVALID_CLUSTER_GENESIS", "Cluster genesis identity exceeds the 32-byte firmware field");
+  const decoded = decodeBase58(clusterGenesis, 32);
   const field = Buffer.alloc(32);
   decoded.copy(field, field.length - decoded.length);
   return field;
@@ -252,7 +316,7 @@ function provisioningEnv(home, policy) {
     sourceTokenAccount,
     destinationTokenAccount,
     env: {
-      ...process.env,
+      ...toolEnvironment({ isolatedCargo: true }),
       QOS_FW_SIGNER_HEX: decodeBase58(signer, 32).toString("hex"),
       QOS_FW_GENESIS_HEX: clusterGenesisBytes(policy.clusterGenesis).toString("hex"),
       QOS_FW_DESTINATION_HEX: decodeBase58(policy.allowedDestinations[0], 32).toString("hex"),
@@ -272,22 +336,29 @@ function provisioningEnv(home, policy) {
 }
 
 export function buildFirmware(home) {
+  assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
   assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
   assertQos(existsSync(join(home, "signer.pem")), "SANDBOX_NOT_INITIALIZED", `No qOS signer found in ${home}; run node bin/qos.js init first`);
   assertQos(commandAvailable("cargo"), "CARGO_REQUIRED", "Install Rust/Cargo before building the firmware demo");
   assertQos(commandAvailable("rustup"), "RUSTUP_REQUIRED", "Install rustup before building the firmware demo");
-  const targets = execFileSync("rustup", ["target", "list", "--installed"], { encoding: "utf8" });
+  const targets = execFileSync("rustup", ["target", "list", "--installed"], {
+    cwd: "/",
+    env: toolEnvironment(),
+    encoding: "utf8",
+  });
   assertQos(targets.split(/\s+/).includes("riscv64imac-unknown-none-elf"), "RUST_TARGET_REQUIRED", "Run: rustup target add riscv64imac-unknown-none-elf");
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   const { privateKey, sourceTokenAccount, destinationTokenAccount, env } = provisioningEnv(home, policy);
   mkdirSync(BUILD_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(BUILD_DIR, 0o700);
   execFileSync("cargo", ["build", "--release", "--locked"], {
     cwd: FIRMWARE_DIR,
     env,
     stdio: "inherit",
   });
-  assertQos(existsSync(FIRMWARE_ELF), "FIRMWARE_BUILD_MISSING", "Cargo completed without producing the firmware ELF");
+  assertQos(existsSync(CARGO_FIRMWARE_ELF), "FIRMWARE_BUILD_MISSING", "Cargo completed without producing the firmware ELF");
   restrictTree(join(FIRMWARE_DIR, "target"));
+  installFirmwareElf(CARGO_FIRMWARE_ELF, FIRMWARE_ELF);
   const record = {
     version: 3,
     firmwareElf: FIRMWARE_ELF,
@@ -306,8 +377,14 @@ export function buildFirmware(home) {
     },
     provisionedAt: new Date().toISOString(),
   };
-  writeFileSync(PROVISIONING_FILE, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(PROVISIONING_FILE, 0o600);
+  const temporaryProvisioningFile = `${PROVISIONING_FILE}.tmp-${process.pid}-${randomBytes(12).toString("hex")}`;
+  try {
+    writeFileSync(temporaryProvisioningFile, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    chmodSync(temporaryProvisioningFile, 0o600);
+    renameSync(temporaryProvisioningFile, PROVISIONING_FILE);
+  } finally {
+    if (existsSync(temporaryProvisioningFile)) unlinkSync(temporaryProvisioningFile);
+  }
   return record;
 }
 
@@ -331,9 +408,30 @@ export function validateProvisioningRecord(record, policy, firmwareSha256) {
   return record;
 }
 
+export function assertFirmwareBroadcastAllowed(policy, broadcast) {
+  if (broadcast && policy.cluster === "mainnet-beta") {
+    assertQos(
+      false,
+      "MAINNET_QEMU_BROADCAST_FORBIDDEN",
+      "The QEMU demo uses a host-readable software seed and may not broadcast on mainnet",
+    );
+  }
+}
+
 function loadProvisioning(home, policy) {
   assertQos(existsSync(PROVISIONING_FILE) && existsSync(FIRMWARE_ELF), "FIRMWARE_NOT_PROVISIONED", "Run the firmware demo build command first");
-  const record = JSON.parse(readFileSync(PROVISIONING_FILE, "utf8"));
+  const bytes = readSecureFile(PROVISIONING_FILE, {
+    privateFile: true,
+    maxBytes: 64 * 1024,
+    errorCode: "BAD_PROVISIONING_RECORD",
+    label: "Firmware provisioning record",
+  });
+  let record;
+  try {
+    record = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } finally {
+    bytes.fill(0);
+  }
   return validateProvisioningRecord(record, policy, sha256File(FIRMWARE_ELF));
 }
 
@@ -391,11 +489,14 @@ function verifyFirmwareTransaction(signature, record, intent) {
 }
 
 export async function runFirmware(home, { asset = "sol", lamports = undefined, amount = undefined, broadcast = false, offline = false } = {}) {
-  const qemu = process.env.QOS_FIRMWARE_DEMO_QEMU ?? "qemu-system-riscv64";
+  const qemu = process.env.QOS_FIRMWARE_DEMO_QEMU ?? DEFAULT_QEMU;
+  assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
   assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
+  assertTrustedExecutable(qemu, "QEMU");
   assertQos(commandAvailable(qemu), "QEMU_REQUIRED", "Install qemu-system-riscv64 before running the firmware demo");
   assertQos(!(offline && broadcast), "OFFLINE_BROADCAST_CONFLICT", "--offline cannot be combined with --broadcast");
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
+  assertFirmwareBroadcastAllowed(policy, broadcast);
   const record = loadProvisioning(home, policy);
   const privateKey = loadPrivateKey(join(home, "signer.pem"));
   assertQos(publicKeyAddress(privateKey) === record.signer, "SIGNER_MEASUREMENT_MISMATCH", "Runtime signer does not match the provisioned firmware identity");
@@ -423,6 +524,7 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     assertQos(genesis === record.clusterGenesis, "RPC_CLUSTER_MISMATCH", "RPC endpoint does not match provisioned firmware cluster");
     assertQos(typeof latest?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid blockhash");
   }
+  const slot = parseRpcSlot(currentSlot);
   if (asset === "token" && !offline) {
     await verifyTokenTransferAccounts({
       rpc,
@@ -443,8 +545,8 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     minimumOutput: transferAmount,
     maxFeeLamports: BigInt(record.maxFeeLamports),
     recentBlockhash: latest.value.blockhash,
-    expiresAtSlot: BigInt(currentSlot) + BigInt(record.maxIntentTtlSlots),
-    currentSlot: BigInt(currentSlot),
+    expiresAtSlot: slot + BigInt(record.maxIntentTtlSlots),
+    currentSlot: slot,
     strategyId: record.strategyId,
     ...(asset === "token" ? {
       mint: record.tokenTransfer.mint,
@@ -483,7 +585,9 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
     "-monitor", "none",
     "-no-reboot",
     ], {
+      cwd: "/",
       encoding: "utf8",
+      env: { LANG: "C", LC_ALL: "C", PATH: SAFE_TOOL_PATH },
       timeout: 30_000,
       maxBuffer: 4 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe", intentFd, keyFd],
@@ -551,9 +655,6 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
       transactionRetained: false,
       detailsReturned: false,
     };
-  }
-  if (policy.cluster === "mainnet-beta") {
-    assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
   }
   const rpcSignature = await rpc.sendTransaction(verified.transactionBase64);
   assertQos(rpcSignature === verified.signature, "SIGNATURE_MISMATCH", "RPC returned a different signature");

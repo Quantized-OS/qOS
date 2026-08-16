@@ -121,7 +121,6 @@ export function assembleSignedTransaction(message, publicKeyBytes, signatureByte
     return {
       signature: encodeBase58(signature),
       publicKey: encodeBase58(publicKey),
-      messageBase64: Buffer.from(message).toString("base64"),
       transactionBase64: transaction.toString("base64"),
       transactionBytes: transaction.length,
     };
