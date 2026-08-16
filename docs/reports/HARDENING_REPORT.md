@@ -1,4 +1,4 @@
-# qOS v0.7.2 hardening report
+# qOS v0.7.3 hardening report
 
 Date: 2026-08-15
 
@@ -11,14 +11,14 @@ It also bounds and canonicalizes transaction parsing, removes provider error
 reflection, pins the QEMU demo signer inside the firmware image, and keeps raw
 signed transactions off the demo UART display channel.
 
-Version 0.7.2 adds the production-preparation pass: security-sensitive file
+Version 0.7.3 adds the production-preparation pass: security-sensitive file
 reads are inode-bound and size-bounded; mainnet submission requires an external
 non-exportable signer; mainnet HTTP mode requires a secure token file; RPC,
 model, subprocess, token-account, and release inputs fail closed more narrowly;
 the stage-0 interface locks boot inputs before reading them; and the host-readable
 QEMU path can no longer broadcast on mainnet.
 
-## v0.7.2 production-preparation changes
+## v0.7.3 production-preparation changes
 
 - Secure file helper with `O_NOFOLLOW`, regular-file and hard-link checks,
   ownership/permission policy, before/open/after inode binding, bounded reads,
@@ -30,7 +30,9 @@ QEMU path can no longer broadcast on mainnet.
 - Rooted external authorization envelope with recomputed intent commitment,
   trusted executable validation, minimal subprocess environments, fixed working
   directory, and stricter output cleanup.
-- Mainnet rejection of every software signer and QEMU mainnet broadcast.
+- Mainnet rejection of unacknowledged software signers and QEMU mainnet
+  broadcast. A setup-created `mainnet-insecure` profile is the explicit
+  software-custody exception.
 - Token-2022 mint authority, freeze authority, account delegate, native state,
   close authority, delegated amount, and extension-set validation.
 - Pre-read boot-source/DMA lock hook, one-time volatile manifest snapshot,
@@ -39,13 +41,25 @@ QEMU path can no longer broadcast on mainnet.
 - Sanitized Cargo/QEMU launch environments, an isolated build-local Cargo home,
   atomic provisioning record writes, remote-bootstrap removal, and release-tree
   secret scanning.
-- A one-command Ubuntu clone-to-shell path using official pinned Node.js and
-  rustup artifacts, upstream SHA-256 verification, a dedicated user toolchain,
-  regression gates, profile provisioning, firmware measurement, and atomic
-  user-local launchers.
+- A guided Ubuntu clone-to-shell path using `setup.sh install`, mainnet
+  external custody by default, an explicit `--devnet` development path,
+  official pinned Node.js and rustup artifacts, upstream SHA-256 verification,
+  a dedicated user toolchain, regression gates, profile provisioning, firmware
+  measurement, and atomic user-local launchers.
+- An explicit `--insecure` mainnet wizard that prints the host-accessible key
+  risk before changes, requires acknowledgement, generates one owner-only
+  software key, and retains the same implemented mainnet operation surface.
 - Owner-only runtime profiles and generated loopback API tokens whose values
-  are never printed by setup, plus a restricted qOS Shell that never evaluates
-  arbitrary shell text and requires explicit broadcast confirmations.
+  are never printed by setup, plus a bannered restricted qOS Shell that never
+  evaluates arbitrary shell text, supports direct and interactive shorthand
+  commands, and requires explicit broadcast confirmations.
+- A managed `setup.sh uninstall` action that removes only marked qOS launchers
+  and deliberately preserves profiles, policies, keys, API tokens, toolchains,
+  and source.
+- A mainnet setup wizard that explains the external signer in plain terms,
+  validates a new profile's adapter executable before system changes, prints the exact
+  signer protocol guide when custody is not ready, and requires review of the
+  final network/signer/destination/path summary.
 
 ## Implemented security changes
 
@@ -122,11 +136,16 @@ QEMU path can no longer broadcast on mainnet.
     intended runtime boundary. Tests now copy the synthetic adapter into a
     private mode-0700 temporary file; production adapter validation remains
     unchanged and fail-closed.
+25. An upgraded source directory could retain the retired Devnet-default
+    `install.sh`, causing the static security suite to fail only after toolchain
+    installation. Setup now recognizes that exact legacy qOS script, moves it
+    to a private release-excluded recovery directory before dependency work,
+    and refuses to alter an unrecognized file.
 
 ## Verification performed
 
 - `make check` passes.
-- 96 Node.js tests pass, including encryption/decryption failure, external
+- 97 Node.js tests pass, including encryption/decryption failure, external
   signer isolation, SNARK request binding, replay rejection, canonicalization,
   RPC size limits, HTTP bind restrictions, provisioning-policy binding,
   failure-output redaction, IPv6 loopback handling, nested sandbox
@@ -134,7 +153,9 @@ QEMU path can no longer broadcast on mainnet.
   exceptional signature cleanup, provider-error redaction, and symlink
   rejection, Cargo hard-link normalization into a private single-link runtime
   ELF, runtime-profile custody checks, fail-closed DEX capability reporting,
-  broadcast confirmation, and side-effect-free installer help.
+  broadcast confirmation, shorthand shell commands, mainnet-default setup,
+  the guided signer flow, safe retired-installer recovery, managed uninstall,
+  and side-effect-free setup/uninstall help.
 - The complete suite also passes with the repository signer fixture temporarily
   set to mode 0775, reproducing the reported shared-checkout permission state.
 - Host C syntax checks pass with GCC, `-Wall -Wextra -Werror`.

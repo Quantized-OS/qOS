@@ -11,32 +11,75 @@ import { loadRuntimeProfile } from "../src/runtime-profile.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAX_COMMAND_BYTES = 4096;
+const BANNER = [
+  "  qqq     OOO    SSS",
+  " q   q   O   O  S",
+  " q   q   O   O   SSS",
+  "  qqqq    OOO       S",
+  "     q           SSS",
+  "       secure firmware shell",
+].join("\n");
+
+const COMMAND_ALIASES = new Map([
+  ["cap", "capabilities"],
+  ["capa", "capabilities"],
+  ["stat", "status"],
+  ["addr", "address"],
+  ["hlth", "health"],
+  ["bal", "balance"],
+  ["drop", "airdrop"],
+  ["s", "sol"],
+  ["tok", "token"],
+  ["fw", "firmware"],
+  ["ag", "agent"],
+  ["api", "serve"],
+  ["audit", "security-audit"],
+  ["tr", "trade"],
+  ["h", "help"],
+  ["?", "help"],
+  ["x", "exit"],
+  ["q", "exit"],
+]);
+const SOL_ACTION_ALIASES = new Map([["prep", "prepare"], ["snd", "send"]]);
+const TOKEN_ACTION_ALIASES = new Map([
+  ["addr", "address"],
+  ["bal", "balance"],
+  ["prep", "prepare"],
+  ["snd", "send"],
+]);
+const FIRMWARE_ACTION_ALIASES = new Map([
+  ["bld", "build"],
+  ["off", "offline"],
+  ["cast", "broadcast"],
+]);
+const AGENT_ACTION_ALIASES = new Map([["dry", "dry-run"], ["cast", "broadcast"]]);
+const ASSET_ALIASES = new Map([["s", "sol"], ["tok", "token"], ["t", "token"]]);
 
 function usage() {
-  return `qOS command shell
+  return `${BANNER}
+
+qOS command shell
 
 Usage:
-  qos-shell [--home PATH]
-  qos-shell [--home PATH] --run COMMAND [ARGUMENTS...]
+  qos [-H|--home PATH]
+  qos [-H|--home PATH] [-r|--run] COMMAND [ARGUMENTS...]
 
-Commands:
-  capabilities
-  status | address | health | balance [ADDRESS]
-  airdrop [LAMPORTS]
-  sol prepare [LAMPORTS]
-  sol send LAMPORTS --confirm-broadcast
-  token address [OWNER] | token balance [OWNER]
-  token prepare AMOUNT
-  token send AMOUNT --confirm-live
-  firmware build
-  firmware offline|live [sol|token] [AMOUNT]
-  firmware broadcast [sol|token] [AMOUNT] --confirm-live
-  agent dry-run AMOUNT [--agent basic|model] [--model-url URL] [--model NAME]
-  agent broadcast AMOUNT --confirm-live [agent options]
-  serve [PORT]
-  security-audit
-  trade
-  help | exit
+Commands (long | shorthand):
+  capabilities | capa
+  status | stat        address | addr       health | hlth
+  balance | bal [ADDRESS]                  airdrop | drop [LAMPORTS]
+  sol | s prepare|prep [LAMPORTS]
+  sol | s send|snd LAMPORTS --confirm-broadcast
+  token | tok address|addr [OWNER]          token | tok balance|bal [OWNER]
+  token | tok prepare|prep AMOUNT
+  token | tok send|snd AMOUNT --confirm-live
+  firmware | fw build|bld
+  firmware | fw offline|off|live [sol|s|token|tok] [AMOUNT]
+  firmware | fw broadcast|cast [sol|s|token|tok] [AMOUNT] --confirm-live
+  agent | ag dry-run|dry AMOUNT [-a basic|model] [-u URL] [-m NAME]
+  agent | ag broadcast|cast AMOUNT --confirm-live [agent options]
+  serve | api [PORT]     security-audit | audit     trade | tr
+  help | h | ?           exit | x | q
 
 The shell never executes arbitrary shell text. Broadcast commands require the
 listed confirmation option and remain constrained by the qOS policy signer.
@@ -48,22 +91,26 @@ missing reviewed venue template instead of submitting anything.
 function parseProcessArgs(argv) {
   let home = process.env.QOS_HOME;
   let run = null;
+  let homeSeen = false;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "-h" || token === "--help") return { help: true, home, run };
-    if (token === "--home") {
-      if (home !== undefined && argv.slice(0, index).includes("--home")) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --home");
+    if (token === "-H" || token === "--home") {
+      if (homeSeen) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --home");
+      homeSeen = true;
       const value = argv[++index];
       if (!value || value.startsWith("--")) throw new QosError("MISSING_ARGUMENT", "--home requires a path");
       home = value;
       continue;
     }
-    if (token === "--run") {
+    if (token === "-r" || token === "--run") {
       run = argv.slice(index + 1);
       if (run.length === 0) throw new QosError("MISSING_ARGUMENT", "--run requires a qOS Shell command");
       break;
     }
-    throw new QosError("INVALID_ARGUMENT", `Unexpected argument: ${token}`);
+    if (token.startsWith("-")) throw new QosError("INVALID_ARGUMENT", `Unexpected argument: ${token}`);
+    run = argv.slice(index);
+    break;
   }
   return { help: false, home, run };
 }
@@ -79,6 +126,22 @@ function canonicalAmount(value, label) {
     throw new QosError("INVALID_AMOUNT", `${label} must be a positive canonical integer`);
   }
   return value;
+}
+
+function expandAliases(tokens) {
+  const expanded = [...tokens];
+  expanded[0] = COMMAND_ALIASES.get(expanded[0]) ?? expanded[0];
+  if (expanded[0] === "sol" && expanded[1] !== undefined) {
+    expanded[1] = SOL_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+  } else if (expanded[0] === "token" && expanded[1] !== undefined) {
+    expanded[1] = TOKEN_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+  } else if (expanded[0] === "firmware") {
+    if (expanded[1] !== undefined) expanded[1] = FIRMWARE_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+    if (expanded[2] !== undefined) expanded[2] = ASSET_ALIASES.get(expanded[2]) ?? expanded[2];
+  } else if (expanded[0] === "agent" && expanded[1] !== undefined) {
+    expanded[1] = AGENT_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+  }
+  return expanded;
 }
 
 function runProgram(script, args, context, extraEnvironment = {}) {
@@ -106,10 +169,16 @@ function qos(args, context, extraEnvironment = {}) {
 function printCapabilities(context) {
   const tokenEnabled = context.policy.tokenTransfer !== null;
   const nativeEnabled = BigInt(context.policy.maxTransferLamports) > 0n;
+  const insecureMainnet = context.runtime.profile === "mainnet-insecure";
   process.stdout.write(`${JSON.stringify({
     profile: context.runtime.profile,
     cluster: context.policy.cluster,
-    signerMode: context.runtime.signerCommand === null ? "development-software" : "external-non-exportable-boundary",
+    signerMode: insecureMainnet
+      ? "local-software-key-accessible"
+      : context.runtime.signerCommand === null
+        ? "development-software"
+        : "external-non-exportable-boundary",
+    keyAccessibleToLocalProcesses: context.runtime.signerCommand === null,
     operations: [
       "policy-status",
       ...(nativeEnabled ? ["native-sol-intent", "native-sol-transfer"] : []),
@@ -125,8 +194,9 @@ function printCapabilities(context) {
 function parseAgentOptions(tokens) {
   const options = [];
   const allowed = new Set(["--agent", "--model-url", "--model"]);
+  const aliases = new Map([["-a", "--agent"], ["-u", "--model-url"], ["-m", "--model"]]);
   for (let index = 0; index < tokens.length; index += 1) {
-    const option = tokens[index];
+    const option = aliases.get(tokens[index]) ?? tokens[index];
     if (!allowed.has(option)) throw new QosError("INVALID_ARGUMENT", `Unknown agent option: ${option}`);
     const value = tokens[++index];
     if (!value || value.startsWith("--")) throw new QosError("MISSING_ARGUMENT", `${option} requires a value`);
@@ -143,7 +213,7 @@ function firmwareAmountArgs(asset, amount) {
 
 function dispatch(tokens, context) {
   if (tokens.length === 0) return { status: 0, exit: false };
-  const [command, ...rest] = tokens;
+  const [command, ...rest] = expandAliases(tokens);
   if (command === "help") {
     process.stdout.write(usage());
     return { status: 0, exit: false };
@@ -282,7 +352,7 @@ async function main() {
     process.stdout.write(usage());
     return;
   }
-  if (options.run?.[0] === "help") {
+  if (options.run !== null && expandAliases(options.run)[0] === "help") {
     process.stdout.write(usage());
     return;
   }
@@ -296,7 +366,8 @@ async function main() {
     throw new QosError("INTERACTIVE_TTY_REQUIRED", "Use --run for non-interactive qOS Shell commands");
   }
 
-  process.stdout.write(`qOS Shell — ${context.runtime.profile} (${context.policy.cluster})\n`);
+  process.stdout.write(`${BANNER}\n\n`);
+  process.stdout.write(`Profile: ${context.runtime.profile} (${context.policy.cluster})\n`);
   process.stdout.write("Type help for commands. No transaction has been broadcast.\n");
   const terminal = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   terminal.setPrompt("qos> ");

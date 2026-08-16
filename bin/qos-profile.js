@@ -9,8 +9,9 @@ function usage() {
   return `qOS runtime profile manager
 
 Usage:
-  qos-profile create --home PATH --profile devnet|mainnet-external
+  qos-profile create --home PATH --profile devnet|mainnet-external|mainnet-insecure
                      [--signer-command /absolute/path/to/adapter]
+                     [--accept-insecure-risk]
   qos-profile show --home PATH
 
 The generated API token remains in an owner-only file. Its value is never
@@ -26,6 +27,10 @@ function parseArgs(argv) {
     if (!token.startsWith("--")) throw new QosError("INVALID_ARGUMENT", `Unexpected argument: ${token}`);
     const name = token.slice(2);
     if (Object.hasOwn(options, name)) throw new QosError("DUPLICATE_ARGUMENT", `Duplicate --${name}`);
+    if (name === "accept-insecure-risk") {
+      options[name] = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) throw new QosError("MISSING_ARGUMENT", `Missing value for --${name}`);
     options[name] = value;
@@ -50,11 +55,12 @@ async function main() {
   const home = resolve(options.home);
   let result;
   if (command === "create") {
-    only(options, ["home", "profile", "signer-command"]);
+    only(options, ["home", "profile", "signer-command", "accept-insecure-risk"]);
     if (typeof options.profile !== "string") throw new QosError("MISSING_ARGUMENT", "--profile is required");
     result = ensureRuntimeProfile(home, {
       profile: options.profile,
       signerCommand: options["signer-command"] ?? null,
+      acceptInsecureRisk: options["accept-insecure-risk"] === true,
     });
   } else if (command === "show") {
     only(options, ["home"]);

@@ -57,6 +57,30 @@ test("mainnet runtime profile requires a public-only external signer before crea
   assert.equal(existsSync(join(home, "runtime.json")), false);
 });
 
+test("insecure mainnet runtime profile requires acknowledgement and binds the generated software key", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "qos-runtime-mainnet-insecure-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "mainnet-insecure");
+  initializeSandbox(home, encodeBase58(Buffer.alloc(32, 76)), { cluster: "mainnet-beta" });
+
+  assert.throws(
+    () => ensureRuntimeProfile(home, { profile: "mainnet-insecure" }),
+    { code: "INSECURE_MAINNET_ACKNOWLEDGEMENT_REQUIRED" },
+  );
+  assert.equal(existsSync(join(home, "runtime.json")), false);
+  assert.equal(existsSync(join(home, "api-token")), false);
+
+  const profile = ensureRuntimeProfile(home, {
+    profile: "mainnet-insecure",
+    acceptInsecureRisk: true,
+  });
+  assert.equal(profile.profile, "mainnet-insecure");
+  assert.equal(profile.signerCommand, null);
+  assert.equal(existsSync(join(home, "signer.pem")), true);
+  assert.equal(existsSync(join(home, "signer.json")), false);
+  assert.equal(lstatSync(join(home, "signer.pem")).mode & 0o077, 0);
+});
+
 test("mainnet runtime profile binds an executable external signer and contains no software key", (t) => {
   const root = mkdtempSync(join(tmpdir(), "qos-runtime-mainnet-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

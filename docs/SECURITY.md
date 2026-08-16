@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.7.2 adds strong
+qOS is a research firmware and policy-signer project. Version 0.7.3 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
@@ -10,7 +10,7 @@ integration, review, and validation.
 1. Verified and measured boot with rollback-safe hardware state.
 2. External non-exportable Ed25519 signer whose adapter independently
    reconstructs the authorized message, enforces the typed policy, and pins the
-   policy commitment. Mainnet submission rejects software signers.
+   policy commitment. This is the preferred mainnet custody path.
 3. Minimal immutable OS, IOMMU/PMP, no swap or core dumps, mandatory access
    control, a dedicated unprivileged qOS service account, and an outbound
    network allowlist.
@@ -41,6 +41,13 @@ The encrypted software profile protects offline key bytes against file theft
 without the passphrase. It does not protect the decrypted key from a compromised
 qOS process, kernel, hypervisor, debugger, DMA-capable device, or physical
 attacker.
+
+`setup.sh install --insecure` is an explicit compatibility workaround for an
+operator who wants qOS to generate a live mainnet software key locally. It
+requires a setup-time accessibility acknowledgement and enables the same
+implemented mainnet operations as the external profile. It does not protect the
+key from an AI agent, malware, backup process, or any other program with the
+qOS user's file access. The notice is informed consent, not a security boundary.
 
 The SNARK adapter proves only what its exact circuit constrains. An incomplete
 circuit, compromised setup, substituted verifying key, unsound library, or

@@ -60,6 +60,11 @@ function validateProfileBoundary(paths, profile, signerCommand) {
   if (profile === "devnet") {
     assertQos(policy.cluster === "devnet", "RUNTIME_PROFILE_CLUSTER_MISMATCH", "Devnet runtime profile must use a Devnet policy");
     assertQos(signerCommand === null, "INVALID_RUNTIME_PROFILE", "Devnet runtime profile must not configure an external signer command");
+  } else if (profile === "mainnet-insecure") {
+    assertQos(policy.cluster === "mainnet-beta", "RUNTIME_PROFILE_CLUSTER_MISMATCH", "Insecure mainnet runtime profile must use a mainnet-beta policy");
+    assertQos(signerCommand === null, "INVALID_RUNTIME_PROFILE", "Insecure mainnet profile must not configure an external signer command");
+    assertQos(existsSync(paths.signerKey), "INSECURE_MAINNET_SOFTWARE_KEY_REQUIRED", "Insecure mainnet profile is missing its locally generated software key");
+    assertQos(!existsSync(paths.signerDescriptor) && !existsSync(paths.encryptedSignerKey), "SIGNER_STATE_AMBIGUOUS", "Insecure mainnet profile must contain only its plaintext software signer key");
   } else {
     assertQos(policy.cluster === "mainnet-beta", "RUNTIME_PROFILE_CLUSTER_MISMATCH", "Mainnet external runtime profile must use a mainnet-beta policy");
     assertQos(existsSync(paths.signerDescriptor), "EXTERNAL_SIGNER_DESCRIPTOR_REQUIRED", "Mainnet external profile is missing signer.json");
@@ -75,7 +80,7 @@ function validateRuntimeProfile(record, home) {
   assertQos(record && typeof record === "object" && !Array.isArray(record), "INVALID_RUNTIME_PROFILE", "Runtime profile must be an object");
   assertQos(hasExactKeys(record, RUNTIME_KEYS), "INVALID_RUNTIME_PROFILE", "Runtime profile has missing or unknown fields");
   assertQos(record.version === 1, "INVALID_RUNTIME_PROFILE", "Unsupported runtime profile version");
-  assertQos(record.profile === "devnet" || record.profile === "mainnet-external", "INVALID_RUNTIME_PROFILE", "Runtime profile type is unsupported");
+  assertQos(["devnet", "mainnet-external", "mainnet-insecure"].includes(record.profile), "INVALID_RUNTIME_PROFILE", "Runtime profile type is unsupported");
   assertQos(resolve(record.home) === paths.home, "INVALID_RUNTIME_PROFILE", "Runtime profile home does not match its directory");
   assertQos(resolve(record.apiTokenFile) === paths.apiToken, "INVALID_RUNTIME_PROFILE", "Runtime profile API token path is invalid");
   validateProfileBoundary(paths, record.profile, record.signerCommand);
@@ -105,14 +110,18 @@ export function loadRuntimeProfile(home) {
 export function ensureRuntimeProfile(home, {
   profile,
   signerCommand = null,
+  acceptInsecureRisk = false,
 } = {}) {
   const paths = runtimeProfilePaths(home);
   assertPrivateDirectory(paths.home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS profile home" });
-  assertQos(profile === "devnet" || profile === "mainnet-external", "INVALID_RUNTIME_PROFILE", "Profile must be devnet or mainnet-external");
-  if (profile === "devnet") {
-    assertQos(signerCommand === null, "INVALID_RUNTIME_PROFILE", "Devnet profile must not configure an external signer command");
-  } else {
+  assertQos(["devnet", "mainnet-external", "mainnet-insecure"].includes(profile), "INVALID_RUNTIME_PROFILE", "Profile must be devnet, mainnet-external, or mainnet-insecure");
+  if (profile === "mainnet-external") {
     assertQos(typeof signerCommand === "string" && isAbsolute(signerCommand), "EXTERNAL_SIGNER_CONFIG", "Mainnet external profile requires an absolute signer command");
+  } else {
+    assertQos(signerCommand === null, "INVALID_RUNTIME_PROFILE", `${profile} profile must not configure an external signer command`);
+  }
+  if (profile === "mainnet-insecure") {
+    assertQos(acceptInsecureRisk === true, "INSECURE_MAINNET_ACKNOWLEDGEMENT_REQUIRED", "Creating an insecure mainnet profile requires explicit acknowledgement that its private key is accessible to local processes");
   }
   validateProfileBoundary(paths, profile, signerCommand);
 

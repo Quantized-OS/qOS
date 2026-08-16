@@ -35,6 +35,7 @@ import {
 } from "./token.js";
 import { intentCommitment, policyCommitment, SnarkProofGate, unwrapProofRequest } from "./zk.js";
 import { assertPrivateDirectory } from "./secure-file.js";
+import { loadRuntimeProfile } from "./runtime-profile.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -159,7 +160,7 @@ function parseTokenPrepareOptions(options, policy, session) {
 }
 
 export class QosService {
-  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate() }) {
+  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate(), runtimeProfile = null }) {
     this.paths = paths;
     this.policy = policy;
     this.signer = signer;
@@ -167,6 +168,7 @@ export class QosService {
     this.session = session;
     this.rpc = rpc;
     this.proofGate = proofGate;
+    this.runtimeProfile = runtimeProfile;
   }
 
   static open(home, { rpcUrl = process.env.SOLANA_RPC_URL } = {}) {
@@ -187,7 +189,8 @@ export class QosService {
       timeoutMs: policy.rpcTimeoutMs,
       commitment: policy.commitment,
     });
-    return new QosService({ paths, policy, signer, session, rpc, proofGate });
+    const runtimeProfile = existsSync(join(home, "runtime.json")) ? loadRuntimeProfile(home) : null;
+    return new QosService({ paths, policy, signer, session, rpc, proofGate, runtimeProfile });
   }
 
   async assertCluster() {
@@ -418,10 +421,12 @@ export class QosService {
     });
     if (this.policy.cluster === "mainnet-beta") {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
+      const signerStatus = this.signer.status();
       assertQos(
-        this.signer.status()?.keyExportableToAgentProcess === false,
+        signerStatus?.keyExportableToAgentProcess === false
+          || (signerStatus?.keyExportableToAgentProcess === true && this.runtimeProfile?.profile === "mainnet-insecure"),
         "MAINNET_EXTERNAL_SIGNER_REQUIRED",
-        "Mainnet signing requires a non-exportable external signer that independently enforces the qOS typed policy",
+        "Mainnet software signing requires a setup-created --insecure profile; otherwise use a non-exportable external signer",
       );
     }
     signature = await this.signer.sign(message, {

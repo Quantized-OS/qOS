@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH, QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
 import { initializeSandbox, QosService } from "../src/service.js";
+import { ensureRuntimeProfile } from "../src/runtime-profile.js";
 
 class MockRpc {
   constructor(genesis = DEVNET_GENESIS_HASH) {
@@ -221,6 +222,34 @@ test("mainnet submission rejects an exportable software signer", async () => {
   try {
     await assert.rejects(() => service.submitIntent(intent), { code: "MAINNET_EXTERNAL_SIGNER_REQUIRED" });
     assert.equal(rpc.sent.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;
+    else process.env.QOS_ENABLE_MAINNET_BROADCAST = previous;
+  }
+});
+
+test("acknowledged insecure mainnet profile submits with its generated software signer", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-token-insecure-opt-in-"));
+  const home = join(parent, "sandbox");
+  const destination = encodeBase58(Buffer.alloc(32, 84));
+  initializeSandbox(home, destination, { cluster: "mainnet-beta" });
+  ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+  const service = QosService.open(home);
+  const rpc = new MockRpc(MAINNET_GENESIS_HASH);
+  const source = service.tokenAddresses(service.publicKey).tokenAccount;
+  const destinationTokenAccount = service.tokenAddresses(destination).tokenAccount;
+  rpc.accountInfos.set(QOS_TOKEN_MINT, mintAccount());
+  rpc.accountInfos.set(source, tokenAccount(service.publicKey, 5_000_000n));
+  rpc.accountInfos.set(destinationTokenAccount, tokenAccount(destination, 0n));
+  service.rpc = rpc;
+  const intent = await service.prepareTokenIntent({ amount: "1000000" });
+  const previous = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    const result = await service.submitIntent(intent);
+    assert.equal(result.asset, "token");
+    assert.equal(result.signer, service.publicKey);
+    assert.equal(rpc.sent.length, 1);
   } finally {
     if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;
     else process.env.QOS_ENABLE_MAINNET_BROADCAST = previous;

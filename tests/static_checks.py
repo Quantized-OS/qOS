@@ -75,6 +75,7 @@ def main() -> None:
             "openSigner",
             "SnarkProofGate",
             "MAINNET_EXTERNAL_SIGNER_REQUIRED",
+            'this.runtimeProfile?.profile === "mainnet-insecure"',
         ),
     )
     require("src/session.js", ("NONCE_REPLAY", "createHmac", "randomBytes(16)"))
@@ -176,6 +177,8 @@ def main() -> None:
             "privateFile: true",
             "randomBytes(48)",
             "EXTERNAL_HOME_PRIVATE_FILES",
+            "INSECURE_MAINNET_ACKNOWLEDGEMENT_REQUIRED",
+            'profile === "mainnet-insecure"',
             "assertTrustedExecutable",
         ),
     )
@@ -230,6 +233,10 @@ def main() -> None:
     require(
         "bin/qos-shell.js",
         (
+            "secure firmware shell",
+            "COMMAND_ALIASES",
+            '["capa", "capabilities"]',
+            '["fw", "firmware"]',
             "BROADCAST_CONFIRMATION_REQUIRED",
             "LIVE_CONFIRMATION_REQUIRED",
             "DEX_TEMPLATE_NOT_INSTALLED",
@@ -304,13 +311,42 @@ def main() -> None:
         ),
     )
     require(
-        "install.sh",
+        "setup.sh",
         (
+            "install|uninstall",
+            "--devnet",
+            "--insecure",
+            "--accept-insecure-risk",
+            "--wizard",
+            "--signer-guide",
+            'profile="mainnet-external"',
+            'profile="mainnet-insecure"',
+            "INSECURE MAINNET KEY NOTICE",
+            "retire_legacy_installer",
+            ".qos-setup-backup",
+            "authorize-and-sign-qos-intent",
+            "Never use fixtures/external-signer.js for funds",
             "--install-toolchains",
             "make check",
-            "qos-shell",
-            "mainnet-external",
+            "write_launcher qos bin/qos-shell.js",
+            "uninstall_launchers",
+            "unlink --",
+            "Profiles and toolchains were not removed",
             "No transaction has been broadcast",
+        ),
+    )
+    forbid_path("install.sh")
+    require(
+        "docs/SIGNER_ADAPTER_SETUP.md",
+        (
+            "qOS does not bundle a production adapter",
+            "authorize-and-sign-qos-intent",
+            "fixtures/external-signer.js",
+            "qos-intent-v1",
+            "qos-policy-v1",
+            "privacyProofVerified",
+            "src/transaction.js",
+            "src/subprocess.js",
         ),
     )
     require(
@@ -356,7 +392,7 @@ def main() -> None:
             "validate_release_tree",
             "PRIVATE_KEY_MARKERS",
             'ROOT / "docs" / "reports" / "RELEASE_READINESS.md"',
-            'path.name in {"install.sh", "run-demo.sh"}',
+            'path.name in {"setup.sh", "run-demo.sh"}',
         ),
     )
     forbid(

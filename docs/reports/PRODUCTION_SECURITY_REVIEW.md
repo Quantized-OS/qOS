@@ -1,4 +1,4 @@
-# qOS v0.7.2 production security review
+# qOS v0.7.3 production security review
 
 Date: 2026-08-15
 
@@ -12,14 +12,14 @@ contain the target-specific hardware root of trust or a production
 non-exportable signer implementation. The source must not be represented as a
 production firmware release until every acceptance criterion below is met.
 
-The review used the supplied `qOS-main` source archive as the source of truth.
+The review used the supplied `qOS-dev(1).zip` source archive as the source of truth.
 It covered the RV64 stage-0 starter, the Rust QEMU policy signer, the Node.js
 policy/signer/RPC/API paths, fixtures, release builder, tests, and operator
 documentation. No production keys, accounts, or network transactions were
 used.
 
 Input archive SHA-256:
-`ee97c2850892b4f94ea72bede7e9a7bb68226c303d30d85a86b6d94b40f57efd`.
+`7cb144e07578c89ba2ae3a216d5b60daa2f642c8c9e78886b7c0567a8144a9fc`.
 
 ## Security changes made
 
@@ -36,8 +36,10 @@ Input archive SHA-256:
 
 ### Agent and signer boundary
 
-- Mainnet submission now rejects plaintext and encrypted software signers. It
-  requires a signer reporting a non-exportable external custody boundary.
+- Mainnet submission rejects unprofiled plaintext and encrypted software
+  signers. The default requires a non-exportable external custody boundary;
+  the explicit exception is a setup-created `mainnet-insecure` profile whose
+  host-accessibility notice was accepted.
 - Renamed the external operation to `authorize-and-sign-qos-intent` and require
   an exact authorization envelope with recomputed intent commitment.
 - Validate external executable type and permissions; launch without a shell,
@@ -68,7 +70,7 @@ Input archive SHA-256:
   amount, native state, or close authority. Token-2022 accounts must expose
   exactly the ImmutableOwner account extension.
 - Mainnet broadcast still requires the explicit environment opt-in in addition
-  to the external signer boundary.
+  to either the external signer boundary or acknowledged insecure profile.
 
 ### Firmware and QEMU paths
 
@@ -85,6 +87,23 @@ Input archive SHA-256:
 ### Release engineering
 
 - Removed remote bootstrap execution from the setup script.
+- Replaced the previous Devnet-default installer with an explicit
+  `setup.sh install|uninstall` action surface. Mainnet external custody is the
+  default; disposable Devnet setup requires `--devnet`.
+- Added `setup.sh install --insecure` as an explicit mainnet software-custody
+  workaround. It generates the key only after the accessibility notice is
+  accepted and otherwise uses the same mainnet policy and operation surface.
+- Added a restricted `qos` firmware shell with a qOS banner, direct commands,
+  interactive use, documented shorthand aliases, and a separate `qos-core`
+  launcher for the low-level CLI.
+- Limit uninstall to marked, regular, owner-managed launchers; profiles,
+  policies, keys, API tokens, toolchains, and source are preserved.
+- Guide new mainnet operators through signer readiness, public identity,
+  destination, executable validation, and final review; stop before changes
+  when the required external custody boundary does not exist.
+- Repair upgraded checkouts by moving only a recognized retired qOS
+  `install.sh` into a private release-excluded recovery directory before
+  dependency installation or regression checks.
 - Fixed the release builder's readiness-report path.
 - Added release-tree rejection for private-key markers and runtime secret
   filenames.
@@ -130,7 +149,7 @@ Input archive SHA-256:
 
 | Check | Result |
 | --- | --- |
-| `make check` | Pass: 96 Node.js tests plus static invariants |
+| `make check` | Pass: 97 Node.js tests plus static invariants |
 | Node.js syntax checks | Pass for all seven CLI entry points |
 | Host C syntax | Pass with GCC C11, `-Wall -Wextra -Werror`, freestanding headers |
 | Python syntax | Pass for release and static-check scripts |
@@ -138,7 +157,7 @@ Input archive SHA-256:
 | Release secret scan | Pass for the source release tree |
 | Deterministic release build | Pass when two independently generated source archives and ISOs match |
 | Rust/QEMU execution | Not run: required tools are absent in this workspace |
-| Clone-to-shell installer | Syntax/static/help tests pass; networked clean-host install not run in this workspace |
+| Setup/install/uninstall surface | Mainnet wizard, signer guide, legacy-installer recovery, explicit-Devnet, launcher, profile-preservation, syntax, static, and help tests pass; networked clean-host setup not run in this workspace |
 
 `package.json` declares no runtime or development npm dependencies. The Rust
 demo is locked to `ed25519-dalek` 3.0.0, `curve25519-dalek` 5.0.0, and their

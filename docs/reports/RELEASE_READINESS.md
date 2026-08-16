@@ -1,4 +1,4 @@
-# qOS v0.7.2 release-readiness report
+# qOS v0.7.3 release-readiness report
 
 ## Release decision
 
@@ -13,7 +13,7 @@ The generated ISO is ISO-9660 research data media containing the source archive,
 readiness report, source checksum, and readme. It is not bootable firmware or
 an installer.
 
-## v0.7.2 production-preparation changes
+## v0.7.3 production-preparation changes
 
 - Secure inode-bound and size-bounded reads for keys, passphrases, policy,
   signer descriptors, API tokens, provisioning records, and CLI JSON.
@@ -27,16 +27,30 @@ an installer.
   fallible rollback read, manifest measurement, and authenticated FDT interface.
 - Mainnet broadcast disabled in the host-readable QEMU path.
 - Remote bootstrap execution removed and release secret scanning strengthened.
-- One-command Ubuntu beta onboarding added with verified official toolchain
-  artifacts, private runtime/API-token provisioning, measured QEMU firmware,
-  user-local launchers, and a restricted interactive/non-interactive shell.
+- Guided Ubuntu beta onboarding added through `setup.sh install`: external
+  mainnet custody is the default and disposable Devnet mode requires
+  `--devnet`. The flow uses verified official toolchain artifacts, private
+  runtime/API-token provisioning, measured Devnet QEMU firmware, atomic
+  user-local launchers, and a bannered restricted interactive/non-interactive
+  `qos` shell with shorthand commands.
+- `setup.sh uninstall` removes only marked qOS launchers and preserves profiles,
+  policies, keys, API tokens, toolchains, and source.
+- Interactive mainnet setup now provides a complete signer-adapter wizard,
+  validates a new profile's executable boundary before system changes, and stops safely
+  with a plain-language implementation/review guide when no adapter is ready.
+- `setup.sh install --insecure` now provides the requested accessible software
+  key workaround. It requires an explicit notice acknowledgement before key
+  creation and then exposes the same implemented mainnet qOS capabilities.
+- Upgraded source trees safely retire a recognized old `install.sh` into a
+  private release-excluded backup before static checks; unrelated files are
+  preserved and block setup with an actionable error.
 
 The complete source-grounded assessment is in
 `PRODUCTION_SECURITY_REVIEW.md`.
 
 ## Verification in this workspace
 
-- `make check`: pass; 96 Node.js tests and static safety checks.
+- `make check`: pass; the complete Node.js and static safety suite passes.
 - Node.js syntax checks: pass.
 - Host C syntax with GCC C11, `-Wall -Wextra -Werror`: pass.
 - Python and shell syntax checks: pass.

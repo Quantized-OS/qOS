@@ -107,8 +107,9 @@ node bin/qos.js token-balance --home .qos-ephemeral-mainnet
 node bin/qos.js token-prepare --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
-Mainnet submission requires both the external signer and this exact additional
-opt-in. Software-key homes fail closed:
+Mainnet submission requires this exact broadcast opt-in. It accepts the
+preferred external signer or a software-key home carrying the acknowledged
+`mainnet-insecure` runtime profile created by `setup.sh install --insecure`:
 
 ```sh
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
@@ -238,9 +239,12 @@ agent process; their adapter and backing HSM, firmware, enclave, KMS, or MPC
 system become security-critical. None of these modes replaces an independent
 review, physical hardening, rollback-safe replay state, or two-person controls.
 Keep Devnet and mainnet homes separate and use deliberately capped keys.
-Mainnet submission requires a non-exportable external signer and is additionally
-guarded by `QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`; the environment guard is
-not a security boundary against a compromised operating system.
+Mainnet submission requires either a non-exportable external signer or the
+explicitly acknowledged `mainnet-insecure` software-custody profile. Both are
+additionally guarded by `QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`; the
+environment guard and setup notice are not security boundaries against a
+compromised operating system. In the insecure profile, any process with the
+qOS user's file access can copy `signer.pem`.
 
 For the strongest demonstration host, disable swap and core dumps, avoid shell
 history containing sensitive parameters, disable terminal recording, and use a
