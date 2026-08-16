@@ -5,7 +5,9 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly RUST_TARGET="riscv64imac-unknown-none-elf"
+readonly RUST_TOOLCHAIN="1.97.1"
 readonly MINIMUM_NODE_MAJOR=20
+readonly NODE_VERSION="24.19.0"
 
 log() {
   printf '[qOS setup] %s\n' "$*"
@@ -19,6 +21,33 @@ die() {
   printf '[qOS setup] ERROR: %s\n' "$*" >&2
   exit 1
 }
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/setup-ubuntu-20.04.sh [--install-toolchains]
+
+Install Ubuntu packages and verify the qOS build dependencies. With
+--install-toolchains, also install the pinned user-local Node.js and Rust
+toolchains using verified official artifacts.
+EOF
+}
+
+install_toolchains=0
+while (($#)); do
+  case "$1" in
+    --install-toolchains)
+      install_toolchains=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown option: $1"
+      ;;
+  esac
+done
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   die "This setup script requires Linux."
@@ -53,9 +82,11 @@ run_privileged() {
 required_packages=(
   build-essential
   ca-certificates
+  curl
   gnupg
   python3
   qemu-system-misc
+  xz-utils
 )
 missing_packages=()
 
@@ -71,6 +102,19 @@ if ((${#missing_packages[@]})); then
   run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
 else
   log "Ubuntu packages are already installed."
+fi
+
+if (( install_toolchains )); then
+  "${SCRIPT_DIR}/bootstrap-user-toolchain.sh"
+  case "$(uname -m)" in
+    x86_64) node_arch="x64" ;;
+    aarch64|arm64) node_arch="arm64" ;;
+    *) die "The verified user toolchain supports x86_64 and aarch64." ;;
+  esac
+  toolchain_root="${QOS_TOOLCHAIN_ROOT:-${HOME}/.local/share/qos/toolchains}"
+  export CARGO_HOME="${toolchain_root}/cargo"
+  export RUSTUP_HOME="${toolchain_root}/rustup"
+  export PATH="${toolchain_root}/node-v${NODE_VERSION}-linux-${node_arch}/bin:${CARGO_HOME}/bin:${PATH}"
 fi
 
 node_major=0
@@ -98,14 +142,25 @@ fi
 command -v cargo >/dev/null 2>&1 || die "Cargo is unavailable after installing Rust."
 command -v rustup >/dev/null 2>&1 || die "rustup is unavailable after installation."
 
-if ! rustup target list --installed | grep -Fxq "${RUST_TARGET}"; then
+if ! rustup toolchain list | grep -Eq "^${RUST_TOOLCHAIN}(-|[[:space:]])"; then
+  log "Installing the pinned Rust ${RUST_TOOLCHAIN} toolchain."
+  rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+else
+  log "Rust ${RUST_TOOLCHAIN} is already installed."
+fi
+
+if ! rustup target list --installed --toolchain "${RUST_TOOLCHAIN}" | grep -Fxq "${RUST_TARGET}"; then
   log "Installing the bare-metal RISC-V Rust target."
-  rustup target add "${RUST_TARGET}"
+  rustup target add --toolchain "${RUST_TOOLCHAIN}" "${RUST_TARGET}"
 else
   log "Rust target ${RUST_TARGET} is already installed."
 fi
 
+[[ "$(rustup run "${RUST_TOOLCHAIN}" rustc --version)" == rustc\ ${RUST_TOOLCHAIN}\ * ]] \
+  || die "The selected Rust compiler does not match ${RUST_TOOLCHAIN}."
+
 [[ -r "${PROJECT_ROOT}/firmware-demo/.cargo/config.toml" ]] || die "Committed Cargo target configuration is missing."
+[[ -r "${PROJECT_ROOT}/rust-toolchain.toml" ]] || die "Committed Rust toolchain pin is missing."
 
 command -v qemu-system-riscv64 >/dev/null 2>&1 || die "qemu-system-riscv64 was not installed by qemu-system-misc."
 command -v make >/dev/null 2>&1 || die "make is unavailable after installing build-essential."

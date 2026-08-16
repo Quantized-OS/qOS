@@ -169,6 +169,17 @@ def main() -> None:
         ),
     )
     require(
+        "src/runtime-profile.js",
+        (
+            "assertPrivateDirectory",
+            "readSecureFile",
+            "privateFile: true",
+            "randomBytes(48)",
+            "EXTERNAL_HOME_PRIVATE_FILES",
+            "assertTrustedExecutable",
+        ),
+    )
+    require(
         "firmware-demo/src/main.rs",
         (
             "QOS_FW:BOOT",
@@ -214,6 +225,18 @@ def main() -> None:
             "QOS_ENABLE_MAINNET_BROADCAST",
             "prepareTokenIntent",
             "submitIntent",
+        ),
+    )
+    require(
+        "bin/qos-shell.js",
+        (
+            "BROADCAST_CONFIRMATION_REQUIRED",
+            "LIVE_CONFIRMATION_REQUIRED",
+            "DEX_TEMPLATE_NOT_INSTALLED",
+            "INTERACTIVE_TTY_REQUIRED",
+            "shell: false",
+            "QOS_API_TOKEN_FILE",
+            "qemu-firmware-rehearsal",
         ),
     )
     require(
@@ -280,6 +303,46 @@ def main() -> None:
             "required_commands+=(qemu-system-riscv64)",
         ),
     )
+    require(
+        "install.sh",
+        (
+            "--install-toolchains",
+            "make check",
+            "qos-shell",
+            "mainnet-external",
+            "No transaction has been broadcast",
+        ),
+    )
+    require(
+        "scripts/bootstrap-user-toolchain.sh",
+        (
+            "https://nodejs.org/dist/",
+            "https://static.rust-lang.org/rustup/archive/",
+            "sha256sum --check --status",
+            'RUST_TOOLCHAIN="1.97.1"',
+            'NODE_VERSION="24.19.0"',
+            'RUSTUP_VERSION="1.29.0"',
+            "--no-modify-path",
+        ),
+    )
+    require(
+        "rust-toolchain.toml",
+        (
+            'channel = "1.97.1"',
+            'profile = "minimal"',
+            'targets = ["riscv64imac-unknown-none-elf"]',
+        ),
+    )
+    require(".node-version", ("24.19.0",))
+    forbid(
+        "scripts/bootstrap-user-toolchain.sh",
+        (
+            "sh.rustup.rs",
+            "| /bin/sh",
+            "| bash",
+            "eval ",
+        ),
+    )
     forbid("firmware-demo/build.rs", ("QOS_FW_SEED_HEX", "POLICY_SEED"))
     forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
     forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))
@@ -293,6 +356,7 @@ def main() -> None:
             "validate_release_tree",
             "PRIVATE_KEY_MARKERS",
             'ROOT / "docs" / "reports" / "RELEASE_READINESS.md"',
+            'path.name in {"install.sh", "run-demo.sh"}',
         ),
     )
     forbid(

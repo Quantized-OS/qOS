@@ -39,6 +39,13 @@ QEMU path can no longer broadcast on mainnet.
 - Sanitized Cargo/QEMU launch environments, an isolated build-local Cargo home,
   atomic provisioning record writes, remote-bootstrap removal, and release-tree
   secret scanning.
+- A one-command Ubuntu clone-to-shell path using official pinned Node.js and
+  rustup artifacts, upstream SHA-256 verification, a dedicated user toolchain,
+  regression gates, profile provisioning, firmware measurement, and atomic
+  user-local launchers.
+- Owner-only runtime profiles and generated loopback API tokens whose values
+  are never printed by setup, plus a restricted qOS Shell that never evaluates
+  arbitrary shell text and requires explicit broadcast confirmations.
 
 ## Implemented security changes
 
@@ -110,18 +117,26 @@ QEMU path can no longer broadcast on mainnet.
 22. The QEMU demo did not pin its provisioned signer identity inside the ELF.
 23. The QEMU demo printed the raw signed transaction on its UART data/display
     channel before the host redacted it.
+24. Mainnet profile tests used the repository fixture directly, so a checkout
+    created with a group-writable executable umask failed before exercising the
+    intended runtime boundary. Tests now copy the synthetic adapter into a
+    private mode-0700 temporary file; production adapter validation remains
+    unchanged and fail-closed.
 
 ## Verification performed
 
 - `make check` passes.
-- 85 Node.js tests pass, including encryption/decryption failure, external
+- 96 Node.js tests pass, including encryption/decryption failure, external
   signer isolation, SNARK request binding, replay rejection, canonicalization,
   RPC size limits, HTTP bind restrictions, provisioning-policy binding,
   failure-output redaction, IPv6 loopback handling, nested sandbox
   initialization, firmware CLI help, canonical compact-length rejection,
   exceptional signature cleanup, provider-error redaction, and symlink
-  rejection, plus Cargo hard-link normalization into a private single-link
-  runtime ELF.
+  rejection, Cargo hard-link normalization into a private single-link runtime
+  ELF, runtime-profile custody checks, fail-closed DEX capability reporting,
+  broadcast confirmation, and side-effect-free installer help.
+- The complete suite also passes with the repository signer fixture temporarily
+  set to mode 0775, reproducing the reported shared-checkout permission state.
 - Host C syntax checks pass with GCC, `-Wall -Wextra -Werror`.
 - Python firmware/static fail-closed invariants pass.
 - JavaScript syntax checks pass.

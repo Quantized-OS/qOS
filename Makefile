@@ -31,6 +31,8 @@ check:
 	node --check bin/qos-agent-demo.js
 	node --check bin/qos-agent-security-audit.js
 	node --check bin/qos-agent-external-setup.js
+	node --check bin/qos-profile.js
+	node --check bin/qos-shell.js
 	node --test
 
 test:

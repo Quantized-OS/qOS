@@ -12,6 +12,35 @@ Solana is the first test environment because it combines high-throughput executi
 
 > qOS is an early-stage research and engineering project. The concept is being discussed with AMD as a possible approach to bringing firmware assurance onchain while preserving privacy. This repository does not announce an AMD partnership, endorsement, product commitment, or planned integration.
 
+## Clone to qOS Shell
+
+On a supported Ubuntu x86-64 or ARM64 host, the beta onboarding path is one
+command after cloning:
+
+```sh
+./install.sh
+```
+
+It installs verified user-local Node.js and Rust toolchains, installs the
+Ubuntu/QEMU packages, runs the complete test suite, creates a disposable
+Devnet profile and private API token, builds and measures the firmware, installs
+`qos`, `qos-shell`, `qos-firmware`, and agent launchers under `~/.local/bin`,
+then opens qOS Shell. It does not fund or broadcast anything automatically.
+
+Inside the shell, start with:
+
+```text
+qos> capabilities
+qos> status
+qos> firmware offline sol 1000000
+qos> sol prepare 1000000
+```
+
+See [`docs/QUICKSTART_SHELL.md`](docs/QUICKSTART_SHELL.md) for Devnet sends,
+the loopback agent API, non-interactive commands, and public-only mainnet
+external-signer setup. The current source implements policy-gated transfers,
+not DEX swaps; `trade` fails closed until a reviewed venue template exists.
+
 ## Why qOS
 
 Crypto traders need more than faster bots. They need machines that can prove what they booted, protect signing authority if user space is compromised, and reject trades that violate policy.
@@ -69,6 +98,7 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
 * `docs/AGENT_DEMO.md` — Agent-directed qOS Token-2022 transfer rehearsal
+* `docs/QUICKSTART_SHELL.md` — One-command install, runtime profiles, and qOS Shell
 * `docs/AGENT_SECURITY_TEST.md` — Synthetic red-team test for agent/key boundaries
 * `docs/PRIVACY_ZK_CUSTODY.md` — Agent-safe key custody, AES-256-GCM keys, and SNARK verifier contract
 * `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
@@ -77,6 +107,9 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
 * `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
 * `bin/qos-agent-external-setup.js` — Public-only external-signer home setup
+* `bin/qos-profile.js` — Owner-only API-token and runtime-profile provisioning
+* `bin/qos-shell.js` — Restricted interactive and non-interactive command shell
+* `install.sh` — Clone-to-shell beta installer
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
@@ -157,9 +190,10 @@ code can also create copies outside qOS.
 
 ## Build the research starter
 
-On Ubuntu 20.04, 22.04, or 24.04, first install Node.js 20 or newer and rustup
-from verified, pinned package sources. The wrapper can then install missing
-Ubuntu packages, run the checks, and launch the deterministic QEMU demo:
+For the complete first-run install, use `./install.sh`. For an operator-managed
+toolchain, first install Node.js 20 or newer and rustup from verified, pinned
+package sources. The demo wrapper can then install missing Ubuntu packages,
+run the checks, and launch the deterministic QEMU demo:
 
 ```sh
 bash run-demo.sh

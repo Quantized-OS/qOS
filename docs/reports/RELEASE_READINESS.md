@@ -27,13 +27,16 @@ an installer.
   fallible rollback read, manifest measurement, and authenticated FDT interface.
 - Mainnet broadcast disabled in the host-readable QEMU path.
 - Remote bootstrap execution removed and release secret scanning strengthened.
+- One-command Ubuntu beta onboarding added with verified official toolchain
+  artifacts, private runtime/API-token provisioning, measured QEMU firmware,
+  user-local launchers, and a restricted interactive/non-interactive shell.
 
 The complete source-grounded assessment is in
 `PRODUCTION_SECURITY_REVIEW.md`.
 
 ## Verification in this workspace
 
-- `make check`: pass; 85 Node.js tests and static safety checks.
+- `make check`: pass; 96 Node.js tests and static safety checks.
 - Node.js syntax checks: pass.
 - Host C syntax with GCC C11, `-Wall -Wextra -Werror`: pass.
 - Python and shell syntax checks: pass.
@@ -41,6 +44,9 @@ The complete source-grounded assessment is in
 - Two release builds produce matching source archive and ISO digests.
 - No firmware ELF was built or run because Cargo, rustc, QEMU, and the RISC-V
   cross-toolchain are not installed in this workspace.
+- The networked pinned-toolchain bootstrap was syntax- and invariant-checked
+  but not downloaded or executed in this workspace; clean-host CI remains a
+  release requirement.
 
 ## Blocking production work
 
