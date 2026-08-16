@@ -70,7 +70,11 @@ export class SolanaRpc {
     try {
       response = await fetch(this.url, {
         method: "POST",
-        headers: { "accept": "application/json", "content-type": "application/json" },
+        headers: {
+          "accept": "application/json",
+          "accept-encoding": "identity",
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
         redirect: "error",
         signal: AbortSignal.timeout(this.timeoutMs),
