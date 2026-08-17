@@ -16,6 +16,7 @@ keys, imports keys, funds accounts, or broadcasts transactions.
 }
 
 async function main() {
+  process.umask(0o077);
   const argv = process.argv.slice(2);
   if (argv.includes("--help") || argv.includes("-h")) {
     usage();

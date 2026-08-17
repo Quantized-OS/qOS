@@ -8,6 +8,7 @@ import { encodeBase58 } from "../src/base58.js";
 import { publicKeyAddress } from "../src/key-store.js";
 import { initializeSandbox, sandboxPaths } from "../src/service.js";
 import { ExternalCommandSigner } from "../src/signer.js";
+import { intentCommitment } from "../src/zk.js";
 
 test("external command signer returns a verified signature without exposing a key handle", async () => {
   const home = mkdtempSync(join(tmpdir(), "qos-external-signer-"));
@@ -17,12 +18,13 @@ test("external command signer returns a verified signature without exposing a ke
   const signer = new ExternalCommandSigner({
     publicKey: publicKeyAddress(privateKey),
     command: process.execPath,
-    args: [new URL("../fixtures/external-signer.js", import.meta.url).pathname, keyPath],
+    args: [new URL("../fixtures/external-signer.js", import.meta.url).pathname, "--test-only", keyPath],
   });
+  const intent = {};
   const signature = await signer.sign(Buffer.from("qos external signing test"), {
     version: 1,
-    intent: {},
-    intentCommitment: "0".repeat(64),
+    intent,
+    intentCommitment: intentCommitment(intent),
     policyCommitment: "1".repeat(64),
     privacyProofVerified: false,
   });

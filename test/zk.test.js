@@ -6,7 +6,7 @@ function gate(required = true) {
   return new SnarkProofGate({
     required,
     command: process.execPath,
-    args: [new URL("../fixtures/zk-verifier.js", import.meta.url).pathname],
+    args: [new URL("../fixtures/zk-verifier.js", import.meta.url).pathname, "--test-only"],
     circuitId: "qos-policy-test-v1",
     verifyingKeySha256: "a".repeat(64),
     proofSystem: "groth16-bn254",

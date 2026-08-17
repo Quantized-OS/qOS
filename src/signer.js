@@ -1,6 +1,7 @@
 import { sign, verify } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { TextDecoder } from "node:util";
 import { decodeBase58 } from "./base58.js";
 import { hasExactKeys } from "./canonical.js";
 import { assertQos } from "./errors.js";
@@ -10,13 +11,20 @@ import {
   publicKeyAddress,
   publicKeyObjectFromRaw,
 } from "./key-store.js";
-import { parseCommandArgs, runJsonCommand } from "./subprocess.js";
+import { assertTrustedExecutable, parseCommandArgs, runJsonCommand } from "./subprocess.js";
+import { readSecureFile } from "./secure-file.js";
+import { intentCommitment } from "./zk.js";
 
 function canonicalBase64(text, expectedLength, field) {
   assertQos(typeof text === "string", "INVALID_SIGNER_RESPONSE", `${field} must be base64`);
   const bytes = Buffer.from(text, "base64");
-  assertQos(bytes.length === expectedLength && bytes.toString("base64") === text, "INVALID_SIGNER_RESPONSE", `${field} is not canonical base64`);
-  return bytes;
+  try {
+    assertQos(bytes.length === expectedLength && bytes.toString("base64") === text, "INVALID_SIGNER_RESPONSE", `${field} is not canonical base64`);
+    return bytes;
+  } catch (error) {
+    bytes.fill(0);
+    throw error;
+  }
 }
 
 export class SoftwareSigner {
@@ -44,6 +52,7 @@ export class ExternalCommandSigner {
   constructor({ publicKey, command, args = [], timeoutMs = 10_000 }) {
     decodeBase58(publicKey, 32);
     assertQos(typeof command === "string" && isAbsolute(command), "EXTERNAL_SIGNER_CONFIG", "External signer command must be an absolute path");
+    assertTrustedExecutable(command, "EXTERNAL_SIGNER");
     assertQos(Array.isArray(args) && args.every((value) => typeof value === "string"), "EXTERNAL_SIGNER_CONFIG", "External signer arguments are invalid");
     assertQos(Number.isInteger(timeoutMs) && timeoutMs >= 100 && timeoutMs <= 60_000, "EXTERNAL_SIGNER_CONFIG", "External signer timeout must be between 100 and 60000 milliseconds");
     this.publicKey = publicKey;
@@ -55,9 +64,20 @@ export class ExternalCommandSigner {
   }
 
   async sign(message, authorization) {
+    assertQos(
+      hasExactKeys(authorization, ["version", "intent", "intentCommitment", "policyCommitment", "privacyProofVerified"]),
+      "INVALID_SIGNER_AUTHORIZATION",
+      "External signer authorization has missing or unknown fields",
+    );
+    assertQos(authorization.version === 1, "INVALID_SIGNER_AUTHORIZATION", "External signer authorization version is unsupported");
+    assertQos(authorization.intent && typeof authorization.intent === "object" && !Array.isArray(authorization.intent), "INVALID_SIGNER_AUTHORIZATION", "External signer authorization must contain a typed intent");
+    assertQos(/^[0-9a-f]{64}$/.test(authorization.intentCommitment), "INVALID_SIGNER_AUTHORIZATION", "Intent commitment must be lowercase SHA-256 hex");
+    assertQos(authorization.intentCommitment === intentCommitment(authorization.intent), "INVALID_SIGNER_AUTHORIZATION", "Intent commitment does not match the typed intent");
+    assertQos(/^[0-9a-f]{64}$/.test(authorization.policyCommitment), "INVALID_SIGNER_AUTHORIZATION", "Policy commitment must be lowercase SHA-256 hex");
+    assertQos(typeof authorization.privacyProofVerified === "boolean", "INVALID_SIGNER_AUTHORIZATION", "Privacy-proof status must be boolean");
     const request = {
       version: 1,
-      operation: "sign-solana-message",
+      operation: "authorize-and-sign-qos-intent",
       publicKey: this.publicKey,
       messageBase64: Buffer.from(message).toString("base64"),
       authorization,
@@ -69,9 +89,14 @@ export class ExternalCommandSigner {
     assertQos(hasExactKeys(response, ["version", "publicKey", "signatureBase64"]), "INVALID_SIGNER_RESPONSE", "External signer response has missing or unknown fields");
     assertQos(response.version === 1 && response.publicKey === this.publicKey, "SIGNER_IDENTITY_MISMATCH", "External signer identity does not match the provisioned key");
     const signature = canonicalBase64(response.signatureBase64, 64, "signatureBase64");
-    const publicKey = publicKeyObjectFromRaw(decodeBase58(this.publicKey, 32));
-    assertQos(verify(null, message, publicKey, signature), "SIGNATURE_SELF_CHECK_FAILED", "External signer returned an invalid signature");
-    return signature;
+    try {
+      const publicKey = publicKeyObjectFromRaw(decodeBase58(this.publicKey, 32));
+      assertQos(verify(null, message, publicKey, signature), "SIGNATURE_SELF_CHECK_FAILED", "External signer returned an invalid signature");
+      return signature;
+    } catch (error) {
+      signature.fill(0);
+      throw error;
+    }
   }
 
   status() {
@@ -80,7 +105,17 @@ export class ExternalCommandSigner {
 }
 
 function readDescriptor(path) {
-  const value = JSON.parse(readFileSync(path, "utf8"));
+  const bytes = readSecureFile(path, {
+    maxBytes: 16 * 1024,
+    errorCode: "INSECURE_SIGNER_DESCRIPTOR",
+    label: "Signer descriptor",
+  });
+  let value;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } finally {
+    bytes.fill(0);
+  }
   assertQos(hasExactKeys(value, ["version", "backend", "publicKey"]), "INVALID_SIGNER_DESCRIPTOR", "Signer descriptor has missing or unknown fields");
   assertQos(value.version === 1 && value.backend === "external-command-v1", "INVALID_SIGNER_DESCRIPTOR", "Signer descriptor backend is unsupported");
   decodeBase58(value.publicKey, 32);

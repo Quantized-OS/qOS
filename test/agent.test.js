@@ -66,3 +66,14 @@ test("agent demo exposes help without opening a sandbox", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /qOS agent-directed Token-2022 transfer demo/);
 });
+
+test("agent demo rejects duplicate security-relevant options before opening a sandbox", () => {
+  const result = spawnSync(process.execPath, [
+    new URL("../bin/qos-agent-demo.js", import.meta.url).pathname,
+    "--home", "/tmp/one",
+    "--home", "/tmp/two",
+    "--amount", "1",
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /DUPLICATE_ARGUMENT/);
+});

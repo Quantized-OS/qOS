@@ -1,6 +1,6 @@
 # Privacy, SNARKs, and agent-safe key custody
 
-qOS v0.7 separates possession of a signing capability from possession of the
+qOS v0.9.1 separates possession of a signing capability from possession of the
 private key. This distinction is the central rule for agent deployments: the
 agent may submit a typed request, but it should never receive, load, export, or
 serialize the Ed25519 key.
@@ -40,7 +40,7 @@ standard input:
 ```json
 {
   "version": 1,
-  "operation": "sign-solana-message",
+  "operation": "authorize-and-sign-qos-intent",
   "publicKey": "BASE58_ED25519_PUBLIC_KEY",
   "messageBase64": "...",
   "authorization": {
@@ -59,9 +59,26 @@ fields, timeout, oversized output, nonzero exit, or signature that fails local
 Ed25519 verification.
 
 The adapter must independently parse the typed intent, reconstruct or parse the
-message, and pin the policy commitment in protected configuration. Merely
+message, compare that reconstruction byte-for-byte with `messageBase64`, and
+pin the policy commitment in protected configuration. Its executable must be
+an absolute, single-link, non-symlinked regular file owned by root or the
+service account, without set-ID bits or group/other write access; qOS
+launches it without a shell, from `/`, with a minimal environment. Merely
 placing a generic `sign(bytes)` program behind this interface isolates the key
 but does not stop a compromised agent from misusing the signing capability.
+Run qOS as a dedicated unprivileged account; a root qOS process defeats the
+ownership separation that this launcher check is intended to preserve.
+
+Mainnet submission requires this external non-exportable profile. Encrypted or
+plaintext software signers are rejected even when the broadcast opt-in is set.
+The command protocol is still only a transport: production deployments must
+place access control and policy enforcement inside the HSM, enclave, firmware,
+or separately isolated service.
+
+`privacyProofVerified` is a host verifier result, not a hardware attestation.
+If proof authorization must remain valid after the qOS application is
+compromised, the protected signer must verify the proof itself or validate an
+authenticated verifier attestation; it must not trust that Boolean alone.
 
 ## SNARK authorization gate
 

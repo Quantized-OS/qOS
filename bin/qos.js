@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { TextDecoder } from "node:util";
 import { publicError, QosError } from "../src/errors.js";
 import { initializeSandbox, QosService } from "../src/service.js";
 import { startServer } from "../src/server.js";
+import { readSecureFile } from "../src/secure-file.js";
+
+const MAX_CLI_JSON_BYTES = 256 * 1024;
 
 function usage() {
   return `qOS Solana policy sandbox
@@ -31,6 +34,8 @@ SOL amounts are integer lamports. Token amounts are integer base units.
 Mainnet submission additionally requires QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND.
 External signer homes require QOS_SIGNER_COMMAND. Encrypted software-key homes
 require QOS_KEY_PASSPHRASE_FILE. Prefer the external signer for agent workloads.
+The HTTP service requires QOS_API_TOKEN_FILE or QOS_API_TOKEN; mainnet service
+mode requires the secure token-file form.
 `;
 }
 
@@ -64,13 +69,49 @@ function print(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function humanServeOutput() {
+  return process.env.QOS_HUMAN_OUTPUT === "1" && process.argv[2] === "serve";
+}
+
 async function readStdin() {
   const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
+  let length = 0;
+  try {
+    for await (const chunk of process.stdin) {
+      length += chunk.length;
+      if (length > MAX_CLI_JSON_BYTES) throw new QosError("INPUT_TOO_LARGE", "CLI JSON input exceeds 256 KiB");
+      chunks.push(Buffer.from(chunk));
+    }
+    const bytes = Buffer.concat(chunks);
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new QosError("INVALID_JSON", "Input is not valid UTF-8 JSON");
+    } finally {
+      bytes.fill(0);
+    }
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+  }
+}
+
+function readJsonFile(path, label) {
+  const bytes = readSecureFile(resolve(path), {
+    maxBytes: MAX_CLI_JSON_BYTES,
+    errorCode: "INSECURE_INPUT_FILE",
+    label,
+  });
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new QosError("INVALID_JSON", `${label} is not valid UTF-8 JSON`);
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 async function main() {
+  process.umask(0o077);
   const { command, options } = parseArgs(process.argv.slice(2));
   if (!command || command === "help" || command === "--help" || command === "-h") {
     process.stdout.write(usage());
@@ -121,11 +162,11 @@ async function main() {
     case "submit": {
       only(options, ["home", "intent", "proof"]);
       if (!options.intent) throw new QosError("MISSING_ARGUMENT", "--intent is required");
-      const text = options.intent === "-" ? await readStdin() : readFileSync(resolve(options.intent), "utf8");
+      const text = options.intent === "-" ? await readStdin() : readJsonFile(options.intent, "Intent file");
       const intent = JSON.parse(text);
       const request = options.proof === undefined
         ? intent
-        : { intent, privacyProof: JSON.parse(readFileSync(resolve(options.proof), "utf8")) };
+        : { intent, privacyProof: JSON.parse(readJsonFile(options.proof, "Proof file")) };
       print(await service.submitIntent(request));
       return;
     }
@@ -178,8 +219,16 @@ async function main() {
       const host = options.host ?? process.env.QOS_HOST ?? "127.0.0.1";
       const port = Number(options.port ?? process.env.QOS_PORT ?? "8787");
       const server = startServer(service, { host, port });
-      print({ status: "listening", address: `http://${host}:${port}`, signer: service.publicKey, cluster: service.policy.cluster });
-      const close = () => server.close(() => process.exit(0));
+      const status = { status: "listening", address: `http://${host}:${port}`, signer: service.publicKey, cluster: service.policy.cluster };
+      if (humanServeOutput()) {
+        process.stdout.write(`qOS API service\n---------------\nStatus: listening\nAddress: ${status.address}\nCluster: ${status.cluster}\nSigner: ${status.signer}\nAuthentication: required\nStop: Ctrl-C\n`);
+      } else {
+        print(status);
+      }
+      const close = () => server.close(() => {
+        service.session.dispose();
+        process.exit(0);
+      });
       process.on("SIGINT", close);
       process.on("SIGTERM", close);
       return;
@@ -193,6 +242,10 @@ main().catch((error) => {
   if (error instanceof SyntaxError) {
     error = new QosError("INVALID_JSON", "Input is not valid JSON");
   }
-  process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+  if (humanServeOutput()) {
+    process.stderr.write(`qOS error [${error?.code ?? "INTERNAL_ERROR"}]: ${error instanceof QosError ? error.message : "The request failed closed"}\n`);
+  } else {
+    process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+  }
   process.exitCode = 1;
 });

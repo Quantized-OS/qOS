@@ -2,6 +2,8 @@
 
 import { runAgentSecurityAnalysis } from "../src/agent-security.js";
 
+process.umask(0o077);
+
 function usage() {
   console.log(`qOS synthetic agent security analysis
 

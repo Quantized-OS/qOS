@@ -25,7 +25,19 @@ static bool add_overflows_uintptr(uintptr_t base, size_t length) {
     return length > UINTPTR_MAX - base;
 }
 
-static bool manifest_shape_is_valid(const struct srtm_manifest *manifest) {
+static void snapshot_manifest(struct srtm_manifest *destination) {
+    const volatile uint8_t *source =
+        (const volatile uint8_t *)(uintptr_t)PLATFORM_MANIFEST_ADDRESS;
+    uint8_t *output = (uint8_t *)destination;
+
+    for (size_t i = 0; i < sizeof(*destination); ++i) {
+        output[i] = source[i];
+    }
+    __asm__ volatile("fence r, r" ::: "memory");
+}
+
+static bool manifest_shape_is_valid(const struct srtm_manifest *manifest,
+                                    uint64_t current_security_version) {
     const uintptr_t expected_base = (uintptr_t)PLATFORM_IMAGE_ADDRESS;
 
     if (manifest->magic != SRTM_MANIFEST_MAGIC ||
@@ -56,7 +68,7 @@ static bool manifest_shape_is_valid(const struct srtm_manifest *manifest) {
         return false;
     }
 
-    if (manifest->security_version < platform_read_security_version()) {
+    if (manifest->security_version < current_security_version) {
         return false;
     }
 
@@ -68,26 +80,43 @@ static bool manifest_shape_is_valid(const struct srtm_manifest *manifest) {
  * OpenSBI entry address, or never returns on failure.
  */
 uintptr_t srtm_main(uintptr_t fdt_address) {
-    (void)fdt_address;
-
-    const struct srtm_manifest *manifest =
-        (const struct srtm_manifest *)(uintptr_t)PLATFORM_MANIFEST_ADDRESS;
+    struct srtm_manifest manifest;
     uint8_t computed_digest[SRTM_SHA3_384_BYTES];
+    uint64_t current_security_version;
 
-    if (!manifest_shape_is_valid(manifest)) {
+    /*
+     * The platform must quiesce DMA and make the manifest plus the entire
+     * candidate image window immutable before stage-0 reads either object.
+     * A CPU-only PMP rule is insufficient when a DMA-capable device exists.
+     */
+    if (!platform_lock_boot_source(
+            (uintptr_t)PLATFORM_MANIFEST_ADDRESS,
+            sizeof(manifest),
+            (uintptr_t)PLATFORM_IMAGE_ADDRESS,
+            (size_t)PLATFORM_IMAGE_MAX_BYTES)) {
         platform_fail_closed(1, 0);
     }
 
-    if (!platform_sha3_384(
-            (const void *)(uintptr_t)manifest->image_address,
-            (size_t)manifest->image_length,
-            computed_digest)) {
+    snapshot_manifest(&manifest);
+
+    if (!platform_read_security_version(&current_security_version)) {
         platform_fail_closed(2, 0);
     }
 
-    if (!constant_time_equal(computed_digest, manifest->image_sha3_384,
-                             sizeof(computed_digest))) {
+    if (!manifest_shape_is_valid(&manifest, current_security_version)) {
         platform_fail_closed(3, 0);
+    }
+
+    if (!platform_sha3_384(
+            (const void *)(uintptr_t)manifest.image_address,
+            (size_t)manifest.image_length,
+            computed_digest)) {
+        platform_fail_closed(4, 0);
+    }
+
+    if (!constant_time_equal(computed_digest, manifest.image_sha3_384,
+                             sizeof(computed_digest))) {
+        platform_fail_closed(5, 0);
     }
 
     /*
@@ -95,30 +124,38 @@ uintptr_t srtm_main(uintptr_t fdt_address) {
      * transcript of every security-relevant header field plus the digest.
      * It must not verify the in-memory C struct bytes directly.
      */
-    if (!platform_verify_mldsa65_manifest(manifest)) {
-        platform_fail_closed(4, 0);
-    }
-
-    if (!platform_extend_boot_measurement(computed_digest)) {
-        platform_fail_closed(5, 0);
-    }
-
-    if (!platform_lock_root_secrets()) {
+    if (!platform_verify_mldsa65_manifest(&manifest)) {
         platform_fail_closed(6, 0);
     }
 
-    if (!platform_configure_and_lock_pmp(
-            (uintptr_t)manifest->image_address,
-            (size_t)manifest->image_length)) {
+    /* Extend a canonical commitment to every signed field, not C struct bytes. */
+    if (!platform_extend_boot_measurement(&manifest)) {
         platform_fail_closed(7, 0);
     }
 
-    /* Commit last; the update must still be atomic and power-loss safe. */
-    if (!platform_commit_security_version(manifest->security_version)) {
+    /* The handoff FDT must be authenticated or ROM-owned, measured, and locked. */
+    if (!platform_validate_measure_and_lock_fdt(fdt_address)) {
         platform_fail_closed(8, 0);
     }
 
-    secure_zero(computed_digest, sizeof(computed_digest));
+    if (!platform_lock_root_secrets()) {
+        platform_fail_closed(9, 0);
+    }
 
-    return (uintptr_t)manifest->image_entry;
+    if (!platform_configure_and_lock_pmp(
+            (uintptr_t)manifest.image_address,
+            (size_t)manifest.image_length)) {
+        platform_fail_closed(10, 0);
+    }
+
+    /* Commit last; the update must still be atomic and power-loss safe. */
+    if (!platform_commit_security_version(manifest.security_version)) {
+        platform_fail_closed(11, 0);
+    }
+
+    const uintptr_t image_entry = (uintptr_t)manifest.image_entry;
+    secure_zero(computed_digest, sizeof(computed_digest));
+    secure_zero(&manifest, sizeof(manifest));
+
+    return image_entry;
 }

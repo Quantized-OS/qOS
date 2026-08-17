@@ -16,7 +16,7 @@ import {
   writeNewEncryptedEd25519Key,
   writeNewEd25519Key,
 } from "./key-store.js";
-import { loadPolicy, parseUnsigned, validateIntent, validatePolicy } from "./policy.js";
+import { loadPolicy, parseRpcSlot, parseUnsigned, validateIntent, validatePolicy } from "./policy.js";
 import { SolanaRpc } from "./rpc.js";
 import { EphemeralSession } from "./session.js";
 import {
@@ -34,6 +34,8 @@ import {
   verifyTokenTransferAccounts,
 } from "./token.js";
 import { intentCommitment, policyCommitment, SnarkProofGate, unwrapProofRequest } from "./zk.js";
+import { assertPrivateDirectory } from "./secure-file.js";
+import { loadRuntimeProfile } from "./runtime-profile.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -158,7 +160,7 @@ function parseTokenPrepareOptions(options, policy, session) {
 }
 
 export class QosService {
-  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate() }) {
+  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate(), runtimeProfile = null }) {
     this.paths = paths;
     this.policy = policy;
     this.signer = signer;
@@ -166,9 +168,11 @@ export class QosService {
     this.session = session;
     this.rpc = rpc;
     this.proofGate = proofGate;
+    this.runtimeProfile = runtimeProfile;
   }
 
   static open(home, { rpcUrl = process.env.SOLANA_RPC_URL } = {}) {
+    assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
     const paths = sandboxPaths(home);
     const legacyFiles = [paths.legacyAuditKey, paths.legacyAuditLog, paths.legacyAuditLock].filter(existsSync);
     assertQos(
@@ -185,7 +189,8 @@ export class QosService {
       timeoutMs: policy.rpcTimeoutMs,
       commitment: policy.commitment,
     });
-    return new QosService({ paths, policy, signer, session, rpc, proofGate });
+    const runtimeProfile = existsSync(join(home, "runtime.json")) ? loadRuntimeProfile(home) : null;
+    return new QosService({ paths, policy, signer, session, rpc, proofGate, runtimeProfile });
   }
 
   async assertCluster() {
@@ -244,6 +249,7 @@ export class QosService {
       this.rpc.getSlot(),
     ]);
     assertQos(typeof blockhashResult?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid latest blockhash");
+    const slot = parseRpcSlot(currentSlot);
     const intent = {
       version: 1,
       requestNonce: parsed.requestNonce,
@@ -260,7 +266,7 @@ export class QosService {
       maxRelayTip: "0",
       destination: parsed.destination,
       recentBlockhash: blockhashResult.value.blockhash,
-      expiresAtSlot: (BigInt(currentSlot) + BigInt(this.policy.maxIntentTtlSlots)).toString(),
+      expiresAtSlot: (slot + BigInt(this.policy.maxIntentTtlSlots)).toString(),
       strategyId: parsed.strategyId,
       operatorApproval: null,
     };
@@ -311,6 +317,7 @@ export class QosService {
       this.rpc.getSlot(),
     ]);
     assertQos(typeof blockhashResult?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid latest blockhash");
+    const slot = parseRpcSlot(currentSlot);
     const intent = {
       version: 2,
       requestNonce: parsed.requestNonce,
@@ -329,7 +336,7 @@ export class QosService {
       tokenProgram: this.policy.tokenTransfer.tokenProgram,
       decimals: this.policy.tokenTransfer.decimals,
       recentBlockhash: blockhashResult.value.blockhash,
-      expiresAtSlot: (BigInt(currentSlot) + BigInt(this.policy.maxIntentTtlSlots)).toString(),
+      expiresAtSlot: (slot + BigInt(this.policy.maxIntentTtlSlots)).toString(),
       strategyId: parsed.strategyId,
       operatorApproval: null,
     };
@@ -414,6 +421,13 @@ export class QosService {
     });
     if (this.policy.cluster === "mainnet-beta") {
       assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet broadcast");
+      const signerStatus = this.signer.status();
+      assertQos(
+        signerStatus?.keyExportableToAgentProcess === false
+          || (signerStatus?.keyExportableToAgentProcess === true && this.runtimeProfile?.profile === "mainnet-insecure"),
+        "MAINNET_EXTERNAL_SIGNER_REQUIRED",
+        "Mainnet software signing requires a setup-created --insecure profile; otherwise use a non-exportable external signer",
+      );
     }
     signature = await this.signer.sign(message, {
       version: 1,
@@ -483,10 +497,16 @@ export class QosService {
         this.paths.receiverKey,
         this.paths.encryptedReceiverKey,
         this.paths.policy,
+        join(this.paths.home, "runtime.json"),
+        join(this.paths.home, "api-token"),
+        join(this.paths.home, "agents", "registry.json"),
+      ].filter(existsSync),
+      persistentCredentialDirectories: [
+        join(this.paths.home, "agents"),
       ].filter(existsSync),
       keyCustody: this.signer.status(),
       privacyProof: this.proofGate.status(),
-      note: "Only signer identity, policy, key-custody configuration, and hashed in-process nonce commitments persist in memory; completed transaction details do not.",
+      note: "Signer identity, policy, runtime credentials, onboarded agent scopes/credential files/skill packs, and key-custody configuration persist. Pending approvals and completed transaction details are not written by qOS.",
     };
   }
 }

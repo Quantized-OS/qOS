@@ -1,15 +1,21 @@
 {
   "name": "qos-solana-sandbox",
-  "version": "0.7.2",
+  "version": "0.9.1",
   "private": true,
   "description": "Policy signer for native SOL and the pinned qOS Token-2022 mint",
   "type": "module",
   "bin": {
-    "qos": "./bin/qos.js",
+    "qos": "./bin/qos-shell.js",
+    "qos-core": "./bin/qos.js",
     "qos-firmware-demo": "./bin/qos-firmware-demo.js",
+    "qos-agent": "./bin/qos-agent-control.js",
     "qos-agent-demo": "./bin/qos-agent-demo.js",
     "qos-agent-security-audit": "./bin/qos-agent-security-audit.js",
-    "qos-agent-external-setup": "./bin/qos-agent-external-setup.js"
+    "qos-agent-external-setup": "./bin/qos-agent-external-setup.js",
+    "qos-profile": "./bin/qos-profile.js",
+    "qos-policy": "./bin/qos-policy.js",
+    "qos-wallet": "./bin/qos-wallet.js",
+    "qos-shell": "./bin/qos-shell.js"
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",
@@ -18,10 +24,15 @@
     "security:agent": "node ./bin/qos-agent-security-audit.js",
     "setup:agent-external": "node ./bin/qos-agent-external-setup.js",
     "test": "node --test",
-    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --check ./bin/qos-agent-security-audit.js && node --check ./bin/qos-agent-external-setup.js && node --test"
+    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --check ./bin/qos-agent-control.js && node --check ./bin/qos-agent-security-audit.js && node --check ./bin/qos-agent-external-setup.js && node --check ./bin/qos-profile.js && node --check ./bin/qos-policy.js && node --check ./bin/qos-wallet.js && node --check ./bin/qos-shell.js && node --check ./scripts/qos-install-state.js && node --test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "homepage": "https://qos.systems",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Quantized-OS/qOS.git"
   },
   "license": "BSD-2-Clause"
 }

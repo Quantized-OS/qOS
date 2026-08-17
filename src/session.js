@@ -20,10 +20,13 @@ export class EphemeralSession {
 
   nextNonce() {
     const bytes = Buffer.from(this.nonceSource());
-    assertQos(bytes.length === 16, "INVALID_NONCE_SOURCE", "Nonce source must return exactly 16 bytes");
-    const nonce = bytes.readBigUInt64BE(0) << 64n | bytes.readBigUInt64BE(8);
-    bytes.fill(0);
-    return (nonce === 0n ? 1n : nonce).toString();
+    try {
+      assertQos(bytes.length === 16, "INVALID_NONCE_SOURCE", "Nonce source must return exactly 16 bytes");
+      const nonce = bytes.readBigUInt64BE(0) << 64n | bytes.readBigUInt64BE(8);
+      return (nonce === 0n ? 1n : nonce).toString();
+    } finally {
+      bytes.fill(0);
+    }
   }
 
   nonceCommitment(nonce) {

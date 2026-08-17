@@ -12,6 +12,106 @@ Solana is the first test environment because it combines high-throughput executi
 
 > qOS is an early-stage research and engineering project. The concept is being discussed with AMD as a possible approach to bringing firmware assurance onchain while preserving privacy. This repository does not announce an AMD partnership, endorsement, product commitment, or planned integration.
 
+## Clone to qOS
+
+After a GitHub Release is published and the thin `qos.systems` bootstrap is
+deployed, installation is:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://qos.systems/install.sh | sh
+```
+
+On macOS, the host wrapper installs or reuses a mount-isolated Lima Ubuntu VM:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://qos.systems/install-macos.sh | sh
+```
+
+On Windows, run the WSL 2 + Ubuntu 24.04 wrapper from PowerShell:
+
+```powershell
+irm https://qos.systems/install-windows.ps1 | iex
+```
+
+The site hosts only the bootstrap. It downloads and verifies the latest release
+assets from `https://github.com/Quantized-OS/qOS`. The repository generates the
+site tree with `make web-release` and GitHub assets with `make github-release`;
+source code alone does not deploy either service. See
+[`docs/BROWSER_INSTALL.md`](docs/BROWSER_INSTALL.md).
+
+On a supported Ubuntu x86-64 or ARM64 host, the beta onboarding path is one
+command after cloning. Mainnet is the default network. The interactive wizard
+first asks whether to use an existing key through a reviewed external signer or
+generate an accessible software key. External custody is the recommended
+preselected choice; it then checks adapter permissions, shows a final summary,
+and asks only for the signer public key, allowlisted destination, and reviewed
+adapter path:
+
+```sh
+./setup.sh install
+```
+
+For disposable development only, Devnet must be selected explicitly:
+
+```sh
+./setup.sh install --devnet
+```
+
+Setup installs verified user-local Node.js and Rust toolchains, Ubuntu/QEMU
+packages, runs the complete test suite, provisions the selected profile and
+private API token, verifies the source wallet against the pinned cluster,
+installs `qos` plus supporting commands under `~/.local/bin`, then opens the
+restricted qOS firmware shell. Devnet requests a confirmed faucet airdrop by
+default; `--no-fund` or `--offline` disables that step. Mainnet never funds or
+broadcasts automatically. Onboarding an agent generates its scoped skill pack
+and automatically starts one authenticated loopback REST/MCP service. The
+recommended existing-key mainnet path creates no software private key and does
+not use the host-readable QEMU signer.
+
+Choosing “generate a key” continues through exactly the same guarded path as
+passing `--insecure` explicitly:
+
+```sh
+./setup.sh install --insecure
+```
+
+The wizard displays the key-access warning and requires acceptance before it
+installs dependencies or creates the key. This profile has the same implemented
+mainnet qOS transfer and agent capabilities as the external-signer profile; only
+the custody boundary changes. Programs running as the user can copy the key.
+
+If no reviewed adapter is available yet, the wizard stops before installing
+anything and prints the signer checklist. It is also available directly:
+
+```sh
+./setup.sh install --signer-guide
+```
+
+See [`docs/SIGNER_ADAPTER_SETUP.md`](docs/SIGNER_ADAPTER_SETUP.md) for the
+plain-language operator walkthrough and exact adapter contract.
+
+Inside the shell, start with:
+
+```text
+qos> capa
+qos> stat
+qos> wal status
+qos> ag on
+qos> ag st
+qos> pol show
+qos> fw off s 1000000
+qos> s prep 1000000
+```
+
+See [`docs/QUICKSTART_SHELL.md`](docs/QUICKSTART_SHELL.md) for Devnet sends,
+the loopback agent REST/MCP service, readable output, long and shorthand commands, uninstall
+behavior, and both mainnet custody setup paths. Agent lifecycle and execution
+modes are in [`docs/AGENT_ONBOARDING.md`](docs/AGENT_ONBOARDING.md); wallet and
+policy operations are in
+[`docs/WALLET_AND_POLICY.md`](docs/WALLET_AND_POLICY.md). The current source implements
+policy-gated transfers, not DEX swaps; `trade` fails closed until a reviewed
+venue template exists.
+
 ## Why qOS
 
 Crypto traders need more than faster bots. They need machines that can prove what they booted, protect signing authority if user space is compromised, and reject trades that violate policy.
@@ -19,7 +119,7 @@ Crypto traders need more than faster bots. They need machines that can prove wha
 qOS focuses on five properties:
 
 1. **Verification from reset** — Immutable machine-mode code verifies each mutable boot stage before it runs.
-2. **Keys remain below the application** — The trading engine never receives raw Solana private-key material.
+2. **Keys can remain below the application** — The preferred external signer keeps raw Solana private-key material out of the trading engine; `--insecure` explicitly gives up this property.
 3. **No arbitrary signing** — The isolated signer accepts typed, allowlisted trade intents rather than generic `sign(bytes)` requests.
 4. **Privacy before inclusion** — Transactions can use direct or private relay paths to reduce pre-trade leakage and exposure to hostile ordering.
 5. **Public assurance without exposing private state** — Boot measurements, policy versions, and update commitments can be anchored or attested onchain without publishing strategies, keys, positions, or firmware secrets.
@@ -69,43 +169,76 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
 * `docs/AGENT_DEMO.md` — Agent-directed qOS Token-2022 transfer rehearsal
+* `docs/AGENT_ONBOARDING.md` — Per-agent credentials, skills, approvals, listener, and offboarding
+* `docs/WALLET_AND_POLICY.md` — Cluster readiness, Devnet funding, and atomic inline policy edits
+* `docs/BROWSER_INSTALL.md` — Verified `curl | sh` publication and trust boundary
+* `docs/QUICKSTART_SHELL.md` — One-command install, runtime profiles, and qOS Shell
+* `docs/SIGNER_ADAPTER_SETUP.md` — Guided signer-adapter deployment and review contract
 * `docs/AGENT_SECURITY_TEST.md` — Synthetic red-team test for agent/key boundaries
 * `docs/PRIVACY_ZK_CUSTODY.md` — Agent-safe key custody, AES-256-GCM keys, and SNARK verifier contract
-* src/ — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
+* `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
 * `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
+* `bin/qos-agent-control.js` — Agent onboarding, skill generation, managed REST/MCP service, approvals, and revocation
 * `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
 * `bin/qos-agent-external-setup.js` — Public-only external-signer home setup
+* `bin/qos-profile.js` — Owner-only API-token and runtime-profile provisioning
+* `bin/qos-policy.js` — Human-readable, allowlisted inline policy editor
+* `bin/qos-wallet.js` — Pinned-cluster source-wallet readiness and Devnet funding
+* `bin/qos-shell.js` — Restricted interactive and non-interactive command shell
+* `setup.sh` — Mainnet-default setup, wallet/agent onboarding, and confirmed full-purge uninstall
+* `web/index.html` — Install-first qos.systems landing page with Linux, macOS, and Windows choices
+* `web/install.sh` — Checksum-verifying POSIX browser bootstrap served separately from the source root
+* `web/install-macos.sh` — Lima/Ubuntu macOS host wrapper with host mounts disabled
+* `web/install-windows.ps1` — WSL 2/Ubuntu Windows host wrapper
 * `firmware-demo/` — Bare-metal RV64 M-mode policy signer for QEMU `virt`
 * `config/devnet.policy.json` — Fail-closed Devnet native-SOL policy template
 * `config/mainnet.policy.json` — Mainnet policy pinned to the qOS Token-2022 mint
-* test/ — Transaction, policy, privacy, firmware-mailbox, and relay integration tests
+* `test/` — Transaction, policy, privacy, firmware-mailbox, and relay integration tests
 * `tests/static_checks.py` — Fail-closed starter invariants
-* `SECURITY.md` — Threat model, deployment profiles, limitations, and disclosure guidance
-* `HARDENING_REPORT.md` — Implemented controls, fixed defects, verification, and remaining gaps
+* `docs/SECURITY.md` — Threat model, deployment profiles, limitations, and disclosure guidance
+* `docs/reports/HARDENING_REPORT.md` — Implemented controls, fixed defects, verification, and remaining gaps
+* `docs/reports/PRODUCTION_SECURITY_REVIEW.md` — Production-preparation findings, blockers, and acceptance criteria
 
-The firmware code is intentionally incomplete. It will not produce a deployable firmware image until the target platform provides working implementations of ML-DSA-65, SHA3-384, rollback storage, measured boot, PMP locking, and failure handling. There is no development-signature bypass.
+The firmware code is intentionally incomplete. It will not produce a deployable
+firmware image until the target platform provides working implementations of
+boot-source/DMA locking, ML-DSA-65, SHA3-384, rollback storage, measured boot,
+authenticated FDT handling, PMP locking, root-secret locking, and failure
+handling. There is no development-signature bypass.
 
-The repository now contains a working Solana sandbox. Devnet mode accepts typed OrderIntentV1 requests and constructs one pinned System Program transfer. The explicit mainnet mode accepts TokenTransferIntentV2 for the qOS mint 5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump and constructs one Token-2022 TransferChecked instruction. Both paths support an external non-exportable signer, an AES-256-GCM encrypted software-key fallback, and the original plaintext development signer. They simulate, submit, confirm, and forget completed transaction state. Neither path accepts arbitrary serialized messages for signing.
+The repository contains a working Solana sandbox. Devnet mode accepts typed
+`OrderIntentV1` requests and constructs one pinned System Program transfer. The
+explicit mainnet mode accepts `TokenTransferIntentV2` for the qOS mint
+`5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump` and constructs one Token-2022
+`TransferChecked` instruction. Mainnet submission accepts either a
+non-exportable external signer or a setup-created `mainnet-insecure` software
+profile whose accessibility notice was acknowledged. Both paths use the same
+policy validation, simulate, submit, confirm, and forget
+completed transaction state. Neither accepts arbitrary serialized messages for
+signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.7.1 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.9.1 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
 its typed intent and runtime key through already-unlinked files on Linux tmpfs.
-The firmware ELF contains policy constants but no Ed25519 seed. Raw signed
-the firmware's public signature is redacted from the QEMU terminal transcript;
-the raw transaction is never sent over that display channel.
+The firmware ELF contains policy constants but no Ed25519 seed. The firmware's
+public signature is redacted from the QEMU terminal transcript; the raw
+transaction is never sent over that display channel.
 
 The policy, public provisioning record, and firmware ELF remain on disk so the
 sandbox keeps a stable identity and can verify what booted. External-signer
 homes contain only a public signer descriptor and require an explicit public
 destination, so initialization creates no private keys. Encrypted software
 homes retain AES-256-GCM ciphertext and scrypt metadata. Plaintext demo homes
-retain PEM keys. JavaScript strings are garbage-collected and cannot be given
+retain PEM keys. Runtime API tokens, per-agent credential files, hashed agent
+registry entries, and generated skill packs persist until explicitly revoked
+or a confirmed full uninstall removes the registered qOS installation; pending
+approvals and completed transaction details do not.
+JavaScript strings are garbage-collected and cannot be given
 the same zeroization guarantee as native buffers. Use the external signer with
 a minimal host, swap disabled, and core dumps disabled for the strongest
 implemented host boundary.
@@ -144,16 +277,22 @@ code can also create copies outside qOS.
 
 ## Build the research starter
 
-On Ubuntu 20.04, 22.04, or 24.04, the complete deterministic QEMU demo is one
-command:
+For the complete first-run setup, use `./setup.sh install` (mainnet custody
+chooser), `./setup.sh install --insecure` (explicit accessible software-custody
+mainnet), or `./setup.sh install --devnet` (disposable development). For an operator-managed
+toolchain, first install Node.js 20 or newer and rustup from verified, pinned
+package sources. The demo wrapper can then install missing Ubuntu packages,
+run the checks, and launch the deterministic QEMU demo:
 
 ```sh
 bash run-demo.sh
 ```
 
-It installs missing prerequisites, runs every project check, initializes the
-new ephemeral Devnet home, builds the RV64 firmware, and performs an offline
-transaction-signing rehearsal without contacting Solana or spending funds.
+It installs missing distribution packages, verifies the preinstalled Node/Rust
+toolchain, initializes a new ephemeral Devnet home, builds the RV64 firmware,
+and performs an offline transaction-signing rehearsal without contacting
+Solana or spending funds. It never downloads and executes a remote bootstrap
+script.
 `npm run demo` is an equivalent package-script entry point. Use
 `bash run-demo.sh --help` for live verification and broadcast options, or
 `npm run demo:build -- --skip-setup` to build and provision on a machine that
@@ -174,15 +313,22 @@ With a `riscv64-linux-gnu-` cross-toolchain, compile the firmware objects:
 make build/reset.o build/secure_boot.o
 ```
 
-Do not use this repository with production keys or mainnet funds.
+The `--insecure` path can execute the implemented mainnet operations, but its
+private key is a host-readable hot-wallet key. Do not confuse that convenience
+with production-grade firmware or non-exportable custody.
 
 ## Build the research release media
 
 After the host checks pass, `make release-media` creates a deterministic source
-archive, checksums, and `release-artifacts/qos-0.7.1-research-media.iso`. The
+archive, checksums, and `release-artifacts/qos-0.9.1-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
 production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.
+
+`make github-release` generates the latest-release assets consumed by every
+installer. `make web-release` separately generates the `qos.systems` front
+page and three thin platform bootstraps; the deployment tree contains no source
+archive.
 
 ## Run a real Solana Devnet transaction
 
@@ -217,11 +363,14 @@ Token-2022 program, uses six decimals, and currently exposes metadata-pointer
 and token-metadata mint extensions. The signer checks those properties and
 fails closed if they change.
 
-Initialize a separate mainnet sandbox with an allowlisted destination wallet:
+Initialize a separate mainnet sandbox with the public identity of a reviewed
+external policy signer and an allowlisted destination wallet:
 
 ```sh
 node bin/qos.js init --home .qos-ephemeral-mainnet --cluster mainnet-beta \
+  --signer-public-key YOUR_EXTERNAL_SIGNER_PUBLIC_KEY \
   --destination YOUR_MAINNET_WALLET
+export QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter
 node bin/qos.js address --home .qos-ephemeral-mainnet
 node bin/qos.js token-address --home .qos-ephemeral-mainnet
 ```
@@ -244,9 +393,9 @@ QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
   node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
-Review .qos-ephemeral-mainnet/policy.json before funding the signer. The included
-maximum is `1000000000` base units (1,000 tokens), and any policy edit requires
-rebuilding the firmware demo before it will run.
+Review `.qos-ephemeral-mainnet/policy.json` before funding the signer. The
+included maximum is `1000000000` base units (1,000 tokens). A separately
+provisioned QEMU demo must be rebuilt after any change to its own demo policy.
 
 ## Agent-directed transfer demo
 
@@ -332,17 +481,20 @@ blockhash, checks the signer balance, and simulates the transaction; with
 [`docs/QEMU_FIRMWARE_DEMO.md`](docs/QEMU_FIRMWARE_DEMO.md) for setup, expected
 terminal output, and the precise security boundary.
 
-For the qOS Token-2022 path, provision from the separate mainnet sandbox and
-run one token in verification-only mode before enabling broadcast:
+For the qOS Token-2022 path, use a separate disposable software-key demo home
+(not the external-signer custody home) and run one token in offline or live
+verification-only mode:
 
 ```sh
-node bin/qos-firmware-demo.js build --home .qos-ephemeral-mainnet
-node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
+node bin/qos.js init --home .qos-qemu-mainnet-demo --cluster mainnet-beta \
+  --destination YOUR_DEMO_DESTINATION
+node bin/qos-firmware-demo.js build --home .qos-qemu-mainnet-demo
+node bin/qos-firmware-demo.js run --home .qos-qemu-mainnet-demo \
   --asset token --amount 1000000 --offline
-QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos-firmware-demo.js run --home .qos-ephemeral-mainnet \
-  --asset token --amount 1000000 --broadcast
 ```
+
+The QEMU runner refuses mainnet broadcast because its software seed is visible
+to the host. It is a policy-enforcement rehearsal, not a custody boundary.
 
 ## Roadmap
 

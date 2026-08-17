@@ -39,12 +39,19 @@ def main() -> None:
             "manifest_shape_is_valid",
             "secure_zero",
             "volatile uint8_t",
+            "snapshot_manifest",
+            "platform_lock_boot_source",
+            "platform_validate_measure_and_lock_fdt",
             "platform_verify_mldsa65_manifest",
             "platform_commit_security_version",
             "platform_lock_root_secrets",
             "platform_configure_and_lock_pmp",
         ),
     )
+    secure_boot = (ROOT / "firmware/secure_boot.c").read_text()
+    assert secure_boot.index("platform_lock_boot_source(") < secure_boot.index("snapshot_manifest(&manifest)"), "boot source must be locked before manifest snapshot"
+    assert secure_boot.index("snapshot_manifest(&manifest)") < secure_boot.index("platform_sha3_384("), "manifest snapshot must precede image hashing"
+    forbid("firmware/include/platform.h", ("uint64_t platform_read_security_version(void)",))
     require(
         "docs/SIGNER_POLICY.md",
         (
@@ -67,6 +74,8 @@ def main() -> None:
             "transactionRetained",
             "openSigner",
             "SnarkProofGate",
+            "MAINNET_EXTERNAL_SIGNER_REQUIRED",
+            'this.runtimeProfile?.profile === "mainnet-insecure"',
         ),
     )
     require("src/session.js", ("NONCE_REPLAY", "createHmac", "randomBytes(16)"))
@@ -107,6 +116,9 @@ def main() -> None:
             "API_TOKEN_REQUIRED",
             'new TextDecoder("utf-8", { fatal: true })',
             "maxRequestsPerSocket",
+            "QOS_API_TOKEN_FILE",
+            "TRANSFER_ENCODING_FORBIDDEN",
+            "CONTENT_LENGTH_REQUIRED",
         ),
     )
     require(
@@ -140,7 +152,34 @@ def main() -> None:
             "verifyTokenTransferAccounts",
             "MINT_EXTENSIONS_MISMATCH",
             "TOKEN_ACCOUNT_OWNER_MISMATCH",
+            "TOKEN_ACCOUNT_DELEGATE_PRESENT",
+            "TOKEN_ACCOUNT_EXTENSIONS_MISMATCH",
             "INSUFFICIENT_TOKEN_BALANCE",
+        ),
+    )
+    require(
+        "src/secure-file.js",
+        (
+            "O_NOFOLLOW",
+            "sameFile",
+            "sameVersion",
+            "readSync",
+            "metadata.nlink === 1",
+            "requireSingleLink",
+            "assertPrivateDirectory",
+        ),
+    )
+    require(
+        "src/runtime-profile.js",
+        (
+            "assertPrivateDirectory",
+            "readSecureFile",
+            "privateFile: true",
+            "randomBytes(48)",
+            "EXTERNAL_HOME_PRIVATE_FILES",
+            "INSECURE_MAINNET_ACKNOWLEDGEMENT_REQUIRED",
+            'profile === "mainnet-insecure"',
+            "assertTrustedExecutable",
         ),
     )
     require(
@@ -174,6 +213,11 @@ def main() -> None:
             "openRamBackedFile",
             "redactFirmwareOutput",
             "signature_hex",
+            "MAINNET_QEMU_BROADCAST_FORBIDDEN",
+            "isolatedCargo: true",
+            "SAFE_TOOL_PATH",
+            "CARGO_FIRMWARE_ELF",
+            "installFirmwareElf",
         ),
     )
     require(
@@ -184,6 +228,124 @@ def main() -> None:
             "QOS_ENABLE_MAINNET_BROADCAST",
             "prepareTokenIntent",
             "submitIntent",
+        ),
+    )
+    require(
+        "bin/qos-shell.js",
+        (
+            "secure firmware shell",
+            "COMMAND_ALIASES",
+            '["capa", "capabilities"]',
+            '["fw", "firmware"]',
+            "BROADCAST_CONFIRMATION_REQUIRED",
+            "LIVE_CONFIRMATION_REQUIRED",
+            "DEX_TEMPLATE_NOT_INSTALLED",
+            "INTERACTIVE_TTY_REQUIRED",
+            "shell: false",
+            "QOS_API_TOKEN_FILE",
+            "qemu-firmware-rehearsal",
+            "formatHuman",
+            'bin/qos-agent-control.js',
+            'bin/qos-policy.js',
+            'bin/qos-wallet.js',
+        ),
+    )
+    require(
+        "src/agent-registry.js",
+        (
+            "randomBytes(48)",
+            "tokenSha256",
+            "timingSafeEqual",
+            "AUTO_APPROVAL_ACKNOWLEDGEMENT_REQUIRED",
+            "validateAgentAction",
+            "writePrivateJsonAtomic",
+            "cannot request arbitrary signatures",
+            "offboardAgent",
+        ),
+    )
+    require(
+        "src/agent-server.js",
+        (
+            "LOOPBACK_REQUIRED",
+            "AGENT_UNAUTHORIZED",
+            "POLICY_RELOAD_REQUIRED",
+            "PENDING_TTL_MS",
+            "LIVE_CONFIRMATION_REQUIRED",
+            "getAgentRecord",
+            "pending.clear()",
+            "TRANSFER_ENCODING_FORBIDDEN",
+            "MCP_PROTOCOL_VERSION",
+            'url.pathname === "/mcp"',
+            "qos_request_transfer",
+            "mcp-protocol-version",
+            "MCP_HEADER_MISMATCH",
+        ),
+    )
+    require(
+        "src/agent-daemon.js",
+        (
+            "startAgentDaemon",
+            "stopAgentDaemon",
+            "processIdentityMatches",
+            "requestManagedShutdown",
+            "O_NOFOLLOW",
+        ),
+    )
+    require(
+        "src/policy-store.js",
+        (
+            "EDITABLE_POLICY_FIELDS",
+            "POLICY_FIELD_LOCKED",
+            "validatePolicy",
+            "writePrivateJsonAtomic",
+            "externalSignerPolicySyncRequired",
+        ),
+    )
+    require(
+        "src/private-json.js",
+        (
+            "readSecureFile",
+            "assertPrivateDirectory",
+            "writePrivateJsonAtomic",
+            "renameSync",
+        ),
+    )
+    require(
+        "src/wallet-onboarding.js",
+        (
+            "assertCluster",
+            "minimumFeeReserveLamports",
+            "source Token-2022 associated account does not exist",
+            "fundDevnetWallet",
+        ),
+    )
+    require(
+        "bin/qos-agent-control.js",
+        (
+            "onboard",
+            "offboard",
+            "listen",
+            "startAgentDaemon",
+            "mcpEndpoint",
+            "--accept-auto",
+            "--confirm-live",
+            "Operator API token file",
+        ),
+    )
+    require(
+        "bin/qos-policy.js",
+        (
+            "inline policy editor",
+            "--confirm-policy-change",
+            "external signer",
+        ),
+    )
+    require(
+        "bin/qos-wallet.js",
+        (
+            "source-wallet onboarding",
+            "--confirm-airdrop",
+            "walletReadiness",
         ),
     )
     require(
@@ -250,6 +412,195 @@ def main() -> None:
             "required_commands+=(qemu-system-riscv64)",
         ),
     )
+    require(
+        "setup.sh",
+        (
+            "install|uninstall",
+            "--devnet",
+            "--insecure",
+            "--accept-insecure-risk",
+            "--wizard",
+            "--signer-guide",
+            "--offline",
+            "--no-fund",
+            "--agent-id",
+            "--agent-approval",
+            "--accept-auto",
+            'profile="mainnet-external"',
+            'profile="mainnet-insecure"',
+            "Mainnet key setup",
+            "Use a key I already control (recommended)",
+            "Generate a key for me (--insecure)",
+            'insecure=1',
+            "continuing with the --insecure mainnet setup",
+            "INSECURE MAINNET KEY NOTICE",
+            "retire_legacy_installer",
+            ".qos-setup-backup",
+            "authorize-and-sign-qos-intent",
+            "Never use fixtures/external-signer.js for funds",
+            "--install-toolchains",
+            "make check",
+            "write_launcher qos bin/qos-shell.js",
+            "write_launcher qos-agent bin/qos-agent-control.js",
+            "write_launcher qos-policy bin/qos-policy.js",
+            "write_launcher qos-wallet bin/qos-wallet.js",
+            "uninstall_launchers",
+            "unlink --",
+            "FULL qOS PURGE",
+            "qos-install-state.js",
+            "No asset transfer has been prepared, signed, or broadcast by setup",
+        ),
+    )
+    require(
+        "scripts/qos-install-state.js",
+        (
+            "stopAgentDaemon",
+            "PROFILE_MARKER",
+            "TOOLCHAIN_MARKER",
+            "removeTree",
+            "isSymbolicLink",
+            "sourceCheckoutPreserved",
+        ),
+    )
+    forbid_path("install.sh")
+    require(
+        "web/install.sh",
+        (
+            "Quantized-OS/qOS",
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download",
+            "--proto '=https'",
+            "--tlsv1.2",
+            "QOS_RELEASE_SHA256",
+            "the latest GitHub Release does not provide qos-source.tar.gz",
+            "the latest GitHub Release does not provide SHA256SUMS.txt",
+            "source archive checksum mismatch",
+            "--no-same-owner",
+            'exec bash "${target}/setup.sh" install',
+            'exec bash "${target}/setup.sh" install --wizard',
+            "mainnet wizard first asks whether",
+        ),
+    )
+    forbid(
+        "web/install.sh",
+        (
+            "eval ",
+            "curl |",
+            "wget |",
+        ),
+    )
+    require(
+        "web/install-macos.sh",
+        (
+            "brew install lima",
+            '--mount-none',
+            "template:ubuntu-24.04",
+            'limactl shell --start --tty=true',
+            "https://qos.systems/install.sh",
+            'sh -s -- "$@"',
+            "asks whether to use your existing external key",
+        ),
+    )
+    forbid("web/install-macos.sh", ("eval ", "--mount-writable"))
+    require(
+        "web/install-windows.ps1",
+        (
+            "wsl.exe",
+            '--install", "-d", "Ubuntu-24.04"',
+            "QOS_SETUP_MODE",
+            '"devnet" { " -s -- --devnet" }',
+            "https://qos.systems/install.sh",
+            "default mainnet wizard asks whether",
+        ),
+    )
+    forbid("web/install-windows.ps1", ("Invoke-Expression", "ExecutionPolicy Bypass"))
+    require(
+        "web/index.html",
+        (
+            "Choose your system.",
+            'data-os="linux"',
+            'data-os="macos"',
+            'data-os="windows"',
+            "https://qos.systems/install-macos.sh",
+            "https://qos.systems/install-windows.ps1",
+            "wizard first asks whether to use your existing external key or generate a local key",
+            "Running a remote script is a trust decision.",
+        ),
+    )
+    require(
+        "scripts/build-web-release.py",
+        (
+            "https://github.com/Quantized-OS/qOS/releases/latest/download/qos-source.tar.gz",
+            '"index.html"',
+            '"install-macos.sh"',
+            '"install-windows.ps1"',
+            "RELEASE.json",
+            "web-root",
+        ),
+    )
+    forbid("scripts/build-web-release.py", ("build_source_archive", "write_bytes(archive)"))
+    require(
+        "scripts/build-github-release.py",
+        (
+            "build_source_archive",
+            "qos-source.tar.gz",
+            "SHA256SUMS.txt",
+            "Quantized-OS/qOS",
+        ),
+    )
+    require(
+        ".github/workflows/release.yml",
+        (
+            "make check",
+            "build-github-release.py",
+            "gh release create",
+            "qos-source.tar.gz",
+            "SHA256SUMS.txt",
+            "--verify-tag",
+        ),
+    )
+    require(
+        "docs/SIGNER_ADAPTER_SETUP.md",
+        (
+            "qOS does not bundle a production adapter",
+            "authorize-and-sign-qos-intent",
+            "fixtures/external-signer.js",
+            "qos-intent-v1",
+            "qos-policy-v1",
+            "privacyProofVerified",
+            "src/transaction.js",
+            "src/subprocess.js",
+        ),
+    )
+    require(
+        "scripts/bootstrap-user-toolchain.sh",
+        (
+            "https://nodejs.org/dist/",
+            "https://static.rust-lang.org/rustup/archive/",
+            "sha256sum --check --status",
+            'RUST_TOOLCHAIN="1.97.1"',
+            'NODE_VERSION="24.19.0"',
+            'RUSTUP_VERSION="1.29.0"',
+            "--no-modify-path",
+        ),
+    )
+    require(
+        "rust-toolchain.toml",
+        (
+            'channel = "1.97.1"',
+            'profile = "minimal"',
+            'targets = ["riscv64imac-unknown-none-elf"]',
+        ),
+    )
+    require(".node-version", ("24.19.0",))
+    forbid(
+        "scripts/bootstrap-user-toolchain.sh",
+        (
+            "sh.rustup.rs",
+            "| /bin/sh",
+            "| bash",
+            "eval ",
+        ),
+    )
     forbid("firmware-demo/build.rs", ("QOS_FW_SEED_HEX", "POLICY_SEED"))
     forbid("bin/qos-firmware-demo.js", ("INTENT_FILE", "intents.bin"))
     forbid("src/service.js", ("authorizeAndAppend", "auditRecords"))
@@ -257,7 +608,25 @@ def main() -> None:
     forbid("firmware-demo/src/main.rs", ("tx_hex=",))
     forbid_path("src/audit.js")
     forbid_path("test/audit.test.js")
-    print("PASS: fail-closed boot, firmware demo, native SOL and pinned Token-2022 signer-policy checks")
+    require(
+        "scripts/build-release.py",
+        (
+            "validate_release_tree",
+            "PRIVATE_KEY_MARKERS",
+            'ROOT / "docs" / "reports" / "RELEASE_READINESS.md"',
+            'path.name in {"setup.sh", "run-demo.sh"}',
+        ),
+    )
+    forbid(
+        "scripts/setup-ubuntu-20.04.sh",
+        (
+            "nodesource.com/setup_",
+            "https://sh.rustup.rs",
+            'source "${cargo_home}/env"',
+        ),
+    )
+    forbid("run-demo.sh", ('source "${cargo_home}/env"',))
+    print("PASS: fail-closed boot, firmware, wallet, policy, agent lifecycle, cross-platform browser bootstraps, native SOL, and pinned Token-2022 checks")
 
 
 if __name__ == "__main__":

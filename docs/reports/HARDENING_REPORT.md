@@ -1,6 +1,6 @@
-# qOS v0.7.1 hardening report
+# qOS v0.9.1 hardening report
 
-Date: 2026-08-15
+Date: 2026-08-16
 
 ## Outcome
 
@@ -10,6 +10,73 @@ privacy controls, and regression coverage for the defects found during review.
 It also bounds and canonicalizes transaction parsing, removes provider error
 reflection, pins the QEMU demo signer inside the firmware image, and keeps raw
 signed transactions off the demo UART display channel.
+
+Version 0.9.1 includes the production-preparation pass: security-sensitive file
+reads are inode-bound and size-bounded; mainnet submission requires an external
+non-exportable signer; mainnet HTTP mode requires a secure token file; RPC,
+model, subprocess, token-account, and release inputs fail closed more narrowly;
+the stage-0 interface locks boot inputs before reading them; and the host-readable
+QEMU path can no longer broadcast on mainnet.
+
+## v0.9.1 production-preparation changes
+
+- Added fail-closed wallet readiness, Devnet faucet confirmation, scoped agent
+  lifecycle controls, memory-only approvals, atomic inline policy editing,
+  readable operator output, and a checksum-verifying browser bootstrap.
+- Moved browser-install payload delivery to the latest GitHub Release for
+  `Quantized-OS/qOS`; the `qos.systems` deployment now contains an install-first
+  landing page, thin Linux/macOS/Windows bootstraps, and public release
+  metadata, but no embedded source payload. macOS is pinned to a mount-isolated
+  Lima Ubuntu 24.04 VM and Windows to Ubuntu 24.04 on WSL 2; both converge on
+  the same checksum-verifying Linux bootstrap.
+
+- Secure file helper with `O_NOFOLLOW`, regular-file and hard-link checks,
+  ownership/permission policy, before/open/after inode binding, bounded reads,
+  and concurrent-change rejection.
+- Strict API token file, duplicate authorization-header rejection, loopback
+  peer validation, origin-form request targets, and bounded headers/connections.
+- Redirect-free, JSON-only, bounded RPC and local-model clients; literal
+  loopback model URLs; safe integer slot parsing; and reduced DNS ambiguity.
+- Rooted external authorization envelope with recomputed intent commitment,
+  trusted executable validation, minimal subprocess environments, fixed working
+  directory, and stricter output cleanup.
+- Mainnet rejection of unacknowledged software signers and QEMU mainnet
+  broadcast. A setup-created `mainnet-insecure` profile is the explicit
+  software-custody exception.
+- Token-2022 mint authority, freeze authority, account delegate, native state,
+  close authority, delegated amount, and extension-set validation.
+- Pre-read boot-source/DMA lock hook, one-time volatile manifest snapshot,
+  fallible rollback read, canonical manifest measurement hook, authenticated
+  FDT hook, and manifest wipe before handoff.
+- Sanitized Cargo/QEMU launch environments, an isolated build-local Cargo home,
+  atomic provisioning record writes, remote-bootstrap removal, and release-tree
+  secret scanning.
+- A guided Ubuntu clone-to-shell path using `setup.sh install`, a mainnet
+  custody chooser with external custody preselected, an explicit `--devnet` development path,
+  official pinned Node.js and rustup artifacts, upstream SHA-256 verification,
+  a dedicated user toolchain, regression gates, profile provisioning, firmware
+  measurement, and atomic user-local launchers.
+- An explicit `--insecure` mainnet wizard that prints the host-accessible key
+  risk before changes, requires acknowledgement, generates one owner-only
+  software key, and retains the same implemented mainnet operation surface.
+- Owner-only runtime profiles and generated loopback API tokens whose values
+  are never printed by setup, plus a bannered restricted qOS Shell that never
+  evaluates arbitrary shell text, supports direct and interactive shorthand
+  commands, and requires explicit broadcast confirmations.
+- An auto-started authenticated loopback REST/MCP agent service. Both protocols
+  share one scoped action validator, approval queue, policy check, rate limit,
+  and executor; the generated skill pack includes the MCP contract.
+- A confirmed full `setup.sh uninstall` action that stops managed listeners and
+  ownership-checks removal of registered profiles, keys, API/agent credentials,
+  toolchains, logs, downloaded releases, marked launchers, and build artifacts
+  without following symlinks.
+- Backward-compatible uninstall permission repair for owner-controlled qOS
+  data, profile, and agent directories left at `0755`; symlink and ownership
+  checks occur before `chmod` or removal.
+- A mainnet setup wizard that explains the external signer in plain terms,
+  validates a new profile's adapter executable before system changes, prints the exact
+  signer protocol guide when custody is not ready, and requires review of the
+  final network/signer/destination/path summary.
 
 ## Implemented security changes
 
@@ -81,17 +148,33 @@ signed transactions off the demo UART display channel.
 22. The QEMU demo did not pin its provisioned signer identity inside the ELF.
 23. The QEMU demo printed the raw signed transaction on its UART data/display
     channel before the host redacted it.
+24. Mainnet profile tests used the repository fixture directly, so a checkout
+    created with a group-writable executable umask failed before exercising the
+    intended runtime boundary. Tests now copy the synthetic adapter into a
+    private mode-0700 temporary file; production adapter validation remains
+    unchanged and fail-closed.
+25. An upgraded source directory could retain the retired Devnet-default
+    `install.sh`, causing the static security suite to fail only after toolchain
+    installation. Setup now recognizes that exact legacy qOS script, moves it
+    to a private release-excluded recovery directory before dependency work,
+    and refuses to alter an unrecognized file.
 
 ## Verification performed
 
 - `make check` passes.
-- 63 Node.js tests pass, including encryption/decryption failure, external
+- The complete Node.js suite passes, including encryption/decryption failure, external
   signer isolation, SNARK request binding, replay rejection, canonicalization,
   RPC size limits, HTTP bind restrictions, provisioning-policy binding,
   failure-output redaction, IPv6 loopback handling, nested sandbox
   initialization, firmware CLI help, canonical compact-length rejection,
   exceptional signature cleanup, provider-error redaction, and symlink
-  rejection.
+  rejection, Cargo hard-link normalization into a private single-link runtime
+  ELF, runtime-profile custody checks, fail-closed DEX capability reporting,
+  broadcast confirmation, shorthand shell commands, mainnet-default setup,
+  the guided signer flow, safe retired-installer recovery, managed uninstall,
+  and side-effect-free setup/uninstall help.
+- The complete suite also passes with the repository signer fixture temporarily
+  set to mode 0775, reproducing the reported shared-checkout permission state.
 - Host C syntax checks pass with GCC, `-Wall -Wextra -Werror`.
 - Python firmware/static fail-closed invariants pass.
 - JavaScript syntax checks pass.
@@ -112,4 +195,5 @@ the host sandbox has no rollback-safe persistent nonce counter, JavaScript and
 native runtime internals cannot guarantee complete zeroization, QEMU is not a
 hardware boundary, and the package does not bundle a production SNARK circuit,
 ceremony, proving key, or verifier. See `SECURITY.md` for the deployment threat
-model and required controls.
+model and required controls, and `PRODUCTION_SECURITY_REVIEW.md` for the release
+decision and production acceptance criteria.

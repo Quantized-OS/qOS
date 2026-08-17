@@ -1,10 +1,12 @@
 import { decodeBase58 } from "./base58.js";
 import { assertQos } from "./errors.js";
 import { parseUnsigned } from "./policy.js";
+import { TextDecoder } from "node:util";
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]"]);
 const MAX_REASON_LENGTH = 256;
 const MAX_MODEL_CONTENT_LENGTH = 4096;
+const MAX_MODEL_RESPONSE_BYTES = 64 * 1024;
 
 function parseAmount(value, field) {
   const amount = parseUnsigned(String(value), 64, field);
@@ -76,7 +78,48 @@ function assertLoopbackModelUrl(modelUrl) {
 
   assertQos(parsed.protocol === "http:" || parsed.protocol === "https:", "AGENT_MODEL_URL_INVALID", "Agent model URL must use HTTP or HTTPS");
   assertQos(LOOPBACK_HOSTS.has(parsed.hostname), "AGENT_MODEL_REMOTE_FORBIDDEN", "Agent model must run on the local machine");
+  assertQos(!parsed.username && !parsed.password && parsed.hash === "", "AGENT_MODEL_URL_INVALID", "Agent model URL must not contain credentials or a fragment");
   return parsed.toString();
+}
+
+async function readModelResponse(response) {
+  const contentType = response.headers.get("content-type");
+  assertQos(typeof contentType === "string" && /^application\/json(?:\s*;|$)/i.test(contentType), "AGENT_MODEL_INVALID", "Local agent model response must use application/json");
+  const contentEncoding = response.headers.get("content-encoding");
+  assertQos(contentEncoding === null || contentEncoding === "identity", "AGENT_MODEL_INVALID", "Compressed local agent model responses are not accepted");
+  const declaredLength = response.headers.get("content-length");
+  let expectedLength;
+  if (declaredLength !== null) {
+    assertQos(/^(0|[1-9][0-9]*)$/.test(declaredLength), "AGENT_MODEL_INVALID", "Local agent model returned an invalid Content-Length");
+    assertQos(Number(declaredLength) <= MAX_MODEL_RESPONSE_BYTES, "AGENT_MODEL_RESPONSE_TOO_LARGE", "Local agent model response exceeds 64 KiB");
+    expectedLength = Number(declaredLength);
+  }
+  assertQos(response.body !== null, "AGENT_MODEL_INVALID", "Local agent model returned an empty response");
+
+  const chunks = [];
+  let length = 0;
+  try {
+    for await (const chunk of response.body) {
+      const bytes = Buffer.from(chunk);
+      length += bytes.length;
+      if (length > MAX_MODEL_RESPONSE_BYTES) {
+        bytes.fill(0);
+        assertQos(false, "AGENT_MODEL_RESPONSE_TOO_LARGE", "Local agent model response exceeds 64 KiB");
+      }
+      chunks.push(bytes);
+    }
+    assertQos(expectedLength === undefined || length === expectedLength, "AGENT_MODEL_INVALID", "Local agent model response length does not match Content-Length");
+    const body = Buffer.concat(chunks);
+    try {
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+    } catch {
+      assertQos(false, "AGENT_MODEL_INVALID", "Local agent model returned invalid JSON");
+    } finally {
+      body.fill(0);
+    }
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+  }
 }
 
 function modelPrompt({ amount, destination, mint, decimals, maxAmount }) {
@@ -117,7 +160,7 @@ export async function modelAgentPlan({
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "accept": "application/json", "content-type": "application/json" },
       body: JSON.stringify({
         model,
         temperature: 0,
@@ -127,19 +170,24 @@ export async function modelAgentPlan({
           { role: "user", content: modelPrompt({ amount, destination, mint, decimals, maxAmount }) },
         ],
       }),
+      redirect: "error",
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
     assertQos(false, "AGENT_MODEL_UNAVAILABLE", "Local agent model could not be reached");
   }
 
-  assertQos(response.ok, "AGENT_MODEL_UNAVAILABLE", `Local agent model returned HTTP ${response.status}`);
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
+    assertQos(false, "AGENT_MODEL_UNAVAILABLE", `Local agent model returned HTTP ${response.status}`);
+  }
 
   let payload;
   try {
-    payload = await response.json();
-  } catch {
-    assertQos(false, "AGENT_MODEL_INVALID", "Local agent model returned invalid JSON");
+    payload = await readModelResponse(response);
+  } catch (error) {
+    await response.body?.cancel().catch(() => {});
+    throw error;
   }
 
   const content = payload?.choices?.[0]?.message?.content;

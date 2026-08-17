@@ -77,12 +77,15 @@ change, but its live `getGenesisHash` response must equal the policy pin.
 
 ## qOS Token-2022 mainnet path
 
-Create a separate home and explicitly select mainnet. Use a destination wallet
-whose qOS associated token account already exists:
+Create a separate home, explicitly select mainnet, and provision the public
+identity of a reviewed external policy signer. Use a destination wallet whose
+qOS associated token account already exists:
 
 ```sh
 node bin/qos.js init --home .qos-ephemeral-mainnet --cluster mainnet-beta \
+  --signer-public-key YOUR_EXTERNAL_SIGNER_PUBLIC_KEY \
   --destination YOUR_MAINNET_WALLET
+export QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter
 node bin/qos.js address --home .qos-ephemeral-mainnet
 node bin/qos.js token-address --home .qos-ephemeral-mainnet
 ```
@@ -101,10 +104,12 @@ one-token intent:
 
 ```sh
 node bin/qos.js token-balance --home .qos-ephemeral-mainnet
-node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
+node bin/qos.js token-prepare --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
-Mainnet submission requires this exact additional opt-in:
+Mainnet submission requires this exact broadcast opt-in. It accepts the
+preferred external signer or a software-key home carrying the acknowledged
+`mainnet-insecure` runtime profile created by `setup.sh install --insecure`:
 
 ```sh
 QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
@@ -120,16 +125,31 @@ mainnet mode.
 Start the loopback-only service:
 
 ```sh
-export QOS_API_TOKEN="$(openssl rand -base64 32)"
+umask 077
+openssl rand -base64 48 | tr -d '\r\n' > /secure/path/qos-api-token
+chmod 600 /secure/path/qos-api-token
+export QOS_API_TOKEN_FILE=/secure/path/qos-api-token
 node bin/qos.js serve
 ```
+
+For a disposable Devnet-only session, `QOS_API_TOKEN` remains available as an
+environment fallback. Mainnet service mode requires `QOS_API_TOKEN_FILE`.
+The token file must be a non-symlinked, single-link, owner-only regular file.
 
 Minimal unauthenticated liveness and authenticated detailed health/policy:
 
 ```sh
 curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $QOS_API_TOKEN"
-curl http://127.0.0.1:8787/v1/policy -H "Authorization: Bearer $QOS_API_TOKEN"
+curl http://127.0.0.1:8787/v1/health \
+  -H "Authorization: Bearer $(tr -d '\r\n' < "$QOS_API_TOKEN_FILE")"
+curl http://127.0.0.1:8787/v1/policy \
+  -H "Authorization: Bearer $(tr -d '\r\n' < "$QOS_API_TOKEN_FILE")"
+```
+
+For the remaining examples, load the token into a short-lived shell variable:
+
+```sh
+QOS_API_TOKEN="$(tr -d '\r\n' < "$QOS_API_TOKEN_FILE")"
 ```
 
 Prepare an intent:
@@ -159,9 +179,10 @@ curl -sS http://127.0.0.1:8787/v1/intents/submit \
   --data-binary @intent.json
 ```
 
-Set `QOS_API_TOKEN` to a freshly generated secret containing at least 32 bytes;
+Configure a freshly generated visible-ASCII token containing 32 to 512 bytes;
 it is mandatory for the HTTP service and required as `Authorization: Bearer`
-on every detailed or mutating endpoint. The
+on every detailed or mutating endpoint. Clear any temporary shell copy after
+use with `unset QOS_API_TOKEN`. The
 built-in server intentionally has no TLS and now refuses every non-loopback
 bind, even when a bearer token is present. For remote administration, place a
 separately isolated TLS and authentication proxy on the same host and keep qOS
@@ -218,9 +239,12 @@ agent process; their adapter and backing HSM, firmware, enclave, KMS, or MPC
 system become security-critical. None of these modes replaces an independent
 review, physical hardening, rollback-safe replay state, or two-person controls.
 Keep Devnet and mainnet homes separate and use deliberately capped keys.
-Mainnet submission is guarded by
-`QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`, but that guard is not a security
-boundary against a compromised operating system.
+Mainnet submission requires either a non-exportable external signer or the
+explicitly acknowledged `mainnet-insecure` software-custody profile. Both are
+additionally guarded by `QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND`; the
+environment guard and setup notice are not security boundaries against a
+compromised operating system. In the insecure profile, any process with the
+qOS user's file access can copy `signer.pem`.
 
 For the strongest demonstration host, disable swap and core dumps, avoid shell
 history containing sensitive parameters, disable terminal recording, and use a

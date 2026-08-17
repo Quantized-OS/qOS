@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { decodeBase58 } from "./base58.js";
@@ -6,6 +6,7 @@ import { assertQos } from "./errors.js";
 import { initializeSandbox, sandboxPaths } from "./service.js";
 import { loadPolicy } from "./policy.js";
 import { associatedTokenAddress } from "./token.js";
+import { assertTrustedExecutable } from "./subprocess.js";
 
 const VALUE_OPTIONS = new Set(["home", "source-home", "public-key", "destination", "cluster", "signer-command"]);
 
@@ -49,11 +50,7 @@ function sourceDestination(sourceHome, cluster) {
 function validateSignerCommand(command) {
   if (command === undefined) return null;
   assertQos(isAbsolute(command), "EXTERNAL_SIGNER_CONFIG", "--signer-command must be an absolute path");
-  try {
-    accessSync(command, constants.X_OK);
-  } catch {
-    assertQos(false, "EXTERNAL_SIGNER_CONFIG", "--signer-command must be an executable reviewed signer adapter");
-  }
+  assertTrustedExecutable(command, "EXTERNAL_SIGNER");
   return command;
 }
 

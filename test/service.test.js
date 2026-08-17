@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH, QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
 import { initializeSandbox, QosService } from "../src/service.js";
+import { ensureRuntimeProfile } from "../src/runtime-profile.js";
 
 class MockRpc {
   constructor(genesis = DEVNET_GENESIS_HASH) {
@@ -52,6 +53,14 @@ test("sandbox initialization supports a new nested home path", () => {
   assert.equal(initialized.home, home);
   assert.equal(existsSync(join(home, "policy.json")), true);
   assert.equal(existsSync(join(home, "signer.pem")), true);
+});
+
+test("service rejects a sandbox home exposed to other users", { skip: process.platform === "win32" }, () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-insecure-home-"));
+  const home = join(parent, "sandbox");
+  initializeSandbox(home);
+  chmodSync(home, 0o755);
+  assert.throws(() => QosService.open(home), { code: "INSECURE_SANDBOX_HOME" });
 });
 
 test("native SOL preparation rejects a transfer back to the signer", async () => {
@@ -164,6 +173,12 @@ test("service prepares, verifies, signs, and submits the pinned qOS Token-2022 t
   const home = join(parent, "sandbox");
   const initialized = initializeSandbox(home, undefined, { cluster: "mainnet-beta" });
   const service = QosService.open(home);
+  const softwareSigner = service.signer;
+  service.signer = {
+    publicKey: service.publicKey,
+    sign: (...args) => softwareSigner.sign(...args),
+    status: () => ({ backend: "test-external", custody: "test", keyExportableToAgentProcess: false }),
+  };
   const rpc = new MockRpc(MAINNET_GENESIS_HASH);
   const source = service.tokenAddresses(service.publicKey).tokenAccount;
   const destination = service.tokenAddresses(initialized.destination).tokenAccount;
@@ -182,6 +197,58 @@ test("service prepares, verifies, signs, and submits the pinned qOS Token-2022 t
     assert.equal(result.asset, "token");
     assert.equal(result.amount, "1000000");
     assert.equal(result.mint, QOS_TOKEN_MINT);
+    assert.equal(rpc.sent.length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;
+    else process.env.QOS_ENABLE_MAINNET_BROADCAST = previous;
+  }
+});
+
+test("mainnet submission rejects an exportable software signer", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-token-custody-"));
+  const home = join(parent, "sandbox");
+  const initialized = initializeSandbox(home, undefined, { cluster: "mainnet-beta" });
+  const service = QosService.open(home);
+  const rpc = new MockRpc(MAINNET_GENESIS_HASH);
+  const source = service.tokenAddresses(service.publicKey).tokenAccount;
+  const destination = service.tokenAddresses(initialized.destination).tokenAccount;
+  rpc.accountInfos.set(QOS_TOKEN_MINT, mintAccount());
+  rpc.accountInfos.set(source, tokenAccount(service.publicKey, 5_000_000n));
+  rpc.accountInfos.set(destination, tokenAccount(initialized.destination, 0n));
+  service.rpc = rpc;
+  const intent = await service.prepareTokenIntent({ amount: "1000000" });
+  const previous = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    await assert.rejects(() => service.submitIntent(intent), { code: "MAINNET_EXTERNAL_SIGNER_REQUIRED" });
+    assert.equal(rpc.sent.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;
+    else process.env.QOS_ENABLE_MAINNET_BROADCAST = previous;
+  }
+});
+
+test("acknowledged insecure mainnet profile submits with its generated software signer", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "qos-token-insecure-opt-in-"));
+  const home = join(parent, "sandbox");
+  const destination = encodeBase58(Buffer.alloc(32, 84));
+  initializeSandbox(home, destination, { cluster: "mainnet-beta" });
+  ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+  const service = QosService.open(home);
+  const rpc = new MockRpc(MAINNET_GENESIS_HASH);
+  const source = service.tokenAddresses(service.publicKey).tokenAccount;
+  const destinationTokenAccount = service.tokenAddresses(destination).tokenAccount;
+  rpc.accountInfos.set(QOS_TOKEN_MINT, mintAccount());
+  rpc.accountInfos.set(source, tokenAccount(service.publicKey, 5_000_000n));
+  rpc.accountInfos.set(destinationTokenAccount, tokenAccount(destination, 0n));
+  service.rpc = rpc;
+  const intent = await service.prepareTokenIntent({ amount: "1000000" });
+  const previous = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    const result = await service.submitIntent(intent);
+    assert.equal(result.asset, "token");
+    assert.equal(result.signer, service.publicKey);
     assert.equal(rpc.sent.length, 1);
   } finally {
     if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;

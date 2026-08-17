@@ -19,4 +19,5 @@ test("base58 preserves leading zero bytes", () => {
 test("base58 rejects forbidden characters and wrong lengths", () => {
   assert.throws(() => decodeBase58("0OIl"), { code: "INVALID_BASE58" });
   assert.throws(() => decodeBase58("111", 32), { code: "INVALID_BASE58_LENGTH" });
+  assert.throws(() => decodeBase58("z".repeat(10_000), 32), { code: "BASE58_TOO_LONG" });
 });

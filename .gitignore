@@ -4,6 +4,7 @@ build/
 .qos-demo/
 .qos-devnet/
 .qos-mainnet/
+.qos-setup-backup/
 *.pem
 *.key
 *.log

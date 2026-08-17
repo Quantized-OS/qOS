@@ -20,6 +20,7 @@ test("RPC client emits canonical JSON-RPC requests and validates the envelope", 
   assert.equal(requests[0].request.method, "getGenesisHash");
   assert.deepEqual(requests[0].request.params, []);
   assert.equal(requests[0].options.headers["content-type"], "application/json");
+  assert.equal(requests[0].options.redirect, "error");
 });
 
 test("RPC client fails closed on JSON-RPC errors", async (t) => {
@@ -31,7 +32,7 @@ test("RPC client fails closed on JSON-RPC errors", async (t) => {
       jsonrpc: "2.0",
       id: request.id,
       error: { code: -32002, message: "simulation failed", data: { logs: ["no"] } },
-    }), { status: 200 });
+    }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
   await assert.rejects(() => rpc.sendTransaction("AA=="), { code: "RPC_ERROR" });
@@ -47,7 +48,7 @@ test("RPC errors do not reflect untrusted provider messages", async (t) => {
       jsonrpc: "2.0",
       id: request.id,
       error: { code: -32099, message: secretProviderMessage },
-    }), { status: 200 });
+    }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
   await assert.rejects(
@@ -64,10 +65,37 @@ test("RPC client rejects oversized responses before parsing", async (t) => {
   t.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async () => new Response("{}", {
     status: 200,
-    headers: { "content-length": String(2 * 1024 * 1024 + 1) },
+    headers: { "content-type": "application/json", "content-length": String(2 * 1024 * 1024 + 1) },
   });
   const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
   await assert.rejects(() => rpc.getGenesisHash(), { code: "RPC_RESPONSE_TOO_LARGE" });
+});
+
+test("RPC client rejects a non-JSON response", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response("not json", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+  const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
+  await assert.rejects(() => rpc.getGenesisHash(), { code: "RPC_INVALID_CONTENT_TYPE" });
+});
+
+test("RPC client rejects compressed or length-mismatched JSON", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const rpc = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
+  globalThis.fetch = async () => new Response("{}", {
+    status: 200,
+    headers: { "content-type": "application/json", "content-encoding": "gzip" },
+  });
+  await assert.rejects(() => rpc.getGenesisHash(), { code: "RPC_UNSUPPORTED_CONTENT_ENCODING" });
+  globalThis.fetch = async () => new Response("{}", {
+    status: 200,
+    headers: { "content-type": "application/json", "content-length": "3" },
+  });
+  await assert.rejects(() => rpc.getGenesisHash(), { code: "RPC_INVALID_LENGTH" });
 });
 
 test("RPC confirmation waits for the configured finalized commitment", async () => {
@@ -81,4 +109,11 @@ test("RPC confirmation waits for the configured finalized commitment", async () 
   const status = await rpc.confirmSignature("signature", { timeoutMs: 2000 });
   assert.equal(calls, 2);
   assert.equal(status.confirmationStatus, "finalized");
+
+  const invalid = new SolanaRpc("https://example.invalid", { timeoutMs: 1000 });
+  invalid.call = async () => ({ value: [{ slot: -1, confirmationStatus: "finalized" }] });
+  await assert.rejects(
+    () => invalid.confirmSignature("signature", { timeoutMs: 2000 }),
+    { code: "RPC_INVALID_STATUS" },
+  );
 });

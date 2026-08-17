@@ -1,89 +1,114 @@
-# qOS v0.7.1 release-readiness report
+# qOS v0.9.1 release-readiness report
 
 ## Release decision
 
-**Status: research/demo release only. Not production custody firmware.**
+**Status: hardened research/demo source only. Production custody is blocked.**
 
-The repository contains a hardened host-side Solana policy signer and a QEMU
-bare-metal demonstration. It does not contain a production SoC port, a
-working secure-boot platform implementation, an audited custody boundary, or
-a bootable operating-system image. A production firmware ISO cannot honestly
-be released from this source alone.
+The repository contains a host-side Solana policy signer, a QEMU bare-metal
+demonstration, and an intentionally unlinked stage-0 firmware starter. It does
+not contain a production SoC port, working hardware secure-boot hooks, a
+non-exportable production signer, or a bootable operating-system image.
 
-The accompanying ISO is therefore **research media**: it contains the
-reproducible source archive, this readiness report, and checksums. It is a valid
-ISO-9660 data image for download and offline inspection; it is not a bootable
-production firmware installer.
+The generated ISO is ISO-9660 research data media containing the source archive,
+readiness report, source checksum, and readme. It is not bootable firmware or
+an installer.
 
-## What was reviewed
+## v0.9.1 production-preparation changes
 
-- Host policy validation, canonical JSON, base58, Solana message construction,
-  Ed25519 signing, RPC handling, HTTP service, session replay controls, token
-  account parsing, external signer boundary, encrypted software-key fallback,
-  and SNARK verifier binding.
-- RV64 QEMU demo mailbox format, fixed transaction templates, provisioning
-  record binding, key mailbox handling, and failure/replay transcript checks.
-- Stage-0 C/assembly trust-root starter, linker constraints, and the explicit
-  unresolved platform-hook boundary.
-- Release packaging for accidental keys, ignored runtime state, and
-  deterministic source/archive contents.
+- Added source-wallet onboarding: setup pins and verifies RPC genesis, reports
+  exact mainnet SOL/Token-2022 funding blockers, and requests a confirmed
+  Devnet airdrop unless the operator selects `--no-fund` or `--offline`.
+- Added per-agent onboarding, hashed revocable credentials, generated MCP skill
+  packs, narrow scopes, ask/auto modes, one auto-started authenticated loopback
+  REST/MCP service, memory-only approvals, rate limits, and offboarding that
+  invalidates pending requests.
+- Added a strict inline policy editor with private atomic replacement. Only
+  reviewed limits, allowlists, commitment, and RPC URL can change; transaction
+  identity fields remain locked.
+- Added readable operator output with explicit `--json` machine mode.
+- The POSIX `qos.systems` bootstrap now downloads the latest verified source
+  assets from `Quantized-OS/qOS` on GitHub. The site bundle adds an install-first
+  landing page plus macOS/Lima and Windows/WSL 2 wrappers; all paths enter a
+  supported Ubuntu 24.04 environment and converge on that same bootstrap. The
+  site contains no source payload; deterministic GitHub assets and
+  tag-triggered publication are built separately.
 
-## Fixes included in v0.7.1
+- Secure inode-bound and size-bounded reads for keys, passphrases, policy,
+  signer descriptors, API tokens, provisioning records, and CLI JSON.
+- Mandatory external non-exportable signer for mainnet submission.
+- Mandatory secure API-token file for mainnet HTTP service mode.
+- Strict RPC/model content type, redirect, URL, slot, UTF-8, response-size, and
+  error-disclosure handling.
+- Exact Token-2022 mint/account extension and authority/delegate checks.
+- Sanitized external signer, verifier, Cargo, and QEMU subprocess boundaries.
+- Pre-read boot-source/DMA locking interface, one-time manifest snapshot,
+  fallible rollback read, manifest measurement, and authenticated FDT interface.
+- Mainnet broadcast disabled in the host-readable QEMU path.
+- Remote bootstrap execution removed and release secret scanning strengthened.
+- Guided Ubuntu beta onboarding added through `setup.sh install`: external
+  mainnet custody is the default and disposable Devnet mode requires
+  `--devnet`. The flow uses verified official toolchain artifacts, private
+  runtime/API-token provisioning, measured Devnet QEMU firmware, atomic
+  user-local launchers, and a bannered restricted interactive/non-interactive
+  `qos` shell with shorthand commands.
+- Confirmed `setup.sh uninstall` stops managed services and removes registered
+  profiles, keys, policies, API/agent credentials, downloaded releases,
+  toolchains, logs, marked launchers, and build artifacts without following
+  symlinks. Shared packages and an unmanaged Git checkout remain.
+- Uninstall now repairs legacy `0755` modes only after proving each qOS data,
+  profile, and agent path is a real directory owned by the current user. It
+  continues to reject symlinks and non-owned purge targets.
+- Interactive mainnet setup now provides a complete signer-adapter wizard,
+  validates a new profile's executable boundary before system changes, and stops safely
+  with a plain-language implementation/review guide when no adapter is ready.
+- The default Linux, macOS, and Windows setup flow now asks whether the operator
+  has an existing externally held key or wants qOS to generate one. The latter
+  selection enters the exact `--insecure` notice and acknowledgement path.
+- `setup.sh install --insecure` now provides the requested accessible software
+  key workaround. It requires an explicit notice acknowledgement before key
+  creation and then exposes the same implemented mainnet qOS capabilities.
+- Upgraded source trees safely retire a recognized old `install.sh` into a
+  private release-excluded backup before static checks; unrelated files are
+  preserved and block setup with an actionable error.
 
-1. Signature and public-key copies are wiped even when transaction assembly or
-   self-verification fails.
-2. Solana message parsers reject oversized messages and non-canonical compact
-   length encodings; u64 builders reject negative or overflowing values.
-3. RPC provider error messages and simulation payloads are no longer reflected
-   into qOS errors.
-4. Private-key loaders reject symlinked key paths.
-5. The QEMU demo pins the provisioned signer public key inside the firmware
-   image and rejects a different runtime seed.
-6. The QEMU UART transcript carries only the firmware signature. The raw
-   signed transaction is reconstructed and checked by the host instead of
-   being printed on the display channel.
-7. Regression tests cover each of the above controls.
+The complete source-grounded assessment is in
+`PRODUCTION_SECURITY_REVIEW.md`.
 
-## Verification performed in this workspace
+## Verification in this workspace
 
-- `make check`: pass.
-- `node --test test/*.test.js`: 63 tests pass.
-- `python3 tests/static_checks.py`: pass.
-- Node syntax checks for both CLI entry points: pass.
-- Host C syntax check with GCC and `-Wall -Wextra -Werror`: pass.
-- Archive scan: no embedded private key, passphrase, or initialized sandbox
-  state found.
+- `make check`: pass; the complete Node.js and static safety suite passes.
+- Node.js syntax checks: pass.
+- Host C syntax with GCC C11, `-Wall -Wextra -Werror`: pass.
+- Python and shell syntax checks: pass.
+- Release secret scan: pass.
+- Two release builds produce matching source archive and ISO digests.
+- No firmware ELF was built or run because Cargo, rustc, QEMU, and the RISC-V
+  cross-toolchain are not installed in this workspace.
+- The networked pinned-toolchain bootstrap was syntax- and invariant-checked
+  but not downloaded or executed in this workspace; clean-host CI remains a
+  release requirement.
 
 ## Blocking production work
 
-- Implement and independently review every `platform_*` hook in
-  `firmware/include/platform.h` for the target SoC: ROM-rooted key lookup,
-  SHA3-384, ML-DSA-65 verification, rollback-safe monotonic storage, measured
-  boot, root-secret locking, PMP configuration, and fail-closed hardware
-  behavior.
-- Define the immutable boot/update manifest format and sign it with the actual
-  production management key. Test power loss, rollback, fault injection,
-  malformed manifests, DMA, debug unlock, and secondary-hart behavior.
-- Replace the QEMU demo's runtime seed mailbox with a non-exportable HSM,
-  enclave, or hardware-held Ed25519 key. The current demo host can inspect its
-  seed and QEMU memory.
-- Add a rollback-safe persistent nonce/counter mechanism below the untrusted
-  host boundary.
-- Supply a reviewed DEX instruction template, exposure accounting, operator
-  approval/recovery path, monitoring, key rotation, incident response, and
-  capped hot-wallet deployment policy.
-- Commission independent firmware, cryptographic, Solana serialization,
-  side-channel, and operational security reviews before mainnet funds are
-  permitted.
-- Build and test a target-specific signed image with the actual toolchain and
-  hardware or a faithful hardware model. The current environment has no
-  Cargo/Rust toolchain, QEMU, or RISC-V cross-compiler, so no firmware ELF was
-  produced here.
+- Implement and independently review every `platform_*` hook on the selected
+  SoC, including immutable boot/update inputs, DMA quiescence, rollback storage,
+  measurement, authenticated FDT, PMP, debug, secrets, and failure behavior.
+- Replace all software/QEMU seed handling with a non-exportable signer that
+  independently reconstructs messages and persists rollback-safe risk state.
+- Add exposure accounting, two-person approval, recovery, rotation, incident
+  response, monitoring, and deliberately capped hot-wallet operations.
+- Isolate each untrusted agent under a distinct OS/VM identity and independently
+  review credential distribution, approval UX, and incident handling.
+- Add separately reviewed venue-specific DEX templates; current code implements
+  native SOL and pinned Token-2022 transfers only.
+- Reproduce and test the signed target image with pinned offline toolchains and
+  complete dependency/SBOM/advisory gates.
+- Complete independent firmware, cryptographic, Solana, fault-injection,
+  side-channel, hardware, and operational reviews.
 
 ## Safe release use
 
-Use the ISO and source archive for code review, offline host tests, and the
-QEMU rehearsal after installing its pinned toolchain prerequisites. Do not use
-the included templates with treasury keys, production keys, or unrestricted
-mainnet funds. Mainnet broadcast remains explicitly opt-in, but that guard is
-not a substitute for the missing production trust boundary.
+Use the source archive and research media for review, host tests, and disposable
+QEMU rehearsal. Do not use production keys, treasury assets, or unrestricted
+mainnet funds. Environment opt-ins are operational friction, not a substitute
+for the missing hardware and custody boundaries.

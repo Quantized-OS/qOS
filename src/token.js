@@ -12,6 +12,7 @@ const ED25519_D = mod(-121665n * invert(121666n));
 const ED25519_SQRT_M1 = modPow(2n, (ED25519_P - 1n) / 4n);
 const PDA_MARKER = Buffer.from("ProgramDerivedAddress", "ascii");
 const SUPPORTED_TOKEN_PROGRAMS = new Set([TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]);
+const IMMUTABLE_OWNER_EXTENSION = 7;
 
 function mod(value) {
   const reduced = value % ED25519_P;
@@ -92,6 +93,11 @@ function rpcAccountBytes(value, expectedProgram, field) {
   return bytes;
 }
 
+function assertNoneOption(bytes, offset, valueLength, code, message) {
+  assertQos(bytes.readUInt32LE(offset) === 0, code, message);
+  assertQos(bytes.subarray(offset + 4, offset + 4 + valueLength).every((byte) => byte === 0), code, message);
+}
+
 export function token2022ExtensionTypes(bytes, baseLength, accountType) {
   if (bytes.length === baseLength) return [];
   assertQos(bytes.length >= 166 && bytes[165] === accountType, "INVALID_TOKEN_EXTENSION_LAYOUT", "Token-2022 extension account type is invalid");
@@ -122,6 +128,8 @@ export function parseMintAccount(value, { tokenProgram, decimals, allowedMintExt
   assertQos(bytes.length >= 82, "INVALID_MINT_ACCOUNT", "Mint account is shorter than the SPL mint layout");
   assertQos(bytes[45] === 1, "UNINITIALIZED_MINT", "Mint account is not initialized");
   assertQos(bytes[44] === decimals, "MINT_DECIMALS_MISMATCH", "Mint decimals do not match the signed policy");
+  assertNoneOption(bytes, 0, 32, "MINT_AUTHORITY_PRESENT", "Pinned mint must have no mint authority");
+  assertNoneOption(bytes, 46, 32, "FREEZE_AUTHORITY_PRESENT", "Pinned mint must have no freeze authority");
   const extensions = tokenProgram === TOKEN_2022_PROGRAM_ID ? token2022ExtensionTypes(bytes, 82, 1) : [];
   assertQos(tokenProgram === TOKEN_2022_PROGRAM_ID || bytes.length === 82, "INVALID_MINT_ACCOUNT", "Classic SPL mint has an unexpected account size");
   assertQos(extensions.length === allowedMintExtensions.length && extensions.every((type, index) => type === allowedMintExtensions[index]), "MINT_EXTENSIONS_MISMATCH", "Mint extensions changed from the signed policy");
@@ -134,12 +142,22 @@ export function parseTokenAccount(value, { tokenProgram, mint, owner, field }) {
   assertQos(encodeBase58(bytes.subarray(0, 32)) === mint, "TOKEN_ACCOUNT_MINT_MISMATCH", `${field} is for a different mint`);
   assertQos(encodeBase58(bytes.subarray(32, 64)) === owner, "TOKEN_ACCOUNT_OWNER_MISMATCH", `${field} has an unexpected authority`);
   assertQos(bytes[108] === 1, "TOKEN_ACCOUNT_NOT_TRANSFERABLE", `${field} is uninitialized or frozen`);
+  assertNoneOption(bytes, 72, 32, "TOKEN_ACCOUNT_DELEGATE_PRESENT", `${field} must not have a transfer delegate`);
+  assertNoneOption(bytes, 109, 8, "TOKEN_ACCOUNT_NATIVE_STATE", `${field} must not be a wrapped-native account`);
+  assertQos(bytes.readBigUInt64LE(121) === 0n, "TOKEN_ACCOUNT_DELEGATED_BALANCE", `${field} must not retain a delegated balance`);
+  assertNoneOption(bytes, 129, 32, "TOKEN_ACCOUNT_CLOSE_AUTHORITY", `${field} must not have a close authority`);
+  let extensions = [];
   if (tokenProgram === TOKEN_PROGRAM_ID) {
     assertQos(bytes.length === 165, "INVALID_TOKEN_ACCOUNT", `${field} has an unexpected classic SPL account size`);
   } else {
-    token2022ExtensionTypes(bytes, 165, 2);
+    extensions = token2022ExtensionTypes(bytes, 165, 2);
+    assertQos(
+      extensions.length === 1 && extensions[0] === IMMUTABLE_OWNER_EXTENSION,
+      "TOKEN_ACCOUNT_EXTENSIONS_MISMATCH",
+      `${field} must contain exactly the Token-2022 immutable-owner extension`,
+    );
   }
-  return { amount: bytes.readBigUInt64LE(64) };
+  return { amount: bytes.readBigUInt64LE(64), extensions };
 }
 
 export async function verifyTokenTransferAccounts({ rpc, tokenPolicy, sourceOwner, destinationOwner, sourceTokenAccount, destinationTokenAccount, amount }) {
@@ -148,6 +166,16 @@ export async function verifyTokenTransferAccounts({ rpc, tokenPolicy, sourceOwne
     rpc.getAccountInfo(sourceTokenAccount),
     rpc.getAccountInfo(destinationTokenAccount),
   ]);
+  assertQos(
+    sourceInfo !== null && sourceInfo !== undefined,
+    "TOKEN_ACCOUNT_NOT_FOUND",
+    `Source Token-2022 account ${sourceTokenAccount} does not exist on the pinned cluster; run qos wallet status for funding instructions`,
+  );
+  assertQos(
+    destinationInfo !== null && destinationInfo !== undefined,
+    "TOKEN_ACCOUNT_NOT_FOUND",
+    `Destination Token-2022 account ${destinationTokenAccount} does not exist on the pinned cluster; run qos wallet status for funding instructions`,
+  );
   const mint = parseMintAccount(mintInfo, tokenPolicy);
   const source = parseTokenAccount(sourceInfo, {
     tokenProgram: tokenPolicy.tokenProgram,
