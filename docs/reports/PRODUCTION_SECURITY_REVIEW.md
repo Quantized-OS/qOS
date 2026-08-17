@@ -1,6 +1,6 @@
-# qOS v0.7.3 production security review
+# qOS v0.9.1 production security review
 
-Date: 2026-08-15
+Date: 2026-08-16
 
 ## Release decision
 
@@ -19,7 +19,7 @@ documentation. No production keys, accounts, or network transactions were
 used.
 
 Input archive SHA-256:
-`7cb144e07578c89ba2ae3a216d5b60daa2f642c8c9e78886b7c0567a8144a9fc`.
+`5eda81d6f161bd4d3d7eaafb12194ff4989cb74748efb24cc79d9e54fddcecd0`.
 
 ## Security changes made
 
@@ -86,18 +86,36 @@ Input archive SHA-256:
 
 ### Release engineering
 
-- Removed remote bootstrap execution from the setup script.
+- Removed unverified remote bootstrap execution from the setup script. The new
+  separately hosted POSIX bootstrap verifies the deterministic source archive
+  SHA-256 and rejects unsafe archive entries before invoking `setup.sh`.
 - Replaced the previous Devnet-default installer with an explicit
-  `setup.sh install|uninstall` action surface. Mainnet external custody is the
-  default; disposable Devnet setup requires `--devnet`.
+  `setup.sh install|uninstall` action surface. Mainnet is the default network;
+  its wizard asks for existing external custody or generated software custody,
+  preselects the external option, and requires `--devnet` for Devnet.
 - Added `setup.sh install --insecure` as an explicit mainnet software-custody
   workaround. It generates the key only after the accessibility notice is
   accepted and otherwise uses the same mainnet policy and operation surface.
+- Made the no-argument installer custody choice explicit on Linux, macOS, and
+  Windows. Selecting generated custody enters the exact `--insecure` warning
+  and acknowledgement path before any key is created.
 - Added a restricted `qos` firmware shell with a qOS banner, direct commands,
-  interactive use, documented shorthand aliases, and a separate `qos-core`
-  launcher for the low-level CLI.
-- Limit uninstall to marked, regular, owner-managed launchers; profiles,
-  policies, keys, API tokens, toolchains, and source are preserved.
+  readable operator output, explicit JSON mode, documented shorthand aliases,
+  and a separate `qos-core` launcher for the low-level CLI.
+- Added source-wallet readiness and default confirmed Devnet faucet funding;
+  mainnet reports the exact signer, fee reserve, pinned mint, derived source
+  account, and blockers without claiming it can manufacture live assets.
+- Added scoped agent onboarding/offboarding, hashed per-agent credentials,
+  generated MCP skill packs, ask/auto modes, an auto-started authenticated
+  loopback REST/MCP service, memory-only pending approvals, mainnet live gating,
+  and pending-request revocation. MCP and REST converge on one executor.
+- Added an allowlisted atomic policy editor; genesis, programs, mint, decimals,
+  extension policy, and transaction templates remain locked.
+- Require confirmation for a full uninstall that stops managed listeners and
+  ownership-checks removal of registered profiles, policies, keys, API/agent
+  credentials, downloaded releases, toolchains, logs, marked launchers, and
+  build output without following symlinks. Preserve shared packages and an
+  unmanaged Git checkout.
 - Guide new mainnet operators through signer readiness, public identity,
   destination, executable validation, and final review; stop before changes
   when the required external custody boundary does not exist.
@@ -144,20 +162,33 @@ Input archive SHA-256:
 9. **Independent review is absent.** Cryptography, serialization, firmware,
    fault injection, side channels, hardware integration, incident recovery,
    and operations require independent assessment.
+10. **Agent process isolation is external.** Per-agent files do not isolate two
+    processes running as the same Unix user. Production deployments need
+    separate OS/VM identities and must not give agents the operator token.
+11. **Web publication trust is external.** The generated browser bootstrap is
+    not deployed by this repository. Its checksum comes from the same GitHub
+    Release as the source asset and does not survive repository or GitHub
+    account compromise; publish and pin the digest independently.
+12. **macOS and Windows are host wrappers, not native ports.** macOS relies on
+    Homebrew and Lima; Windows relies on WSL 2 and the Ubuntu distribution.
+    Those platform supply chains and host hypervisors remain outside the qOS
+    firmware trust boundary.
 
 ## Verification evidence
 
 | Check | Result |
 | --- | --- |
-| `make check` | Pass: 97 Node.js tests plus static invariants |
-| Node.js syntax checks | Pass for all seven CLI entry points |
+| `make check` | Pass: complete Node.js suite plus static invariants |
+| Node.js syntax checks | Pass for all ten CLI entry points |
 | Host C syntax | Pass with GCC C11, `-Wall -Wextra -Werror`, freestanding headers |
 | Python syntax | Pass for release and static-check scripts |
 | Shell syntax | Pass for setup and demo wrappers |
 | Release secret scan | Pass for the source release tree |
 | Deterministic release build | Pass when two independently generated source archives and ISOs match |
 | Rust/QEMU execution | Not run: required tools are absent in this workspace |
-| Setup/install/uninstall surface | Mainnet wizard, signer guide, legacy-installer recovery, explicit-Devnet, launcher, profile-preservation, syntax, static, and help tests pass; networked clean-host setup not run in this workspace |
+| Setup/install/uninstall surface | Mainnet wizard, signer guide, legacy-installer recovery, explicit-Devnet, wallet and first-agent onboarding, confirmed full purge, unmanaged-file preservation, symlink non-following, syntax, static, and help tests pass; networked clean-host setup not run in this workspace |
+| Agent lifecycle and listener | Scoped credential/MCP-skill generation, automatic service lifecycle, MCP header/origin/tool enforcement, ask/auto execution, operator separation, policy intersection, rate limiting, mainnet live gate, pending-request revocation, and offboarding tests pass |
+| Policy and browser release | Atomic allowlisted policy edits, locked template identity, readable/JSON output, bootstrap help, deterministic web tree, and archive checksum tests pass |
 
 `package.json` declares no runtime or development npm dependencies. The Rust
 demo is locked to `ed25519-dalek` 3.0.0, `curve25519-dalek` 5.0.0, and their

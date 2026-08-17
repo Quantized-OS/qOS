@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { associatedTokenAddress, parseMintAccount, parseTokenAccount } from "../src/token.js";
+import { associatedTokenAddress, parseMintAccount, parseTokenAccount, verifyTokenTransferAccounts } from "../src/token.js";
 import { QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
 
 const MINT_DATA = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIDGpH6NAwAGAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARIAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEPrFEGyurxoDELH4NDgY2FgCwzD1H6ncBPPe75SwYqPEwCmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ+sUQbK6vGgMQsfg0OBjYWALDMPUfqdwE897vlLBio8DAAAAcU9TAwAAAHFvc1AAAABodHRwczovL2lwZnMuaW8vaXBmcy9iYWZrcmVpZjZqcGFreHF6dGcyZDJuZHN0MmpscXdrNXJrbmp2czRjcGN1ZTVzc2U3emhrM3dzcXl4dQAAAAA=";
@@ -62,4 +62,27 @@ test("Token-2022 account rejects delegates and unexpected extensions", () => {
     owner: OWNER,
     field: "tokenAccount",
   }), { code: "TOKEN_ACCOUNT_EXTENSIONS_MISMATCH" });
+});
+
+test("missing source token accounts report the exact readiness command before signing", async () => {
+  await assert.rejects(() => verifyTokenTransferAccounts({
+    rpc: {
+      async getAccountInfo(address) {
+        return address === "DerivedSourceAta" ? null : rpcAccount(MINT_DATA);
+      },
+    },
+    tokenPolicy: {
+      mint: QOS_TOKEN_MINT,
+      tokenProgram: TOKEN_2022_PROGRAM_ID,
+      decimals: 6,
+      allowedMintExtensions: [18, 19],
+    },
+    sourceOwner: OWNER,
+    destinationOwner: OWNER,
+    sourceTokenAccount: "DerivedSourceAta",
+    destinationTokenAccount: "DerivedDestinationAta",
+    amount: 1n,
+  }), (error) => error.code === "TOKEN_ACCOUNT_NOT_FOUND"
+    && /DerivedSourceAta/.test(error.message)
+    && /qos wallet status/.test(error.message));
 });

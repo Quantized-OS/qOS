@@ -69,6 +69,10 @@ function print(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function humanServeOutput() {
+  return process.env.QOS_HUMAN_OUTPUT === "1" && process.argv[2] === "serve";
+}
+
 async function readStdin() {
   const chunks = [];
   let length = 0;
@@ -215,7 +219,12 @@ async function main() {
       const host = options.host ?? process.env.QOS_HOST ?? "127.0.0.1";
       const port = Number(options.port ?? process.env.QOS_PORT ?? "8787");
       const server = startServer(service, { host, port });
-      print({ status: "listening", address: `http://${host}:${port}`, signer: service.publicKey, cluster: service.policy.cluster });
+      const status = { status: "listening", address: `http://${host}:${port}`, signer: service.publicKey, cluster: service.policy.cluster };
+      if (humanServeOutput()) {
+        process.stdout.write(`qOS API service\n---------------\nStatus: listening\nAddress: ${status.address}\nCluster: ${status.cluster}\nSigner: ${status.signer}\nAuthentication: required\nStop: Ctrl-C\n`);
+      } else {
+        print(status);
+      }
       const close = () => server.close(() => {
         service.session.dispose();
         process.exit(0);
@@ -233,6 +242,10 @@ main().catch((error) => {
   if (error instanceof SyntaxError) {
     error = new QosError("INVALID_JSON", "Input is not valid JSON");
   }
-  process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+  if (humanServeOutput()) {
+    process.stderr.write(`qOS error [${error?.code ?? "INTERNAL_ERROR"}]: ${error instanceof QosError ? error.message : "The request failed closed"}\n`);
+  } else {
+    process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+  }
   process.exitCode = 1;
 });

@@ -166,6 +166,16 @@ export async function verifyTokenTransferAccounts({ rpc, tokenPolicy, sourceOwne
     rpc.getAccountInfo(sourceTokenAccount),
     rpc.getAccountInfo(destinationTokenAccount),
   ]);
+  assertQos(
+    sourceInfo !== null && sourceInfo !== undefined,
+    "TOKEN_ACCOUNT_NOT_FOUND",
+    `Source Token-2022 account ${sourceTokenAccount} does not exist on the pinned cluster; run qos wallet status for funding instructions`,
+  );
+  assertQos(
+    destinationInfo !== null && destinationInfo !== undefined,
+    "TOKEN_ACCOUNT_NOT_FOUND",
+    `Destination Token-2022 account ${destinationTokenAccount} does not exist on the pinned cluster; run qos wallet status for funding instructions`,
+  );
   const mint = parseMintAccount(mintInfo, tokenPolicy);
   const source = parseTokenAccount(sourceInfo, {
     tokenProgram: tokenPolicy.tokenProgram,

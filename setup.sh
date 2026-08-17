@@ -15,9 +15,12 @@ readonly -a MANAGED_LAUNCHERS=(
   qos-shell
   qos-firmware
   qos-agent
+  qos-agent-demo
   qos-agent-security-audit
   qos-agent-external-setup
   qos-profile
+  qos-policy
+  qos-wallet
 )
 
 print_banner() {
@@ -54,9 +57,10 @@ Usage:
 
 Actions:
   install      Verify dependencies and source, provision a profile, install
-               commands, and open qOS. Mainnet external custody is the default.
-  uninstall    Remove only qOS-managed command launchers. Profiles, keys, and
-               toolchains are preserved.
+               commands, and open qOS. Mainnet setup asks whether to use an
+               existing external key or generate an accessible software key.
+  uninstall    Stop qOS services and permanently remove all qOS-managed data,
+               keys, credentials, toolchains, launchers, logs, and build output.
 
 Run ./setup.sh install --help or ./setup.sh uninstall --help for action options.
 EOF
@@ -70,7 +74,7 @@ Usage: ./setup.sh install [options]
 
 Network and custody:
   -d, --devnet                 Use disposable Devnet software keys. Without this
-                               option, setup uses mainnet external custody.
+                               option, setup opens the mainnet custody chooser.
   -i, --insecure               Generate a locally accessible mainnet software key
                                after an explicit risk acknowledgement
   -y, --accept-insecure-risk   Non-interactive acknowledgement for --insecure
@@ -85,12 +89,29 @@ Paths and behavior:
   -B, --bin PATH               User command directory (default: ~/.local/bin)
   -k, --skip-setup             Use already-installed dependencies
   -F, --skip-firmware          Do not build the Devnet QEMU firmware
+  -v, --verbose                Show the complete security-suite output
+      --offline                Skip cluster readiness checks and Devnet funding
+      --no-fund                Verify Devnet but do not request its default airdrop
+      --airdrop-lamports N     Devnet funding amount (default: 200000000)
   -n, --no-shell               Finish without entering qOS
   -h, --help                   Show this help
 
-Normal mainnet setup never imports a private key and requires a reviewed
-non-exportable signer adapter. --insecure deliberately generates an accessible
-software key. Setup never funds an account or broadcasts a transaction.
+Optional first agent:
+      --agent-id ID            Onboard one agent during setup
+      --agent-name NAME        Human-readable agent name
+      --agent-approval MODE    ask or auto (default: ask)
+      --agent-asset ASSET      sol on Devnet; qos-token on mainnet
+      --agent-max-amount N     Maximum base units per request
+      --agent-destination KEY  Policy-allowlisted destination
+      --agent-strategy-id ID   Policy-allowlisted strategy ID
+      --accept-auto            Acknowledge unattended automatic execution
+
+With no custody option, the interactive mainnet wizard asks whether to use an
+existing key through a reviewed non-exportable signer adapter or generate a
+local key. The generated-key choice continues exactly as --insecure and requires
+the same explicit warning acceptance. qOS never imports an existing private key.
+Devnet setup requests a confirmed faucet airdrop unless --no-fund or --offline
+is selected. Mainnet setup never funds or broadcasts.
 EOF
 }
 
@@ -168,11 +189,13 @@ Usage: ./setup.sh uninstall [options]
 
 Options:
   -B, --bin PATH               Command directory (default: ~/.local/bin)
+  -y, --yes                    Confirm the full purge non-interactively
   -h, --help                   Show this help
 
-Uninstall removes only regular files bearing the qOS managed-launcher marker.
-Profiles, policies, API tokens, keys, toolchains, and source files are retained
-to prevent accidental loss of custody material.
+WARNING: uninstall permanently removes qOS-managed profiles, private keys,
+policies, agent credentials and skills, runtime tokens, managed services, logs,
+downloaded browser releases, user-local toolchains, and build artifacts. An
+unmanaged Git source checkout and unmanaged command files are preserved.
 EOF
 }
 
@@ -239,6 +262,61 @@ prompt_required() {
       return
     fi
     printf 'A value is required.\n' >&2
+  done
+}
+
+prompt_default() {
+  local question="$1"
+  local default_value="$2"
+  local answer
+  printf '%s [%s]: ' "${question}" "${default_value}" >&2
+  IFS= read -r answer || die "Setup input ended before the wizard was complete."
+  prompt_result="${answer:-${default_value}}"
+}
+
+choose_mainnet_custody() {
+  local answer
+  cat <<'EOF'
+
+Mainnet key setup
+-----------------
+
+How should qOS get the signing identity for your source wallet?
+
+  1) Use a key I already control (recommended)
+     The private key stays in your external signer. qOS asks only for its
+     public key and the path to a reviewed signer adapter.
+
+  2) Generate a key for me (--insecure)
+     qOS creates a mainnet software key on this computer. Programs running as
+     your user can access and copy it. A separate warning and acceptance step
+     is required before the key is created.
+
+qOS never asks you to paste an existing private key or recovery phrase.
+Type guide for the external-signer setup instructions.
+EOF
+  while true; do
+    printf 'Choose 1 or 2 [1]: ' >&2
+    IFS= read -r answer || die "Setup input ended before the wizard was complete."
+    case "${answer:-1}" in
+      1|existing|own)
+        custody_selected_by_wizard="external"
+        log "Using your existing key through a reviewed external signer."
+        return
+        ;;
+      2|generate|generated)
+        custody_selected_by_wizard="generated"
+        insecure=1
+        log "Generated-key custody selected; continuing with the --insecure mainnet setup."
+        return
+        ;;
+      g|G|guide|GUIDE|Guide)
+        print_signer_guide
+        warn "Mainnet setup is incomplete. No dependencies, profile, key, or launcher were created."
+        exit 2
+        ;;
+      *) printf 'Enter 1 for your existing external key, 2 to generate a key, or guide.\n' >&2 ;;
+    esac
   done
 }
 
@@ -339,7 +417,6 @@ uninstall_launchers() {
   [[ ! -L "${bin_directory}" ]] || die "The command directory must not be a symbolic link."
   if [[ ! -e "${bin_directory}" ]]; then
     log "No qOS command directory exists at ${bin_directory}."
-    log "Profiles and toolchains were not removed."
     return
   fi
   [[ -d "${bin_directory}" ]] || die "The command path is not a directory: ${bin_directory}"
@@ -363,7 +440,6 @@ uninstall_launchers() {
   if (( removed == 0 )); then
     log "No managed qOS launchers were installed in ${bin_directory}."
   fi
-  log "Profiles and toolchains were not removed."
 }
 
 if (($# == 0)); then
@@ -396,9 +472,23 @@ signer_command=""
 bin_directory="${QOS_INSTALL_BIN:-${HOME}/.local/bin}"
 skip_setup=0
 skip_firmware=0
+verbose=0
 open_shell=1
 wizard=0
 signer_guide=0
+offline=0
+no_fund=0
+airdrop_lamports="200000000"
+agent_id=""
+agent_name=""
+agent_approval="ask"
+agent_asset=""
+agent_max_amount=""
+agent_destination=""
+agent_strategy_id=""
+accept_auto=0
+uninstall_yes=0
+custody_selected_by_wizard=""
 declare -A seen_options=()
 
 while (($#)); do
@@ -413,7 +503,24 @@ while (($#)); do
       insecure=1
       shift
       ;;
-    -y|--accept-insecure-risk)
+    -y)
+      if [[ "${action}" == "uninstall" ]]; then
+        mark_seen uninstall_yes "$1"
+        uninstall_yes=1
+      else
+        mark_seen accept_insecure_risk "$1"
+        accept_insecure_risk=1
+      fi
+      shift
+      ;;
+    --yes)
+      [[ "${action}" == "uninstall" ]] || die "--yes is valid only with uninstall; use --accept-insecure-risk for an insecure mainnet install."
+      mark_seen uninstall_yes "$1"
+      uninstall_yes=1
+      shift
+      ;;
+    --accept-insecure-risk)
+      [[ "${action}" == "install" ]] || die "--accept-insecure-risk is valid only with install."
       mark_seen accept_insecure_risk "$1"
       accept_insecure_risk=1
       shift
@@ -468,6 +575,74 @@ while (($#)); do
       skip_firmware=1
       shift
       ;;
+    -v|--verbose)
+      mark_seen verbose "$1"
+      verbose=1
+      shift
+      ;;
+    --offline)
+      mark_seen offline "$1"
+      offline=1
+      shift
+      ;;
+    --no-fund)
+      mark_seen no_fund "$1"
+      no_fund=1
+      shift
+      ;;
+    --airdrop-lamports)
+      require_option_value "$1" "${2-}"
+      mark_seen airdrop_lamports "$1"
+      airdrop_lamports="$2"
+      shift 2
+      ;;
+    --agent-id)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_id "$1"
+      agent_id="$2"
+      shift 2
+      ;;
+    --agent-name)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_name "$1"
+      agent_name="$2"
+      shift 2
+      ;;
+    --agent-approval)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_approval "$1"
+      agent_approval="$2"
+      shift 2
+      ;;
+    --agent-asset)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_asset "$1"
+      agent_asset="$2"
+      shift 2
+      ;;
+    --agent-max-amount)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_max_amount "$1"
+      agent_max_amount="$2"
+      shift 2
+      ;;
+    --agent-destination)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_destination "$1"
+      agent_destination="$2"
+      shift 2
+      ;;
+    --agent-strategy-id)
+      require_option_value "$1" "${2-}"
+      mark_seen agent_strategy_id "$1"
+      agent_strategy_id="$2"
+      shift 2
+      ;;
+    --accept-auto)
+      mark_seen accept_auto "$1"
+      accept_auto=1
+      shift
+      ;;
     -n|--no-shell)
       mark_seen no_shell "$1"
       open_shell=0
@@ -499,11 +674,72 @@ fi
 
 if [[ "${action}" == "uninstall" ]]; then
   [[ "${devnet}" -eq 0 && "${insecure}" -eq 0 && "${accept_insecure_risk}" -eq 0 && -z "${qos_home}" && -z "${destination}" && -z "${public_key}" && -z "${signer_command}" \
-    && "${skip_setup}" -eq 0 && "${skip_firmware}" -eq 0 && "${open_shell}" -eq 1 && "${wizard}" -eq 0 ]] \
-    || die "uninstall accepts only --bin and --help."
+    && "${skip_setup}" -eq 0 && "${skip_firmware}" -eq 0 && "${verbose}" -eq 0 && "${open_shell}" -eq 1 && "${wizard}" -eq 0 \
+    && "${offline}" -eq 0 && "${no_fund}" -eq 0 && "${airdrop_lamports}" == "200000000" \
+    && -z "${agent_id}" && -z "${agent_name}" && "${agent_approval}" == "ask" && -z "${agent_asset}" \
+    && -z "${agent_max_amount}" && -z "${agent_destination}" && -z "${agent_strategy_id}" && "${accept_auto}" -eq 0 ]] \
+    || die "uninstall accepts only --bin, --yes, and --help."
   print_banner
+  cat <<'EOF'
+
+FULL qOS PURGE
+--------------
+This permanently deletes every registered qOS profile and software key, all
+agent and API credentials, policies, skills, managed listener state and logs,
+downloaded browser releases, qOS user toolchains, launchers, and build output.
+This cannot be undone. Shared Ubuntu packages and an unmanaged Git checkout are
+not removed.
+EOF
+  if (( ! uninstall_yes )); then
+    [[ -t 0 && -t 1 ]] || die "Unattended uninstall requires --yes."
+    printf 'Type DELETE to permanently remove all qOS-managed artifacts: ' >&2
+    IFS= read -r purge_confirmation || die "Uninstall input ended before confirmation."
+    [[ "${purge_confirmation}" == "DELETE" ]] || die "Full qOS purge was not confirmed."
+  fi
+  data_root="${XDG_DATA_HOME:-${HOME}/.local/share}"
+  [[ "${data_root}" == /* ]] || die "XDG_DATA_HOME must be an absolute path."
+  purge_node="$(command -v node || true)"
+  if [[ -z "${purge_node}" ]]; then
+    case "$(uname -m)" in
+      x86_64) purge_node="${data_root}/qos/toolchains/node-v${NODE_VERSION}-linux-x64/bin/node" ;;
+      aarch64|arm64) purge_node="${data_root}/qos/toolchains/node-v${NODE_VERSION}-linux-arm64/bin/node" ;;
+      *) purge_node="" ;;
+    esac
+  fi
+  [[ -n "${purge_node}" && -x "${purge_node}" ]] || die "Node.js is required to perform the ownership-checked full purge."
+  "${purge_node}" "${SCRIPT_DIR}/scripts/qos-install-state.js" purge \
+    --data-root "${data_root}" \
+    --project-root "${SCRIPT_DIR}" \
+    --bin "${bin_directory}" >/dev/null
   uninstall_launchers "${bin_directory}"
+  log "Full qOS purge complete. Managed profiles, keys, credentials, services, toolchains, logs, and build artifacts were removed."
+  log "Unmanaged launchers and an unmanaged Git source checkout were preserved."
   exit 0
+fi
+
+[[ "${airdrop_lamports}" =~ ^[1-9][0-9]*$ ]] || die "--airdrop-lamports must be a positive canonical integer."
+(( ! offline || ! no_fund )) || die "--offline and --no-fund are redundant; choose one."
+if [[ "${airdrop_lamports}" != "200000000" && ( "${offline}" -eq 1 || "${no_fund}" -eq 1 ) ]]; then
+  die "--airdrop-lamports cannot be combined with --offline or --no-fund."
+fi
+[[ "${agent_approval}" == "ask" || "${agent_approval}" == "auto" ]] || die "--agent-approval must be ask or auto."
+[[ "${accept_auto}" -eq 0 || "${agent_approval}" == "auto" ]] || die "--accept-auto requires --agent-approval auto."
+if [[ -n "${agent_name}" || -n "${agent_asset}" || -n "${agent_max_amount}" || -n "${agent_destination}" || -n "${agent_strategy_id}" || "${agent_approval}" != "ask" || "${accept_auto}" -eq 1 ]]; then
+  [[ -n "${agent_id}" ]] || die "--agent-id is required when any first-agent option is supplied."
+fi
+if [[ -n "${agent_id}" ]]; then
+  [[ "${agent_id}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "--agent-id must start with a lowercase letter and contain at most 32 lowercase letters, digits, or hyphens."
+fi
+
+interactive=0
+if [[ -t 0 && -t 1 ]] || (( wizard )); then
+  interactive=1
+fi
+banner_printed=0
+if (( interactive && ! devnet && ! insecure )) && [[ -z "${public_key}" && -z "${signer_command}" ]]; then
+  print_banner
+  banner_printed=1
+  choose_mainnet_custody
 fi
 
 profile="mainnet-external"
@@ -512,6 +748,16 @@ if (( devnet )); then
 elif (( insecure )); then
   profile="mainnet-insecure"
 fi
+if [[ "${profile}" == "devnet" ]]; then
+  profile_agent_asset="sol"
+  profile_agent_action="native SOL transfer"
+else
+  profile_agent_asset="qos-token"
+  profile_agent_action="qOS Token-2022 transfer"
+fi
+if [[ -n "${agent_asset}" && "${agent_asset}" != "${profile_agent_asset}" ]]; then
+  die "--agent-asset ${agent_asset} is disabled for ${profile}; the enabled setup asset is ${profile_agent_asset} (${profile_agent_action})."
+fi
 
 if [[ -z "${qos_home}" ]]; then
   qos_home="${HOME}/.local/share/qos/profiles/${profile}"
@@ -519,13 +765,16 @@ elif [[ "${qos_home}" != /* ]]; then
   qos_home="$(resolve_absolute_path "${qos_home}")"
 fi
 
-interactive=0
-if [[ -t 0 && -t 1 ]] || (( wizard )); then
-  interactive=1
+if [[ -n "${agent_id}" && "${interactive}" -eq 0 ]]; then
+  [[ -n "${agent_max_amount}" ]] || die "Unattended first-agent setup requires --agent-max-amount."
+fi
+if [[ "${profile}" != "devnet" ]]; then
+  (( ! no_fund )) || die "--no-fund is valid only together with --devnet."
+  [[ "${airdrop_lamports}" == "200000000" ]] || die "--airdrop-lamports is valid only together with --devnet."
 fi
 
 retire_legacy_installer
-print_banner
+(( banner_printed )) || print_banner
 log "Selected profile: ${profile}."
 
 if [[ "${profile}" == "devnet" ]]; then
@@ -538,7 +787,8 @@ Guided setup: disposable Devnet
 
 Devnet is the practice network. qOS will create disposable software keys,
 a strict transfer policy, a private API token, and the QEMU firmware demo.
-It will not request funds or broadcast a transaction.
+Unless --no-fund or --offline was selected, it will request and confirm a
+Devnet faucet airdrop for the new source wallet. It will not spend those funds.
 
 Profile files:  ${qos_home}
 Commands:       ${bin_directory}
@@ -606,11 +856,6 @@ seed phrase, recovery phrase, or HSM secret. You will enter only:
 Profile files:  ${qos_home}
 Commands:       ${bin_directory}
 EOF
-      if ! ask_yes_no "Do you already have the external Ed25519 key and reviewed qOS adapter?" "no"; then
-        print_signer_guide
-        warn "Mainnet setup is incomplete. No dependencies, profile, key, or launcher were created."
-        exit 2
-      fi
       if [[ -z "${public_key}" ]]; then
         printf '\nThis is the public Solana address from the secure signer. Never enter a private key.\n' >&2
         prompt_required "External signer public key"
@@ -683,7 +928,19 @@ EOF
 fi
 
 if (( ! skip_setup )); then
-  "${SYSTEM_SETUP_SCRIPT}" --install-toolchains
+  if (( verbose )); then
+    "${SYSTEM_SETUP_SCRIPT}" --install-toolchains
+  else
+    log "Installing or verifying pinned dependencies; this can take a few minutes."
+    dependency_log="$(mktemp "${TMPDIR:-/tmp}/qos-dependencies.XXXXXX")"
+    if ! "${SYSTEM_SETUP_SCRIPT}" --install-toolchains >"${dependency_log}" 2>&1; then
+      cat "${dependency_log}" >&2
+      unlink -- "${dependency_log}"
+      die "Dependency setup failed."
+    fi
+    unlink -- "${dependency_log}"
+    log "Pinned dependencies are ready."
+  fi
 fi
 
 toolchain_root="${QOS_TOOLCHAIN_ROOT:-${HOME}/.local/share/qos/toolchains}"
@@ -710,6 +967,8 @@ node_binary="$(command -v node)"
 node_environment=(env -i HOME="${HOME}" PATH="${PATH}" LANG=C.UTF-8)
 [[ -z "${CARGO_HOME:-}" ]] || node_environment+=(CARGO_HOME="${CARGO_HOME}")
 [[ -z "${RUSTUP_HOME:-}" ]] || node_environment+=(RUSTUP_HOME="${RUSTUP_HOME}")
+[[ -z "${QOS_AGENT_AUTOSERVE:-}" ]] || node_environment+=(QOS_AGENT_AUTOSERVE="${QOS_AGENT_AUTOSERVE}")
+[[ -z "${QOS_AGENT_PORT:-}" ]] || node_environment+=(QOS_AGENT_PORT="${QOS_AGENT_PORT}")
 run_node() {
   "${node_environment[@]}" "${node_binary}" "$@"
 }
@@ -718,8 +977,24 @@ run_external_node() {
 }
 
 cd "${SCRIPT_DIR}"
-log "Running the complete qOS security and regression suite."
-"${node_environment[@]}" make check
+log "Running the qOS security and regression suite. Use --verbose to show every check."
+if (( verbose )); then
+  "${node_environment[@]}" make check
+else
+  check_log="$(mktemp "${TMPDIR:-/tmp}/qos-check.XXXXXX")"
+  if ! "${node_environment[@]}" make check >"${check_log}" 2>&1; then
+    cat "${check_log}" >&2
+    unlink -- "${check_log}"
+    die "The qOS security and regression suite failed; setup stopped before installing commands."
+  fi
+  check_count="$(sed -n 's/^.*tests \([0-9][0-9]*\)$/\1/p' "${check_log}" | tail -n 1)"
+  unlink -- "${check_log}"
+  if [[ -n "${check_count}" ]]; then
+    log "Security suite passed (${check_count} tests)."
+  else
+    log "Security suite passed."
+  fi
+fi
 
 json_field() {
   local field_name="$1"
@@ -799,23 +1074,33 @@ else
     init_args=(init --home "${qos_home}" --cluster devnet)
     [[ -z "${destination}" ]] || init_args+=(--destination "${destination}")
     log "Creating a disposable Devnet signer, destination, and fail-closed policy."
-    run_node bin/qos.js "${init_args[@]}"
+    created_profile="$(run_node bin/qos.js "${init_args[@]}")"
   elif [[ "${profile}" == "mainnet-insecure" ]]; then
     log "Generating the acknowledged locally accessible mainnet Ed25519 software key."
-    run_node bin/qos.js init \
+    created_profile="$(run_node bin/qos.js init \
       --home "${qos_home}" \
       --cluster mainnet-beta \
-      --destination "${destination}"
+      --destination "${destination}")"
   else
     log "Creating a public-only mainnet external-signer profile."
-    run_node bin/qos-agent-external-setup.js \
+    created_profile="$(run_node bin/qos-agent-external-setup.js \
       --home "${qos_home}" \
       --cluster mainnet-beta \
       --public-key "${public_key}" \
       --destination "${destination}" \
       --signer-command "${signer_command}" \
-      --create
+      --create)"
   fi
+  cat <<EOF
+
+Profile created
+---------------
+Network:        $(printf '%s\n' "${created_profile}" | json_field cluster)
+Source wallet:  $(printf '%s\n' "${created_profile}" | json_field signer)
+Destination:    $(printf '%s\n' "${created_profile}" | json_field destination)
+Key custody:    $(printf '%s\n' "${created_profile}" | json_field keyCustody)
+Profile files:  ${qos_home}
+EOF
 fi
 
 profile_args=(create --home "${qos_home}" --profile "${profile}")
@@ -823,11 +1108,175 @@ profile_args=(create --home "${qos_home}" --profile "${profile}")
 [[ "${profile}" != "mainnet-insecure" ]] || profile_args+=(--accept-insecure-risk)
 profile_json="$(run_node bin/qos-profile.js "${profile_args[@]}")"
 api_token_file="$(printf '%s\n' "${profile_json}" | json_field apiTokenFile)"
+data_root="${XDG_DATA_HOME:-${HOME}/.local/share}"
+[[ "${data_root}" == /* ]] || die "XDG_DATA_HOME must be an absolute path."
+run_node scripts/qos-install-state.js register \
+  --data-root "${data_root}" \
+  --home "${qos_home}" \
+  --bin "${bin_directory}" \
+  --toolchain-root "${toolchain_root}" >/dev/null
+
+if (( offline )); then
+  log "Offline setup selected; the source wallet and RPC cluster were not checked."
+  log "Run qos wallet status when this computer has network access."
+elif [[ "${profile}" == "devnet" && "${no_fund}" -eq 0 ]]; then
+  log "Verifying Devnet and requesting ${airdrop_lamports} faucet lamports for the source wallet."
+  if ! run_node bin/qos-wallet.js --home "${qos_home}" fund-devnet --lamports "${airdrop_lamports}" --confirm-airdrop; then
+    warn "The Devnet faucet or RPC did not complete funding. Setup will continue without pretending the wallet is ready."
+    warn "Run qos wallet fund ${airdrop_lamports} after setup to retry."
+  fi
+else
+  log "Verifying the source wallet against the policy-pinned Solana cluster."
+  if [[ "${profile}" == "mainnet-external" ]]; then
+    if ! run_external_node bin/qos-wallet.js --home "${qos_home}" status; then
+      warn "Cluster readiness could not be verified. qOS will still fail closed before preparing or signing an action."
+      warn "Run qos wallet status to retry."
+    fi
+  elif ! run_node bin/qos-wallet.js --home "${qos_home}" status; then
+    warn "Cluster readiness could not be verified. qOS will still fail closed before preparing or signing an action."
+    warn "Run qos wallet status to retry."
+  fi
+fi
+
+if (( interactive )) && [[ -z "${agent_id}" ]]; then
+  if ask_yes_no "Onboard an AI agent now?" "no"; then
+    prompt_required "Agent ID (lowercase letters, digits, hyphens)"
+    agent_id="${prompt_result}"
+    prompt_default "Agent name" "${agent_id}"
+    agent_name="${prompt_result}"
+    if ask_yes_no "Require your approval before every agent action?" "yes"; then
+      agent_approval="ask"
+    else
+      agent_approval="auto"
+      cat <<'EOF'
+
+Automatic mode allows every valid request inside the agent and qOS policy
+limits to execute while the listener is running live. It is not arbitrary
+signing, but it can move funds without another prompt.
+EOF
+      if ! ask_yes_no "Accept automatic in-policy execution for this agent?" "no"; then
+        log "Agent onboarding cancelled; qOS setup will continue."
+        agent_id=""
+      else
+        accept_auto=1
+      fi
+    fi
+    if [[ -n "${agent_id}" ]]; then
+      if [[ "${profile}" == "devnet" ]]; then
+        default_agent_max="$(run_node --input-type=module -e 'import { loadPolicy } from "./src/policy.js"; process.stdout.write(loadPolicy(process.argv[1]).maxTransferLamports);' "${qos_home}/policy.json")"
+      else
+        default_agent_max="$(run_node --input-type=module -e 'import { loadPolicy } from "./src/policy.js"; process.stdout.write(loadPolicy(process.argv[1]).tokenTransfer.maxTransferAmount);' "${qos_home}/policy.json")"
+      fi
+      agent_asset="${profile_agent_asset}"
+      printf 'Allowed action: %s (%s). This is the only transfer template enabled by this profile.\n' \
+        "${profile_agent_action}" "${profile_agent_asset}"
+      prompt_default "Maximum base units per request" "${default_agent_max}"
+      agent_max_amount="${prompt_result}"
+    fi
+  fi
+fi
+
+if (( interactive )) && [[ -n "${agent_id}" && -z "${agent_max_amount}" ]]; then
+  [[ -n "${agent_name}" ]] || agent_name="${agent_id}"
+  if [[ "${profile}" == "devnet" ]]; then
+    default_agent_max="$(run_node --input-type=module -e 'import { loadPolicy } from "./src/policy.js"; process.stdout.write(loadPolicy(process.argv[1]).maxTransferLamports);' "${qos_home}/policy.json")"
+  else
+    default_agent_max="$(run_node --input-type=module -e 'import { loadPolicy } from "./src/policy.js"; process.stdout.write(loadPolicy(process.argv[1]).tokenTransfer.maxTransferAmount);' "${qos_home}/policy.json")"
+  fi
+  agent_asset="${profile_agent_asset}"
+  printf 'Allowed action: %s (%s). This is the only transfer template enabled by this profile.\n' \
+    "${profile_agent_action}" "${profile_agent_asset}"
+  prompt_default "Maximum base units per request for ${agent_id}" "${default_agent_max}"
+  agent_max_amount="${prompt_result}"
+  if [[ "${agent_approval}" == "auto" && "${accept_auto}" -eq 0 ]]; then
+    if ask_yes_no "Accept automatic in-policy execution for ${agent_id}?" "no"; then
+      accept_auto=1
+    else
+      die "Automatic first-agent onboarding was not acknowledged."
+    fi
+  fi
+fi
+
+if (( interactive )) && [[ -n "${agent_id}" ]]; then
+  [[ -n "${agent_name}" ]] || agent_name="${agent_id}"
+  [[ -n "${agent_asset}" ]] || agent_asset="${profile_agent_asset}"
+  [[ -n "${agent_destination}" ]] \
+    || agent_destination="$(run_node --input-type=module -e 'import { loadPolicy } from "./src/policy.js"; process.stdout.write(loadPolicy(process.argv[1]).allowedDestinations[0]);' "${qos_home}/policy.json")"
+  [[ -n "${agent_strategy_id}" ]] \
+    || agent_strategy_id="$(run_node --input-type=module -e 'import { loadPolicy } from "./src/policy.js"; process.stdout.write(String(loadPolicy(process.argv[1]).allowedStrategyIds[0]));' "${qos_home}/policy.json")"
+  if [[ ! -e "${qos_home}/agents/${agent_id}/token" && ! -L "${qos_home}/agents/${agent_id}/token" ]]; then
+    cat <<EOF
+
+Agent ready to onboard
+----------------------
+ID:              ${agent_id}
+Name:            ${agent_name}
+Execution:       ${agent_approval}
+Allowed action:  ${profile_agent_action}
+Maximum amount:  ${agent_max_amount} base units
+Destination:     ${agent_destination}
+Strategy ID:     ${agent_strategy_id}
+EOF
+    if ! ask_yes_no "Create this scoped agent?" "yes"; then
+      log "Agent onboarding cancelled; qOS setup will continue."
+      agent_id=""
+    fi
+  fi
+fi
+
+if [[ -n "${agent_id}" ]]; then
+  [[ "${agent_id}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "Agent ID must start with a lowercase letter and contain at most 32 lowercase letters, digits, or hyphens."
+  [[ -n "${agent_max_amount}" ]] || die "--agent-max-amount is required for first-agent onboarding."
+  if [[ -e "${qos_home}/agents/${agent_id}/token" ]]; then
+    existing_agent="$(run_node bin/qos-agent-control.js --home "${qos_home}" --json show "${agent_id}")" \
+      || die "Existing agent ${agent_id} could not be validated."
+    [[ "$(printf '%s\n' "${existing_agent}" | json_field maxAmount)" == "${agent_max_amount}" ]] \
+      || die "Existing agent ${agent_id} has a different maximum amount; offboard it explicitly before changing scope."
+    [[ "$(printf '%s\n' "${existing_agent}" | json_field approvalMode)" == "${agent_approval}" ]] \
+      || die "Existing agent ${agent_id} has a different approval mode; offboard it explicitly before changing scope."
+    [[ -z "${agent_name}" || "$(printf '%s\n' "${existing_agent}" | json_field name)" == "${agent_name}" ]] \
+      || die "Existing agent ${agent_id} has a different name."
+    [[ -z "${agent_asset}" || "$(printf '%s\n' "${existing_agent}" | json_field asset)" == "${agent_asset}" ]] \
+      || die "Existing agent ${agent_id} has a different asset scope."
+    [[ -z "${agent_destination}" || "$(printf '%s\n' "${existing_agent}" | json_field destination)" == "${agent_destination}" ]] \
+      || die "Existing agent ${agent_id} has a different destination scope."
+    [[ -z "${agent_strategy_id}" || "$(printf '%s\n' "${existing_agent}" | json_field strategyId)" == "${agent_strategy_id}" ]] \
+      || die "Existing agent ${agent_id} has a different strategy scope."
+    log "Agent ${agent_id} is already onboarded; preserving its credential and scope."
+  else
+    agent_args=(
+      --home "${qos_home}"
+      onboard
+      --id "${agent_id}"
+      --max-amount "${agent_max_amount}"
+      --approval "${agent_approval}"
+    )
+    agent_args+=(--yes)
+    [[ -z "${agent_name}" ]] || agent_args+=(--name "${agent_name}")
+    [[ -z "${agent_asset}" ]] || agent_args+=(--asset "${agent_asset}")
+    [[ -z "${agent_destination}" ]] || agent_args+=(--destination "${agent_destination}")
+    [[ -z "${agent_strategy_id}" ]] || agent_args+=(--strategy-id "${agent_strategy_id}")
+    (( ! accept_auto )) || agent_args+=(--accept-auto)
+    log "Onboarding agent ${agent_id} and generating its revocable skill pack."
+    run_node bin/qos-agent-control.js "${agent_args[@]}"
+  fi
+fi
+
+if [[ "${QOS_AGENT_AUTOSERVE:-1}" != "0" && -f "${qos_home}/agents/registry.json" ]]; then
+  installed_agent_count="$(run_node --input-type=module -e '
+    import { listAgents } from "./src/agent-registry.js";
+    process.stdout.write(String(listAgents(process.argv[1]).length));
+  ' "${qos_home}")"
+  if [[ "${installed_agent_count}" =~ ^[1-9][0-9]*$ ]]; then
+    log "Ensuring the authenticated loopback REST and MCP service is running."
+    run_node bin/qos-agent-control.js --home "${qos_home}" start
+  fi
+fi
 
 if (( ! skip_firmware )); then
   if [[ "${profile}" == "devnet" ]]; then
     log "Building and provisioning the private single-link QEMU firmware ELF."
-    run_node bin/qos-firmware-demo.js build --home "${qos_home}"
+    run_node bin/qos-firmware-demo.js build --home "${qos_home}" --human
   else
     log "QEMU firmware is not built for mainnet because its demo seed would be host-readable."
   fi
@@ -884,14 +1333,17 @@ write_launcher qos bin/qos-shell.js
 write_launcher qos-core bin/qos.js
 write_launcher qos-shell bin/qos-shell.js
 write_launcher qos-firmware bin/qos-firmware-demo.js
-write_launcher qos-agent bin/qos-agent-demo.js
+write_launcher qos-agent bin/qos-agent-control.js
+write_launcher qos-agent-demo bin/qos-agent-demo.js
 write_launcher qos-agent-security-audit bin/qos-agent-security-audit.js
 write_launcher qos-agent-external-setup bin/qos-agent-external-setup.js
 write_launcher qos-profile bin/qos-profile.js
+write_launcher qos-policy bin/qos-policy.js
+write_launcher qos-wallet bin/qos-wallet.js
 
 log "Installed qOS commands in ${bin_directory}."
 log "Profile: ${qos_home}"
-log "No transaction has been broadcast."
+log "No asset transfer has been prepared, signed, or broadcast by setup."
 if [[ "${profile}" == "devnet" ]]; then
   cat <<'EOF'
 
@@ -900,6 +1352,9 @@ Setup complete. qOS will open on disposable Devnet.
 Start here:
   capa              show exactly what this profile can do
   stat              show its address and key-custody status
+  wal status        verify the source wallet on Devnet
+  ag on              onboard an agent with a guided wizard
+  ag st              show the auto-started REST and MCP service
   fw off s 1000000  rehearse a transfer entirely offline
   h                 show every command
 EOF
@@ -907,13 +1362,19 @@ elif [[ "${profile}" == "mainnet-insecure" ]]; then
   cat <<'EOF'
 
 Setup complete. qOS will open on mainnet with a locally generated software key.
-The key is accessible to programs running as this user. All standard qOS
-mainnet policy, simulation, agent, signing, submission, and confirmation paths
-are enabled.
+The key is accessible to programs running as this user. qOS installed the
+mainnet policy, simulation, agent, signing, submission, and confirmation paths.
+Live actions remain blocked until `wal status` reports that the source wallet
+and pinned Token-2022 accounts are ready.
 
 Start here:
   capa              show mainnet capabilities and accessible key custody
   stat              inspect signer and privacy status
+  wal status        show the exact SOL and qOS-token funding requirements
+  ag                 list managed agents and the required workflow
+  ag on              onboard an agent after wallet blockers are resolved
+  ag st              show the auto-started REST and MCP service
+  ag re --confirm-live  explicitly enable live mainnet agent execution
   tok addr          show the pinned qOS Token-2022 account
   tok prep 1000000  prepare one token without signing or broadcasting
   h                 show every command
@@ -923,10 +1384,17 @@ else
 
 Setup complete. qOS will open with public-only mainnet custody.
 The private key was not imported and QEMU signing is disabled for mainnet.
+Live actions remain blocked until `wal status` reports that the source wallet
+and pinned Token-2022 accounts are ready.
 
 Start here:
   capa              confirm mainnet-external custody
   stat              inspect signer and privacy status
+  wal status        show the exact SOL and qOS-token funding requirements
+  ag                 list managed agents and the required workflow
+  ag on              onboard an agent after wallet blockers are resolved
+  ag st              show the auto-started REST and MCP service
+  ag re --confirm-live  explicitly enable live mainnet agent execution
   tok addr          show the pinned qOS Token-2022 account
   tok prep 1000000  prepare one token without signing or broadcasting
   h                 show every command

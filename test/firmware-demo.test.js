@@ -18,6 +18,7 @@ import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH } from "../src/constants.js";
 import {
   assertFirmwareBroadcastAllowed,
+  assertFirmwareProfileSupported,
   clusterGenesisBytes,
   encodeKeyMailbox,
   encodeIntentBundle,
@@ -56,6 +57,14 @@ test("QEMU demo forbids mainnet broadcast because its seed is host-readable", ()
   assert.throws(
     () => assertFirmwareBroadcastAllowed({ cluster: "mainnet-beta" }, true),
     { code: "MAINNET_QEMU_BROADCAST_FORBIDDEN" },
+  );
+});
+
+test("QEMU firmware commands reject mainnet profiles before reading stale provisioning", () => {
+  assert.doesNotThrow(() => assertFirmwareProfileSupported({ cluster: "devnet" }));
+  assert.throws(
+    () => assertFirmwareProfileSupported({ cluster: "mainnet-beta" }),
+    { code: "MAINNET_QEMU_PROFILE_UNSUPPORTED" },
   );
 });
 

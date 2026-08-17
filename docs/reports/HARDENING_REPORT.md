@@ -1,6 +1,6 @@
-# qOS v0.7.3 hardening report
+# qOS v0.9.1 hardening report
 
-Date: 2026-08-15
+Date: 2026-08-16
 
 ## Outcome
 
@@ -11,14 +11,24 @@ It also bounds and canonicalizes transaction parsing, removes provider error
 reflection, pins the QEMU demo signer inside the firmware image, and keeps raw
 signed transactions off the demo UART display channel.
 
-Version 0.7.3 adds the production-preparation pass: security-sensitive file
+Version 0.9.1 includes the production-preparation pass: security-sensitive file
 reads are inode-bound and size-bounded; mainnet submission requires an external
 non-exportable signer; mainnet HTTP mode requires a secure token file; RPC,
 model, subprocess, token-account, and release inputs fail closed more narrowly;
 the stage-0 interface locks boot inputs before reading them; and the host-readable
 QEMU path can no longer broadcast on mainnet.
 
-## v0.7.3 production-preparation changes
+## v0.9.1 production-preparation changes
+
+- Added fail-closed wallet readiness, Devnet faucet confirmation, scoped agent
+  lifecycle controls, memory-only approvals, atomic inline policy editing,
+  readable operator output, and a checksum-verifying browser bootstrap.
+- Moved browser-install payload delivery to the latest GitHub Release for
+  `Quantized-OS/qOS`; the `qos.systems` deployment now contains an install-first
+  landing page, thin Linux/macOS/Windows bootstraps, and public release
+  metadata, but no embedded source payload. macOS is pinned to a mount-isolated
+  Lima Ubuntu 24.04 VM and Windows to Ubuntu 24.04 on WSL 2; both converge on
+  the same checksum-verifying Linux bootstrap.
 
 - Secure file helper with `O_NOFOLLOW`, regular-file and hard-link checks,
   ownership/permission policy, before/open/after inode binding, bounded reads,
@@ -41,8 +51,8 @@ QEMU path can no longer broadcast on mainnet.
 - Sanitized Cargo/QEMU launch environments, an isolated build-local Cargo home,
   atomic provisioning record writes, remote-bootstrap removal, and release-tree
   secret scanning.
-- A guided Ubuntu clone-to-shell path using `setup.sh install`, mainnet
-  external custody by default, an explicit `--devnet` development path,
+- A guided Ubuntu clone-to-shell path using `setup.sh install`, a mainnet
+  custody chooser with external custody preselected, an explicit `--devnet` development path,
   official pinned Node.js and rustup artifacts, upstream SHA-256 verification,
   a dedicated user toolchain, regression gates, profile provisioning, firmware
   measurement, and atomic user-local launchers.
@@ -53,9 +63,16 @@ QEMU path can no longer broadcast on mainnet.
   are never printed by setup, plus a bannered restricted qOS Shell that never
   evaluates arbitrary shell text, supports direct and interactive shorthand
   commands, and requires explicit broadcast confirmations.
-- A managed `setup.sh uninstall` action that removes only marked qOS launchers
-  and deliberately preserves profiles, policies, keys, API tokens, toolchains,
-  and source.
+- An auto-started authenticated loopback REST/MCP agent service. Both protocols
+  share one scoped action validator, approval queue, policy check, rate limit,
+  and executor; the generated skill pack includes the MCP contract.
+- A confirmed full `setup.sh uninstall` action that stops managed listeners and
+  ownership-checks removal of registered profiles, keys, API/agent credentials,
+  toolchains, logs, downloaded releases, marked launchers, and build artifacts
+  without following symlinks.
+- Backward-compatible uninstall permission repair for owner-controlled qOS
+  data, profile, and agent directories left at `0755`; symlink and ownership
+  checks occur before `chmod` or removal.
 - A mainnet setup wizard that explains the external signer in plain terms,
   validates a new profile's adapter executable before system changes, prints the exact
   signer protocol guide when custody is not ready, and requires review of the
@@ -145,7 +162,7 @@ QEMU path can no longer broadcast on mainnet.
 ## Verification performed
 
 - `make check` passes.
-- 97 Node.js tests pass, including encryption/decryption failure, external
+- The complete Node.js suite passes, including encryption/decryption failure, external
   signer isolation, SNARK request binding, replay rejection, canonicalization,
   RPC size limits, HTTP bind restrictions, provisioning-policy binding,
   failure-output redaction, IPv6 loopback handling, nested sandbox

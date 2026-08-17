@@ -6,8 +6,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { publicError, QosError } from "../src/errors.js";
+import { formatHuman } from "../src/human-output.js";
 import { loadPolicy } from "../src/policy.js";
 import { loadRuntimeProfile } from "../src/runtime-profile.js";
+import { QosService } from "../src/service.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAX_COMMAND_BYTES = 4096;
@@ -32,6 +34,8 @@ const COMMAND_ALIASES = new Map([
   ["tok", "token"],
   ["fw", "firmware"],
   ["ag", "agent"],
+  ["wal", "wallet"],
+  ["pol", "policy"],
   ["api", "serve"],
   ["audit", "security-audit"],
   ["tr", "trade"],
@@ -52,7 +56,12 @@ const FIRMWARE_ACTION_ALIASES = new Map([
   ["off", "offline"],
   ["cast", "broadcast"],
 ]);
-const AGENT_ACTION_ALIASES = new Map([["dry", "dry-run"], ["cast", "broadcast"]]);
+const AGENT_ACTION_ALIASES = new Map([
+  ["dry", "dry-run"], ["cast", "broadcast"], ["on", "onboard"],
+  ["ls", "list"], ["off", "offboard"], ["skill", "skills"],
+  ["req", "requests"], ["ok", "approve"], ["no", "reject"],
+  ["up", "start"], ["st", "status"], ["down", "stop"], ["re", "restart"],
+]);
 const ASSET_ALIASES = new Map([["s", "sol"], ["tok", "token"], ["t", "token"]]);
 
 function usage() {
@@ -61,8 +70,8 @@ function usage() {
 qOS command shell
 
 Usage:
-  qos [-H|--home PATH]
-  qos [-H|--home PATH] [-r|--run] COMMAND [ARGUMENTS...]
+  qos [-H|--home PATH] [-j|--json]
+  qos [-H|--home PATH] [-j|--json] [-r|--run] COMMAND [ARGUMENTS...]
 
 Commands (long | shorthand):
   capabilities | capa
@@ -76,9 +85,21 @@ Commands (long | shorthand):
   firmware | fw build|bld
   firmware | fw offline|off|live [sol|s|token|tok] [AMOUNT]
   firmware | fw broadcast|cast [sol|s|token|tok] [AMOUNT] --confirm-live
-  agent | ag dry-run|dry AMOUNT [-a basic|model] [-u URL] [-m NAME]
-  agent | ag broadcast|cast AMOUNT --confirm-live [agent options]
-  serve | api [PORT]     security-audit | audit     trade | tr
+  wallet | wal status                         wallet | wal fund [LAMPORTS]
+  policy | pol show|edit
+  policy | pol set FIELD VALUE [--confirm-policy-change]
+  policy | pol destination|strategy add|remove VALUE [--confirm-policy-change]
+  agent | ag                                  list managed agents and next steps
+  agent | ag onboard|on [onboarding flags]    agent | ag list|ls
+  agent | ag show|skills|offboard ID           agent | ag status|st
+  agent | ag start|up                          agent | ag stop|down
+  agent | ag restart|re [--confirm-live]
+  agent | ag requests|req                      agent | ag approve|ok REQUEST_ID
+  agent | ag reject|no REQUEST_ID
+  agent | ag demo dry-run|dry AMOUNT [-a basic|model] [-u URL] [-m NAME]
+  agent | ag demo broadcast|cast AMOUNT --confirm-live [demo options]
+  serve [api|mcp] [PORT] | api [PORT]         security-audit | audit
+  trade | tr
   help | h | ?           exit | x | q
 
 The shell never executes arbitrary shell text. Broadcast commands require the
@@ -92,15 +113,21 @@ function parseProcessArgs(argv) {
   let home = process.env.QOS_HOME;
   let run = null;
   let homeSeen = false;
+  let json = false;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token === "-h" || token === "--help") return { help: true, home, run };
+    if (token === "-h" || token === "--help") return { help: true, home, run, json };
     if (token === "-H" || token === "--home") {
       if (homeSeen) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --home");
       homeSeen = true;
       const value = argv[++index];
       if (!value || value.startsWith("--")) throw new QosError("MISSING_ARGUMENT", "--home requires a path");
       home = value;
+      continue;
+    }
+    if (token === "-j" || token === "--json") {
+      if (json) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --json");
+      json = true;
       continue;
     }
     if (token === "-r" || token === "--run") {
@@ -112,7 +139,7 @@ function parseProcessArgs(argv) {
     run = argv.slice(index);
     break;
   }
-  return { help: false, home, run };
+  return { help: false, home, run, json };
 }
 
 function parseLine(line) {
@@ -139,12 +166,16 @@ function expandAliases(tokens) {
     if (expanded[1] !== undefined) expanded[1] = FIRMWARE_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
     if (expanded[2] !== undefined) expanded[2] = ASSET_ALIASES.get(expanded[2]) ?? expanded[2];
   } else if (expanded[0] === "agent" && expanded[1] !== undefined) {
-    expanded[1] = AGENT_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+    if (expanded[1] === "demo" && expanded[2] !== undefined) {
+      expanded[2] = AGENT_ACTION_ALIASES.get(expanded[2]) ?? expanded[2];
+    } else {
+      expanded[1] = AGENT_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+    }
   }
   return expanded;
 }
 
-function runProgram(script, args, context, extraEnvironment = {}) {
+function runProgram(script, args, context, extraEnvironment = {}, { captureJson = false } = {}) {
   const environment = {
     ...process.env,
     QOS_HOME: context.runtime.home,
@@ -155,22 +186,40 @@ function runProgram(script, args, context, extraEnvironment = {}) {
   const result = spawnSync(process.execPath, [join(ROOT, script), ...args], {
     cwd: ROOT,
     env: environment,
-    stdio: "inherit",
+    ...(captureJson ? { encoding: "utf8" } : { stdio: "inherit" }),
     shell: false,
   });
   if (result.error) throw new QosError("COMMAND_FAILED", `Could not start ${script}`);
+  if (captureJson) {
+    if ((result.status ?? 1) !== 0) {
+      try {
+        const failure = JSON.parse(result.stderr);
+        throw new QosError(failure.error.code, failure.error.message, failure.error.details);
+      } catch (error) {
+        if (error instanceof QosError) throw error;
+        throw new QosError("COMMAND_FAILED", `${script} exited with status ${result.status ?? 1}`);
+      }
+    }
+    let value;
+    try {
+      value = JSON.parse(result.stdout);
+    } catch {
+      throw new QosError("COMMAND_OUTPUT_INVALID", `${script} returned invalid JSON`);
+    }
+    process.stdout.write(context.json ? `${JSON.stringify(value, null, 2)}\n` : formatHuman(value));
+  }
   return result.status ?? 1;
 }
 
 function qos(args, context, extraEnvironment = {}) {
-  return runProgram("bin/qos.js", [args[0], "--home", context.runtime.home, ...args.slice(1)], context, extraEnvironment);
+  return runProgram("bin/qos.js", [args[0], "--home", context.runtime.home, ...args.slice(1)], context, extraEnvironment, { captureJson: true });
 }
 
-function printCapabilities(context) {
+function capabilitiesFor(context) {
   const tokenEnabled = context.policy.tokenTransfer !== null;
   const nativeEnabled = BigInt(context.policy.maxTransferLamports) > 0n;
   const insecureMainnet = context.runtime.profile === "mainnet-insecure";
-  process.stdout.write(`${JSON.stringify({
+  return {
     profile: context.runtime.profile,
     cluster: context.policy.cluster,
     signerMode: insecureMainnet
@@ -181,14 +230,24 @@ function printCapabilities(context) {
     keyAccessibleToLocalProcesses: context.runtime.signerCommand === null,
     operations: [
       "policy-status",
+      "inline-policy-edit",
+      "source-wallet-readiness",
+      "agent-onboard-offboard",
+      "agent-ask-or-auto-execution",
       ...(nativeEnabled ? ["native-sol-intent", "native-sol-transfer"] : []),
       ...(tokenEnabled ? ["qos-token-intent", "qos-token-transfer", "agent-directed-qos-token-transfer"] : []),
       ...(context.runtime.profile === "devnet" ? ["qemu-firmware-rehearsal"] : []),
-      "loopback-agent-api",
+      "loopback-agent-api-mcp",
     ],
+    mainnetAutomaticExecutionRequiresLiveStart: context.policy.cluster === "mainnet-beta",
     dexTrading: false,
     dexReason: "No reviewed DEX program/instruction template is present in this source release.",
-  }, null, 2)}\n`);
+  };
+}
+
+function printCapabilities(context) {
+  const capabilities = capabilitiesFor(context);
+  process.stdout.write(context.json ? `${JSON.stringify(capabilities, null, 2)}\n` : formatHuman(capabilities, { title: "qOS capabilities" }));
 }
 
 function parseAgentOptions(tokens) {
@@ -203,6 +262,23 @@ function parseAgentOptions(tokens) {
     options.push(option, value);
   }
   return options;
+}
+
+function printAgentGuide() {
+  process.stdout.write(`Managed-agent workflow
+----------------------
+1. Run: wal status
+2. Resolve every displayed wallet blocker.
+3. Run: ag on
+4. qOS starts the authenticated REST + MCP service automatically.
+5. Check it: ag st  (MCP is http://127.0.0.1:8790/mcp)
+6. For ask mode: ag req, ag ok REQUEST_ID, or ag no REQUEST_ID
+7. Mainnet live mode: ag re --confirm-live
+8. Revoke access: ag off AGENT_ID
+
+The synthetic proposal demo is separate: ag demo dry AMOUNT
+Live demo submission requires: ag demo cast AMOUNT --confirm-live
+`);
 }
 
 function firmwareAmountArgs(asset, amount) {
@@ -229,10 +305,15 @@ function dispatch(tokens, context) {
   }
   if (command === "status") {
     if (rest.length) throw new QosError("INVALID_ARGUMENT", "status accepts no arguments");
-    printCapabilities(context);
-    const first = qos(["address"], context);
-    const second = qos(["privacy-status"], context);
-    return { status: first || second, exit: false };
+    if (context.runtime.signerCommand !== null) process.env.QOS_SIGNER_COMMAND = context.runtime.signerCommand;
+    const service = QosService.open(context.runtime.home);
+    const status = {
+      capabilities: capabilitiesFor(context),
+      address: { signer: service.publicKey, cluster: context.policy.cluster },
+      privacy: service.privacyStatus(),
+    };
+    process.stdout.write(context.json ? `${JSON.stringify(status, null, 2)}\n` : formatHuman(status, { title: "qOS status" }));
+    return { status: 0, exit: false };
   }
   if (["address", "health"].includes(command)) {
     if (rest.length) throw new QosError("INVALID_ARGUMENT", `${command} accepts no arguments`);
@@ -246,6 +327,35 @@ function dispatch(tokens, context) {
     if (rest.length > 1) throw new QosError("INVALID_ARGUMENT", "airdrop accepts at most one amount");
     const amount = rest[0] === undefined ? "200000000" : canonicalAmount(rest[0], "airdrop lamports");
     return { status: qos(["airdrop", "--lamports", amount], context), exit: false };
+  }
+  if (command === "wallet") {
+    const [action = "status", amount, ...extra] = rest;
+    if (action === "status" || action === "check") {
+      if (amount !== undefined || extra.length) throw new QosError("INVALID_ARGUMENT", "wallet status accepts no arguments");
+      return {
+        status: runProgram("bin/qos-wallet.js", ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), "status"], context),
+        exit: false,
+      };
+    }
+    if (action === "fund" || action === "fund-devnet") {
+      if (extra.length) throw new QosError("INVALID_ARGUMENT", "wallet fund accepts at most one lamport amount");
+      return {
+        status: runProgram("bin/qos-wallet.js", [
+          "--home", context.runtime.home,
+          ...(context.json ? ["--json"] : []),
+          "fund-devnet",
+          ...(amount === undefined ? [] : ["--lamports", canonicalAmount(amount, "airdrop lamports")]),
+        ], context),
+        exit: false,
+      };
+    }
+    throw new QosError("INVALID_ARGUMENT", "Use wallet status or wallet fund");
+  }
+  if (command === "policy") {
+    const args = ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), ...(rest.length ? rest : ["show"])];
+    const status = runProgram("bin/qos-policy.js", args, context);
+    if (status === 0) context.policy = loadPolicy(join(context.runtime.home, "policy.json"));
+    return { status, exit: false };
   }
   if (command === "sol") {
     const [action, amount, confirmation, ...extra] = rest;
@@ -284,7 +394,7 @@ function dispatch(tokens, context) {
     const [action] = rest;
     if (action === "build") {
       if (rest.length !== 1) throw new QosError("INVALID_ARGUMENT", "firmware build accepts no additional arguments");
-      return { status: runProgram("bin/qos-firmware-demo.js", ["build", "--home", context.runtime.home], context), exit: false };
+      return { status: runProgram("bin/qos-firmware-demo.js", ["build", "--home", context.runtime.home], context, {}, { captureJson: true }), exit: false };
     }
     const firmwareOptions = rest.slice(1);
     let confirmed = false;
@@ -305,8 +415,29 @@ function dispatch(tokens, context) {
     return { status: runProgram("bin/qos-firmware-demo.js", args, context), exit: false };
   }
   if (command === "agent") {
-    const [action, amount, ...options] = rest;
-    if (action !== "dry-run" && action !== "broadcast") throw new QosError("INVALID_ARGUMENT", "Use agent dry-run or agent broadcast");
+    const lifecycleActions = new Set(["onboard", "list", "show", "skills", "offboard", "start", "status", "stop", "restart", "listen", "requests", "approve", "reject"]);
+    if (rest.length === 0) {
+      const status = runProgram("bin/qos-agent-control.js", ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), "list"], context);
+      if (!context.json && status === 0) printAgentGuide();
+      return { status, exit: false };
+    }
+    if (rest[0] === "help") {
+      if (rest.length !== 1) throw new QosError("INVALID_ARGUMENT", "agent help accepts no arguments");
+      printAgentGuide();
+      return { status: 0, exit: false };
+    }
+    if (lifecycleActions.has(rest[0])) {
+      const args = ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), ...rest];
+      return { status: runProgram("bin/qos-agent-control.js", args, context), exit: false };
+    }
+    if (["dry-run", "broadcast"].includes(rest[0])) {
+      throw new QosError("AGENT_DEMO_NAMESPACE_REQUIRED", `Use agent demo ${rest[0]} so a synthetic demo cannot be mistaken for a managed agent`);
+    }
+    if (rest[0] !== "demo") {
+      throw new QosError("INVALID_ARGUMENT", "Use agent, agent onboard, agent listen, agent requests, agent offboard, or agent demo");
+    }
+    const [action, amount, ...options] = rest.slice(1);
+    if (action !== "dry-run" && action !== "broadcast") throw new QosError("INVALID_ARGUMENT", "Use agent demo dry-run or agent demo broadcast");
     canonicalAmount(amount, "agent token amount");
     let confirmed = false;
     const filtered = options.filter((option) => {
@@ -319,7 +450,7 @@ function dispatch(tokens, context) {
     });
     if (action === "broadcast" && !confirmed) throw new QosError("LIVE_CONFIRMATION_REQUIRED", "agent broadcast requires --confirm-live");
     if (action === "dry-run" && confirmed) throw new QosError("INVALID_ARGUMENT", "--confirm-live is only valid with agent broadcast");
-    const args = ["--home", context.runtime.home, "--amount", amount, ...parseAgentOptions(filtered)];
+    const args = ["--home", context.runtime.home, "--amount", amount, ...(context.json ? ["--json"] : []), ...parseAgentOptions(filtered)];
     if (action === "broadcast") args.push("--broadcast", "--confirm-live");
     return {
       status: runProgram("bin/qos-agent-demo.js", args, context, action === "broadcast" ? { QOS_ENABLE_MAINNET_BROADCAST: "I_UNDERSTAND" } : {}),
@@ -327,9 +458,17 @@ function dispatch(tokens, context) {
     };
   }
   if (command === "serve") {
-    if (rest.length > 1) throw new QosError("INVALID_ARGUMENT", "serve accepts at most one port");
-    const args = ["serve", ...(rest[0] ? ["--port", rest[0]] : [])];
-    return { status: qos(args, context), exit: false };
+    const serveArguments = rest[0] === "api" || rest[0] === "mcp" ? rest.slice(1) : rest;
+    if (serveArguments.length > 1) throw new QosError("INVALID_ARGUMENT", "Use serve, serve PORT, serve api PORT, serve mcp PORT, or api PORT");
+    const port = serveArguments[0];
+    if (port !== undefined && (!/^[1-9][0-9]{0,4}$/.test(port) || Number(port) > 65535)) {
+      throw new QosError("INVALID_PORT", "API port must be a canonical integer between 1 and 65535");
+    }
+    const args = ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), "start", ...(port ? ["--port", port] : [])];
+    return {
+      status: runProgram("bin/qos-agent-control.js", args, context),
+      exit: false,
+    };
   }
   if (command === "security-audit") {
     if (rest.length) throw new QosError("INVALID_ARGUMENT", "security-audit accepts no arguments");
@@ -338,11 +477,11 @@ function dispatch(tokens, context) {
   throw new QosError("UNKNOWN_COMMAND", `Unknown qOS Shell command: ${command}`);
 }
 
-function contextFor(home) {
+function contextFor(home, json = false) {
   if (typeof home !== "string") throw new QosError("MISSING_RUNTIME_PROFILE", "Use --home or QOS_HOME to select an installed qOS profile");
   const runtime = loadRuntimeProfile(resolve(home));
   const policy = loadPolicy(join(runtime.home, "policy.json"));
-  return { runtime, policy };
+  return { runtime, policy, json };
 }
 
 async function main() {
@@ -356,7 +495,7 @@ async function main() {
     process.stdout.write(usage());
     return;
   }
-  const context = contextFor(options.home);
+  const context = contextFor(options.home, options.json);
   if (options.run !== null) {
     const result = dispatch(options.run, context);
     process.exitCode = result.status;
@@ -368,7 +507,7 @@ async function main() {
 
   process.stdout.write(`${BANNER}\n\n`);
   process.stdout.write(`Profile: ${context.runtime.profile} (${context.policy.cluster})\n`);
-  process.stdout.write("Type help for commands. No transaction has been broadcast.\n");
+  process.stdout.write("Type help for commands. No asset transfer has been broadcast in this shell.\n");
   const terminal = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   terminal.setPrompt("qos> ");
   terminal.prompt();
@@ -381,13 +520,15 @@ async function main() {
       }
       if (result.status !== 0) process.stderr.write(`Command exited with status ${result.status}.\n`);
     } catch (error) {
-      process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+      if (context.json) process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+      else process.stderr.write(`qOS error [${error?.code ?? "INTERNAL_ERROR"}]: ${error instanceof QosError ? error.message : "The request failed closed"}\n`);
     }
     terminal.prompt();
   });
 }
 
 main().catch((error) => {
-  process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+  if (process.argv.includes("--json") || process.argv.includes("-j")) process.stderr.write(`${JSON.stringify(publicError(error), null, 2)}\n`);
+  else process.stderr.write(`qOS error [${error?.code ?? "INTERNAL_ERROR"}]: ${error instanceof QosError ? error.message : "The request failed closed"}\n`);
   process.exitCode = 1;
 });

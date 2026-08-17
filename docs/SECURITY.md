@@ -1,9 +1,16 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.7.3 adds strong
+qOS is a research firmware and policy-signer project. Version 0.9.1 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
+
+The macOS and Windows installers are convenience host wrappers, not native
+firmware ports. macOS runs qOS inside Lima Ubuntu 24.04 with host-directory
+mounts disabled; Windows runs it inside Ubuntu 24.04 on WSL 2. Homebrew, Lima,
+WSL, the Ubuntu images, and the host hypervisor remain additional trusted
+components. Both wrappers ultimately use the same checksum-verifying Linux
+release bootstrap.
 
 ## Preferred deployment profile
 
@@ -49,6 +56,25 @@ implemented mainnet operations as the external profile. It does not protect the
 key from an AI agent, malware, backup process, or any other program with the
 qOS user's file access. The notice is informed consent, not a security boundary.
 
+The managed agent REST/MCP service uses separate random credentials, stores
+only their SHA-256 verifiers in the registry, binds to loopback, validates MCP
+protocol/method/tool headers and browser Origins, and rechecks the agent scope
+and live qOS policy before every action. MCP and REST converge on one action
+validator, approval queue, and executor. Ask-mode requests exist only in process
+memory and disappear on rejection, expiry, shutdown, or offboarding. Auto mode
+intentionally removes the per-action human decision, but mainnet execution
+still requires an explicit `ag re --confirm-live` restart gate.
+
+Mode-0600 files separate Unix accounts, not processes sharing one account. An
+agent running as the qOS user can read other same-user credentials and any
+`--insecure` signer key. Use a separate account, container, VM, or equivalent
+sandbox for each untrusted agent and a non-exportable external signer. The
+generated skill pack is an interface contract, not a process sandbox.
+
+Inline policy writes are allowlisted, fully validated, private, and atomic.
+They do not update a protected external signer automatically. The operator must
+restart the listener and review/pin the new signer-side policy commitment.
+
 The SNARK adapter proves only what its exact circuit constrains. An incomplete
 circuit, compromised setup, substituted verifying key, unsound library, or
 malicious external verifier invalidates the authorization guarantee.
@@ -64,6 +90,8 @@ malicious external verifier invalidates the authorization guarantee.
   adapter requires `--test-only` and is not deployable.
 - No persistent exposure accounting, two-person approval, recovery, or key
   rotation implementation.
+- Agent approvals are single-operator, memory-only decisions; there is no
+  durable multi-party queue, reconciliation service, or scheduler.
 - RPC remains an untrusted source of slots, blockhashes, account state, fees,
   simulation, and confirmation. Policy validation and shape checks reduce but
   do not eliminate that trust.
@@ -73,6 +101,8 @@ malicious external verifier invalidates the authorization guarantee.
 - No bundled production SNARK circuit, proving key, ceremony, or verifier.
 - QEMU is a functional demonstration, not a hardware isolation boundary, and
   the runner refuses mainnet broadcast.
+- The listener implements policy-gated transfers only. It is not a general
+  autonomous DEX trading engine.
 
 See `reports/PRODUCTION_SECURITY_REVIEW.md` for the production release decision,
 verification evidence, and acceptance criteria.

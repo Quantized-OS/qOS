@@ -497,10 +497,16 @@ export class QosService {
         this.paths.receiverKey,
         this.paths.encryptedReceiverKey,
         this.paths.policy,
+        join(this.paths.home, "runtime.json"),
+        join(this.paths.home, "api-token"),
+        join(this.paths.home, "agents", "registry.json"),
+      ].filter(existsSync),
+      persistentCredentialDirectories: [
+        join(this.paths.home, "agents"),
       ].filter(existsSync),
       keyCustody: this.signer.status(),
       privacyProof: this.proofGate.status(),
-      note: "Only signer identity, policy, key-custody configuration, and hashed in-process nonce commitments persist in memory; completed transaction details do not.",
+      note: "Signer identity, policy, runtime credentials, onboarded agent scopes/credential files/skill packs, and key-custody configuration persist. Pending approvals and completed transaction details are not written by qOS.",
     };
   }
 }

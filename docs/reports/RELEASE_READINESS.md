@@ -1,4 +1,4 @@
-# qOS v0.7.3 release-readiness report
+# qOS v0.9.1 release-readiness report
 
 ## Release decision
 
@@ -13,7 +13,25 @@ The generated ISO is ISO-9660 research data media containing the source archive,
 readiness report, source checksum, and readme. It is not bootable firmware or
 an installer.
 
-## v0.7.3 production-preparation changes
+## v0.9.1 production-preparation changes
+
+- Added source-wallet onboarding: setup pins and verifies RPC genesis, reports
+  exact mainnet SOL/Token-2022 funding blockers, and requests a confirmed
+  Devnet airdrop unless the operator selects `--no-fund` or `--offline`.
+- Added per-agent onboarding, hashed revocable credentials, generated MCP skill
+  packs, narrow scopes, ask/auto modes, one auto-started authenticated loopback
+  REST/MCP service, memory-only approvals, rate limits, and offboarding that
+  invalidates pending requests.
+- Added a strict inline policy editor with private atomic replacement. Only
+  reviewed limits, allowlists, commitment, and RPC URL can change; transaction
+  identity fields remain locked.
+- Added readable operator output with explicit `--json` machine mode.
+- The POSIX `qos.systems` bootstrap now downloads the latest verified source
+  assets from `Quantized-OS/qOS` on GitHub. The site bundle adds an install-first
+  landing page plus macOS/Lima and Windows/WSL 2 wrappers; all paths enter a
+  supported Ubuntu 24.04 environment and converge on that same bootstrap. The
+  site contains no source payload; deterministic GitHub assets and
+  tag-triggered publication are built separately.
 
 - Secure inode-bound and size-bounded reads for keys, passphrases, policy,
   signer descriptors, API tokens, provisioning records, and CLI JSON.
@@ -33,11 +51,19 @@ an installer.
   runtime/API-token provisioning, measured Devnet QEMU firmware, atomic
   user-local launchers, and a bannered restricted interactive/non-interactive
   `qos` shell with shorthand commands.
-- `setup.sh uninstall` removes only marked qOS launchers and preserves profiles,
-  policies, keys, API tokens, toolchains, and source.
+- Confirmed `setup.sh uninstall` stops managed services and removes registered
+  profiles, keys, policies, API/agent credentials, downloaded releases,
+  toolchains, logs, marked launchers, and build artifacts without following
+  symlinks. Shared packages and an unmanaged Git checkout remain.
+- Uninstall now repairs legacy `0755` modes only after proving each qOS data,
+  profile, and agent path is a real directory owned by the current user. It
+  continues to reject symlinks and non-owned purge targets.
 - Interactive mainnet setup now provides a complete signer-adapter wizard,
   validates a new profile's executable boundary before system changes, and stops safely
   with a plain-language implementation/review guide when no adapter is ready.
+- The default Linux, macOS, and Windows setup flow now asks whether the operator
+  has an existing externally held key or wants qOS to generate one. The latter
+  selection enters the exact `--insecure` notice and acknowledgement path.
 - `setup.sh install --insecure` now provides the requested accessible software
   key workaround. It requires an explicit notice acknowledgement before key
   creation and then exposes the same implemented mainnet qOS capabilities.
@@ -71,6 +97,8 @@ The complete source-grounded assessment is in
   independently reconstructs messages and persists rollback-safe risk state.
 - Add exposure accounting, two-person approval, recovery, rotation, incident
   response, monitoring, and deliberately capped hot-wallet operations.
+- Isolate each untrusted agent under a distinct OS/VM identity and independently
+  review credential distribution, approval UX, and incident handling.
 - Add separately reviewed venue-specific DEX templates; current code implements
   native SOL and pinned Token-2022 transfers only.
 - Reproduce and test the signed target image with pinned offline toolchains and

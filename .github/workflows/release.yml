@@ -1,0 +1,63 @@
+name: Publish qOS release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Quantized-OS/qOS'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact tagged commit
+        env:
+          QOS_REPOSITORY: ${{ github.repository }}
+          QOS_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          git init .
+          git remote add origin "https://github.com/${QOS_REPOSITORY}.git"
+          git -c protocol.version=2 fetch --no-tags --depth=1 origin "${QOS_COMMIT}"
+          git checkout --detach FETCH_HEAD
+
+      - name: Verify release tag and run the complete gate
+        env:
+          QOS_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          version="$(node -p 'require("./package.json").version')"
+          [[ "${QOS_TAG}" == "v${version}" ]] || {
+            printf 'Tag %s does not match package version v%s.\n' "${QOS_TAG}" "${version}" >&2
+            exit 1
+          }
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            printf 'Package version is not canonical semver: %s\n' "${version}" >&2
+            exit 1
+          }
+          make check
+
+      - name: Build deterministic installer assets
+        run: python3 scripts/build-github-release.py
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QOS_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          gh release create "${QOS_TAG}" \
+            release-artifacts/github-release/qos-source.tar.gz \
+            release-artifacts/github-release/SHA256SUMS.txt \
+            release-artifacts/github-release/RELEASE.json \
+            --verify-tag \
+            --title "qOS ${QOS_TAG#v}" \
+            --notes-file docs/reports/RELEASE_READINESS.md

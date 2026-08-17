@@ -62,9 +62,9 @@ Usage:
   node bin/qos-firmware-demo.js demo [--home PATH] [--asset sol|token]
                                       [--lamports N | --amount N] [--offline | --broadcast]
 
-build provisions a key-independent M-mode RV64 ELF and records its measurement.
+build provisions a Devnet key-independent M-mode RV64 ELF and records its measurement.
 run reads signer.pem only to create an unlinked RAM key mailbox for QEMU.
-Mainnet broadcast is forbidden because that software seed is host-readable.
+The QEMU rehearsal is Devnet-only; mainnet uses the policy signer boundary.
 `;
 }
 
@@ -76,7 +76,7 @@ function parseArgs(argv) {
     assertQos(token.startsWith("--"), "INVALID_ARGUMENT", `Unexpected argument: ${token}`);
     const name = token.slice(2);
     assertQos(!Object.hasOwn(options, name), "DUPLICATE_ARGUMENT", `Duplicate --${name}`);
-    if (name === "broadcast" || name === "offline") {
+    if (name === "broadcast" || name === "offline" || name === "human") {
       options[name] = true;
       continue;
     }
@@ -339,6 +339,8 @@ export function buildFirmware(home) {
   assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
   assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
   assertQos(existsSync(join(home, "signer.pem")), "SANDBOX_NOT_INITIALIZED", `No qOS signer found in ${home}; run node bin/qos.js init first`);
+  const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
+  assertFirmwareProfileSupported(policy);
   assertQos(commandAvailable("cargo"), "CARGO_REQUIRED", "Install Rust/Cargo before building the firmware demo");
   assertQos(commandAvailable("rustup"), "RUSTUP_REQUIRED", "Install rustup before building the firmware demo");
   const targets = execFileSync("rustup", ["target", "list", "--installed"], {
@@ -347,7 +349,6 @@ export function buildFirmware(home) {
     encoding: "utf8",
   });
   assertQos(targets.split(/\s+/).includes("riscv64imac-unknown-none-elf"), "RUST_TARGET_REQUIRED", "Run: rustup target add riscv64imac-unknown-none-elf");
-  const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   const { privateKey, sourceTokenAccount, destinationTokenAccount, env } = provisioningEnv(home, policy);
   mkdirSync(BUILD_DIR, { recursive: true, mode: 0o700 });
   chmodSync(BUILD_DIR, 0o700);
@@ -416,6 +417,14 @@ export function assertFirmwareBroadcastAllowed(policy, broadcast) {
       "The QEMU demo uses a host-readable software seed and may not broadcast on mainnet",
     );
   }
+}
+
+export function assertFirmwareProfileSupported(policy) {
+  assertQos(
+    policy.cluster !== "mainnet-beta",
+    "MAINNET_QEMU_PROFILE_UNSUPPORTED",
+    "QEMU firmware rehearsal is Devnet-only and is not provisioned for a mainnet profile; use the qOS policy signer and managed-agent listener on mainnet",
+  );
 }
 
 function loadProvisioning(home, policy) {
@@ -492,10 +501,11 @@ export async function runFirmware(home, { asset = "sol", lamports = undefined, a
   const qemu = process.env.QOS_FIRMWARE_DEMO_QEMU ?? DEFAULT_QEMU;
   assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
   assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
+  const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
+  assertFirmwareProfileSupported(policy);
   assertTrustedExecutable(qemu, "QEMU");
   assertQos(commandAvailable(qemu), "QEMU_REQUIRED", "Install qemu-system-riscv64 before running the firmware demo");
   assertQos(!(offline && broadcast), "OFFLINE_BROADCAST_CONFLICT", "--offline cannot be combined with --broadcast");
-  const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   assertFirmwareBroadcastAllowed(policy, broadcast);
   const record = loadProvisioning(home, policy);
   const privateKey = loadPrivateKey(join(home, "signer.pem"));
@@ -706,8 +716,13 @@ async function main() {
   }
   const home = homeOf(options);
   if (command === "build") {
-    only(options, ["home"]);
-    process.stdout.write(`${JSON.stringify(buildFirmware(home), null, 2)}\n`);
+    only(options, ["home", "human"]);
+    const record = buildFirmware(home);
+    if (options.human === true) {
+      process.stdout.write(`\nFirmware ready\n--------------\nELF:          ${record.firmwareElf}\nMeasurement:  ${record.firmwareSha256}\nSigner:       ${record.signer}\nDestination:  ${record.destination}\n`);
+    } else {
+      process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
+    }
     return;
   }
   if (command === "run") {

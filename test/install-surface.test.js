@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +37,11 @@ test("setup actions and verified toolchain bootstrap expose side-effect-free hel
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /secure firmware shell/);
   }
+  for (const path of ["bin/qos-agent-control.js", "bin/qos-policy.js", "bin/qos-wallet.js"]) {
+    const result = spawnSync(process.execPath, [join(ROOT, path), "--help"], { cwd: ROOT, encoding: "utf8" });
+    assert.equal(result.status, 0, `${path}: ${result.stderr}`);
+    assert.match(result.stdout, /Usage:/);
+  }
   assert.equal(existsSync(join(ROOT, "install.sh")), false);
 
   const signerGuide = spawnSync("bash", [join(ROOT, "setup.sh"), "install", "--signer-guide"], {
@@ -57,11 +63,12 @@ test("setup actions and verified toolchain bootstrap expose side-effect-free hel
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: "no\n",
-    env: { ...process.env, HOME: root },
+    input: "guide\n",
+    env: { ...process.env, HOME: root, QOS_AGENT_AUTOSERVE: "0" },
   });
   assert.equal(incompleteWizard.status, 2);
-  assert.match(incompleteWizard.stdout, /Guided setup: mainnet with an external signer/);
+  assert.match(incompleteWizard.stdout, /Mainnet key setup/);
+  assert.match(incompleteWizard.stdout, /Generate a key for me \(--insecure\)/);
   assert.match(incompleteWizard.stdout, /Reviewed signer adapter: simple setup guide/);
   assert.match(incompleteWizard.stderr, /No dependencies, profile, key, or launcher were created/);
   assert.equal(existsSync(join(root, "wizard-profile")), false);
@@ -69,7 +76,7 @@ test("setup actions and verified toolchain bootstrap expose side-effect-free hel
   const mainnetDefault = spawnSync("bash", [join(ROOT, "setup.sh"), "install", "--skip-setup", "--no-shell"], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, HOME: root },
+    env: { ...process.env, HOME: root, QOS_AGENT_AUTOSERVE: "0" },
   });
   assert.equal(mainnetDefault.status, 1);
   assert.match(mainnetDefault.stderr, /Mainnet is the default/);
@@ -105,6 +112,7 @@ test("setup safely retires the recognized Devnet-default install.sh before check
   writeFileSync(join(checkout, "install.sh"), legacy, { mode: 0o700 });
   const environment = {
     ...process.env,
+    QOS_AGENT_AUTOSERVE: "0",
     HOME: home,
     PATH: `${fakeBin}:${process.env.PATH}`,
   };
@@ -116,6 +124,7 @@ test("setup safely retires the recognized Devnet-default install.sh before check
     "--bin", installBin,
     "--skip-setup",
     "--skip-firmware",
+    "--offline",
     "--no-shell",
   ];
   const result = spawnSync("bash", args, { cwd: checkout, encoding: "utf8", env: environment });
@@ -141,7 +150,7 @@ test("setup safely retires the recognized Devnet-default install.sh before check
   assert.equal(readFileSync(join(checkout, "install.sh"), "utf8"), unrelated);
 });
 
-test("setup installs and uninstalls a Devnet command shell without deleting its profile", (t) => {
+test("setup install works repeatedly and uninstall purges all registered qOS artifacts", (t) => {
   const root = mkdtempSync(join(tmpdir(), "qos-install-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const fakeBin = join(root, "fake-bin");
@@ -164,10 +173,14 @@ test("setup installs and uninstalls a Devnet command shell without deleting its 
     "-B", installBin,
     "-k",
     "-F",
+    "--offline",
+    "--agent-id", "setup-bot",
+    "--agent-max-amount", "1000",
     "-n",
   ];
   const installEnvironment = {
     ...process.env,
+    QOS_AGENT_AUTOSERVE: "0",
     HOME: home,
     QOS_INSTALL_BIN: installBin,
     PATH: `${fakeBin}:${process.env.PATH}`,
@@ -185,8 +198,14 @@ test("setup installs and uninstalls a Devnet command shell without deleting its 
   assert.equal(existsSync(join(installBin, "qos")), true);
   assert.equal(existsSync(join(installBin, "qos-core")), true);
   assert.equal(existsSync(join(installBin, "qos-shell")), true);
+  assert.equal(existsSync(join(installBin, "qos-agent")), true);
+  assert.equal(existsSync(join(installBin, "qos-policy")), true);
+  assert.equal(existsSync(join(installBin, "qos-wallet")), true);
+  assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "token")), true);
+  assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "skills", "SKILL.md")), true);
   const signerBefore = readFileSync(join(profileHome, "signer.pem"));
   const tokenBefore = readFileSync(join(profileHome, "api-token"));
+  const agentTokenBefore = readFileSync(join(profileHome, "agents", "setup-bot", "token"));
 
   const repeated = spawnSync("bash", installArgs, {
     cwd: ROOT,
@@ -196,8 +215,20 @@ test("setup installs and uninstalls a Devnet command shell without deleting its 
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.deepEqual(readFileSync(join(profileHome, "signer.pem")), signerBefore);
   assert.deepEqual(readFileSync(join(profileHome, "api-token")), tokenBefore);
+  assert.deepEqual(readFileSync(join(profileHome, "agents", "setup-bot", "token")), agentTokenBefore);
 
-  const shell = spawnSync(join(installBin, "qos"), ["capa"], {
+  const changedAgentArgs = [...installArgs];
+  changedAgentArgs[changedAgentArgs.indexOf("1000")] = "2000";
+  const changedAgent = spawnSync("bash", changedAgentArgs, {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: installEnvironment,
+  });
+  assert.equal(changedAgent.status, 1);
+  assert.match(changedAgent.stderr, /different maximum amount/);
+  assert.deepEqual(readFileSync(join(profileHome, "agents", "setup-bot", "token")), agentTokenBefore);
+
+  const shell = spawnSync(join(installBin, "qos"), ["--json", "capa"], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
@@ -207,7 +238,27 @@ test("setup installs and uninstalls a Devnet command shell without deleting its 
 
   const unmanagedCore = "#!/bin/sh\n# operator-managed command\nexit 0\n";
   writeFileSync(join(installBin, "qos-core"), unmanagedCore, { mode: 0o700 });
-  const uninstall = spawnSync("bash", [join(ROOT, "setup.sh"), "uninstall", "--bin", installBin], {
+  const outside = join(root, "outside-qos-data");
+  mkdirSync(outside, { mode: 0o700 });
+  writeFileSync(join(outside, "keep"), "preserved\n", { mode: 0o600 });
+  const qosDataRoot = join(home, ".local", "share", "qos");
+  symlinkSync(outside, join(qosDataRoot, "do-not-follow"));
+  // Older qOS releases could leave these owner-controlled directories at 0755.
+  // A confirmed purge must repair that mode without weakening ownership or
+  // symlink checks, then remove the registered installation normally.
+  chmodSync(qosDataRoot, 0o755);
+  chmodSync(profileHome, 0o755);
+  chmodSync(join(profileHome, "agents"), 0o755);
+  const unconfirmed = spawnSync("bash", [join(ROOT, "setup.sh"), "uninstall", "--bin", installBin], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: installEnvironment,
+  });
+  assert.equal(unconfirmed.status, 1);
+  assert.match(unconfirmed.stderr, /requires --yes/);
+  assert.equal(existsSync(profileHome), true);
+  assert.equal(lstatSync(qosDataRoot).mode & 0o077, 0o055);
+  const uninstall = spawnSync("bash", [join(ROOT, "setup.sh"), "uninstall", "--bin", installBin, "--yes"], {
     cwd: ROOT,
     encoding: "utf8",
     env: installEnvironment,
@@ -216,7 +267,10 @@ test("setup installs and uninstalls a Devnet command shell without deleting its 
   assert.equal(existsSync(join(installBin, "qos")), false);
   assert.equal(readFileSync(join(installBin, "qos-core"), "utf8"), unmanagedCore);
   assert.equal(existsSync(join(installBin, "qos-shell")), false);
-  assert.equal(existsSync(join(profileHome, "runtime.json")), true);
+  assert.equal(existsSync(profileHome), false);
+  assert.equal(existsSync(join(home, ".local", "share", "qos")), false);
+  assert.equal(readFileSync(join(outside, "keep"), "utf8"), "preserved\n");
+  assert.match(uninstall.stdout, /Full qOS purge complete/);
 
   const refusedReinstall = spawnSync("bash", installArgs, {
     cwd: ROOT,
@@ -251,6 +305,7 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
   const destination = encodeBase58(Buffer.alloc(32, 82));
   const environment = {
     ...process.env,
+    QOS_AGENT_AUTOSERVE: "0",
     HOME: home,
     QOS_INSTALL_BIN: installBin,
     PATH: `${fakeBin}:${process.env.PATH}`,
@@ -265,6 +320,7 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
     "-D", destination,
     "-S", externalSigner,
     "-k",
+    "--offline",
     "-n",
   ], { cwd: ROOT, encoding: "utf8", env: environment });
   assert.equal(insecureAdapter.status, 1);
@@ -279,14 +335,17 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
     "-H", profileHome,
     "-B", installBin,
     "-k",
+    "--offline",
     "-n",
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: `yes\n${publicKey}\n${destination}\n${externalSigner}\nyes\n`,
+    input: `1\n${publicKey}\n${destination}\n${externalSigner}\nyes\nno\n`,
     env: environment,
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Mainnet key setup/);
+  assert.match(result.stdout, /Using your existing key through a reviewed external signer/);
   assert.match(result.stdout, /Guided setup: mainnet with an external signer/);
   assert.match(result.stdout, /Ready to install/);
   assert.match(result.stdout, /Setup complete\. qOS will open with public-only mainnet custody/);
@@ -296,7 +355,7 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
   assert.equal(existsSync(join(profileHome, "runtime.json")), true);
   assert.equal(existsSync(join(profileHome, "api-token")), true);
 
-  const shell = spawnSync(join(installBin, "qos"), ["capa"], {
+  const shell = spawnSync(join(installBin, "qos"), ["--json", "capa"], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
@@ -307,7 +366,7 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
   assert.equal(capabilities.signerMode, "external-non-exportable-boundary");
 });
 
-test("setup --insecure generates an accessible mainnet key after the user accepts the notice", (t) => {
+test("setup --insecure and the default generated-key choice require the same warning", (t) => {
   const root = mkdtempSync(join(tmpdir(), "qos-mainnet-insecure-install-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const fakeBin = join(root, "fake-bin");
@@ -325,9 +384,26 @@ test("setup --insecure generates an accessible mainnet key after the user accept
   const destination = encodeBase58(Buffer.alloc(32, 83));
   const environment = {
     ...process.env,
+    QOS_AGENT_AUTOSERVE: "0",
     HOME: home,
     PATH: `${fakeBin}:${process.env.PATH}`,
   };
+
+  const incompatibleAgentHome = join(root, "incompatible-agent-profile");
+  const incompatibleAgent = spawnSync("bash", [
+    join(ROOT, "setup.sh"),
+    "install",
+    "--insecure",
+    "--accept-insecure-risk",
+    "--destination", destination,
+    "--home", incompatibleAgentHome,
+    "--agent-id", "wrong-asset-bot",
+    "--agent-asset", "sol",
+    "--agent-max-amount", "1",
+  ], { cwd: ROOT, encoding: "utf8", env: environment });
+  assert.equal(incompatibleAgent.status, 1);
+  assert.match(incompatibleAgent.stderr, /enabled setup asset is qos-token/);
+  assert.equal(existsSync(incompatibleAgentHome), false);
 
   const refused = spawnSync("bash", [
     join(ROOT, "setup.sh"),
@@ -337,6 +413,7 @@ test("setup --insecure generates an accessible mainnet key after the user accept
     "--home", refusedHome,
     "--bin", join(root, "refused-bin"),
     "--skip-setup",
+    "--offline",
     "--no-shell",
   ], { cwd: ROOT, encoding: "utf8", env: environment });
   assert.equal(refused.status, 1);
@@ -354,6 +431,7 @@ test("setup --insecure generates an accessible mainnet key after the user accept
     "--home", unattendedHome,
     "--bin", join(root, "unattended-bin"),
     "--skip-setup",
+    "--offline",
     "--no-shell",
   ], { cwd: ROOT, encoding: "utf8", env: environment });
   assert.equal(unattended.status, 0, unattended.stderr);
@@ -363,30 +441,37 @@ test("setup --insecure generates an accessible mainnet key after the user accept
   const result = spawnSync("bash", [
     join(ROOT, "setup.sh"),
     "install",
-    "--insecure",
     "--wizard",
     "--home", profileHome,
     "--bin", installBin,
     "--skip-setup",
+    "--offline",
     "--no-shell",
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: `${destination}\nyes\n`,
+    input: `2\n${destination}\nyes\nyes\nmainnet-bot\nMainnet bot\nyes\n1000\nyes\n`,
     env: environment,
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Generated-key custody selected; continuing with the --insecure mainnet setup/);
   assert.match(result.stdout, /INSECURE MAINNET KEY NOTICE/);
   assert.match(result.stdout, /same qOS mainnet transfer and agent capabilities/);
+  assert.match(result.stdout, /Allowed action: qOS Token-2022 transfer \(qos-token\).*only transfer template/);
+  assert.match(result.stdout, /Agent ready to onboard/);
   assert.match(result.stdout, /Setup complete\. qOS will open on mainnet with a locally generated software key/);
   assert.equal(existsSync(join(profileHome, "signer.pem")), true);
   assert.equal(existsSync(join(profileHome, "signer.json")), false);
   assert.equal(existsSync(join(profileHome, "runtime.json")), true);
   assert.equal(lstatSync(join(profileHome, "signer.pem")).mode & 0o077, 0);
+  const installedAgent = JSON.parse(readFileSync(join(profileHome, "agents", "registry.json"), "utf8")).agents[0];
+  assert.equal(installedAgent.id, "mainnet-bot");
+  assert.equal(installedAgent.asset, "qos-token");
+  assert.equal(existsSync(join(profileHome, "agents", "mainnet-bot", "token")), true);
 
   const runtime = JSON.parse(readFileSync(join(profileHome, "runtime.json"), "utf8"));
   assert.equal(runtime.profile, "mainnet-insecure");
-  const shell = spawnSync(join(installBin, "qos"), ["capa"], {
+  const shell = spawnSync(join(installBin, "qos"), ["--json", "capa"], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },

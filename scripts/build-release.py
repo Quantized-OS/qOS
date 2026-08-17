@@ -104,7 +104,7 @@ def normalized_tar_info(tar: tarfile.TarFile, path: Path, arcname: str) -> tarfi
     else:
         relative = path.relative_to(ROOT)
         executable = path.name in {"setup.sh", "run-demo.sh"} or (
-            relative.parts[0] in {"bin", "fixtures", "scripts"}
+            relative.parts[0] in {"bin", "fixtures", "scripts", "web"}
             and path.suffix in {".sh", ".py", ".js"}
         )
         info.mode = 0o755 if executable else 0o644

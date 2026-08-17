@@ -68,7 +68,8 @@ group or other users. qOS also requires the final path to be absolute.
 
 ### 4. Run the qOS wizard
 
-Mainnet external custody is the default:
+Start the mainnet custody wizard and select option 1, the recommended existing
+external-key path:
 
 ```sh
 ./setup.sh install
