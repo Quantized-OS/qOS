@@ -18,6 +18,7 @@ readonly -a MANAGED_LAUNCHERS=(
   qos-agent-demo
   qos-agent-security-audit
   qos-agent-external-setup
+  qos-model
   qos-profile
   qos-policy
   qos-wallet
@@ -1337,6 +1338,7 @@ write_launcher qos-agent bin/qos-agent-control.js
 write_launcher qos-agent-demo bin/qos-agent-demo.js
 write_launcher qos-agent-security-audit bin/qos-agent-security-audit.js
 write_launcher qos-agent-external-setup bin/qos-agent-external-setup.js
+write_launcher qos-model bin/qos-model.js
 write_launcher qos-profile bin/qos-profile.js
 write_launcher qos-policy bin/qos-policy.js
 write_launcher qos-wallet bin/qos-wallet.js

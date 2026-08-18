@@ -199,6 +199,7 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
   assert.equal(existsSync(join(installBin, "qos-core")), true);
   assert.equal(existsSync(join(installBin, "qos-shell")), true);
   assert.equal(existsSync(join(installBin, "qos-agent")), true);
+  assert.equal(existsSync(join(installBin, "qos-model")), true);
   assert.equal(existsSync(join(installBin, "qos-policy")), true);
   assert.equal(existsSync(join(installBin, "qos-wallet")), true);
   assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "token")), true);
@@ -267,6 +268,7 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
   assert.equal(existsSync(join(installBin, "qos")), false);
   assert.equal(readFileSync(join(installBin, "qos-core"), "utf8"), unmanagedCore);
   assert.equal(existsSync(join(installBin, "qos-shell")), false);
+  assert.equal(existsSync(join(installBin, "qos-model")), false);
   assert.equal(existsSync(profileHome), false);
   assert.equal(existsSync(join(home, ".local", "share", "qos")), false);
   assert.equal(readFileSync(join(outside, "keep"), "utf8"), "preserved\n");

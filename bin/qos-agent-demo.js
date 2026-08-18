@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { basicAgentPlan, modelAgentPlan } from "../src/agent.js";
+import { basicAgentPlan, configuredModelAgentPlan, modelAgentPlan } from "../src/agent.js";
 import { assertQos, publicError, QosError } from "../src/errors.js";
 import { formatHuman } from "../src/human-output.js";
+import { loadModelProviderForRequest } from "../src/model-registry.js";
 import { QosService } from "../src/service.js";
 import { walletReadiness } from "../src/wallet-onboarding.js";
 
@@ -15,8 +16,9 @@ Usage:
 
 Options:
   --agent basic|model       Proposal agent (default: basic)
-  --model-url <url>         Loopback OpenAI-compatible endpoint for --agent model
-  --model <name>            Local model name (default: qwen2.5:3b)
+  --model-profile <id>      Configured local or commercial BYOK provider profile
+  --model-url <url>         Legacy loopback OpenAI-compatible endpoint
+  --model <name>            Legacy local model name (default: qwen2.5:3b)
   --destination <pubkey>    Must match the destination pinned in policy
   --broadcast               Submit after qOS validation and simulation
   --confirm-live            Required together with --broadcast
@@ -31,7 +33,7 @@ This demo transfers the pinned qOS Token-2022 asset; it is not a DEX swap.
 function parseArgs(argv) {
   const options = { agent: "basic" };
   const seen = new Set();
-  const valueOptions = new Set(["home", "amount", "agent", "model-url", "model", "destination"]);
+  const valueOptions = new Set(["home", "amount", "agent", "model-profile", "model-url", "model", "destination"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
@@ -102,16 +104,31 @@ async function main() {
     decimals: service.policy.tokenTransfer.decimals,
   };
 
+  const explicitLegacyModel = options["model-url"] !== undefined || options.model !== undefined;
+  assertQos(!(options["model-profile"] && explicitLegacyModel), "CLI_ARGUMENT_INVALID", "--model-profile cannot be combined with legacy --model-url or --model");
+  const modelProfileId = options["model-profile"] ?? (explicitLegacyModel ? undefined : process.env.QOS_AGENT_MODEL_PROFILE);
+  let selectedProvider;
+  if (options.agent === "model" && modelProfileId) {
+    selectedProvider = loadModelProviderForRequest(resolve(options.home), modelProfileId);
+  }
+
   const plan = options.agent === "basic"
     ? basicAgentPlan(agentContext)
-    : await modelAgentPlan({
-      ...agentContext,
-      url: options["model-url"] ?? process.env.QOS_AGENT_MODEL_URL,
-      model: options.model ?? process.env.QOS_AGENT_MODEL ?? "qwen2.5:3b",
-    });
+    : selectedProvider
+      ? await configuredModelAgentPlan({ ...agentContext, ...selectedProvider })
+      : await modelAgentPlan({
+        ...agentContext,
+        url: options["model-url"] ?? process.env.QOS_AGENT_MODEL_URL,
+        model: options.model ?? process.env.QOS_AGENT_MODEL ?? "qwen2.5:3b",
+      });
 
   printEvent("agent_decision", {
-    agent: options.agent === "basic" ? "basic-policy-aware" : (options.model ?? process.env.QOS_AGENT_MODEL ?? "qwen2.5:3b"),
+    agent: options.agent === "basic"
+      ? "basic-policy-aware"
+      : selectedProvider
+        ? `${selectedProvider.profile.provider}/${selectedProvider.profile.model}`
+        : (options.model ?? process.env.QOS_AGENT_MODEL ?? "qwen2.5:3b"),
+    ...(selectedProvider ? { modelProfile: modelProfileId } : {}),
     plan,
   }, options.json === true);
 

@@ -30,6 +30,7 @@ test("qOS Shell help is available before profile creation", () => {
   assert.match(result.stdout, /qOS command shell/);
   assert.match(result.stdout, /send\|snd LAMPORTS --confirm-broadcast/);
   assert.match(result.stdout, /capabilities \| capa/);
+  assert.match(result.stdout, /model \| mod catalog/);
   assert.match(result.stdout, /current source implements transfers, not DEX swaps/);
 });
 
@@ -42,6 +43,17 @@ test("qOS accepts a direct shorthand command and reports exact capabilities", (t
   assert.equal(capabilities.cluster, "devnet");
   assert.equal(capabilities.dexTrading, false);
   assert.ok(capabilities.operations.includes("qemu-firmware-rehearsal"));
+  assert.ok(capabilities.operations.includes("byok-model-providers"));
+});
+
+test("qOS Shell exposes the commercial model catalog and empty provider registry", (t) => {
+  const home = devnetProfile(t);
+  const catalog = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "mod", "cat"], { encoding: "utf8" });
+  assert.equal(catalog.status, 0, catalog.stderr);
+  assert.ok(JSON.parse(catalog.stdout).providers.some((provider) => provider.id === "anthropic"));
+  const list = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "model"], { encoding: "utf8" });
+  assert.equal(list.status, 0, list.stderr);
+  assert.deepEqual(JSON.parse(list.stdout).profiles, []);
 });
 
 test("qOS routes bare agent commands to managed onboarding and isolates the synthetic demo namespace", (t) => {

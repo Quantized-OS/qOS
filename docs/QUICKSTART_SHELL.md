@@ -300,6 +300,19 @@ requires `ag re --confirm-live`. Revoke an agent with `ag off AGENT_ID`.
 See `AGENT_ONBOARDING.md` for the MCP tools, REST compatibility shape,
 generated skill pack, isolation requirements, and offboarding semantics.
 
+Configure a local or commercial BYOK proposal model independently of the
+managed-agent credential:
+
+```text
+qos> model catalog
+qos> model configure claude-prod --provider anthropic --model MODEL_ID --api-key-file /run/secrets/anthropic-key
+qos> ag demo dry 1000000 -a model -p claude-prod
+```
+
+`model list`, `model show ID`, `model rotate ID --api-key-file PATH`, and
+`model remove ID --yes` never print the key. See `MODEL_PROVIDERS.md` for the
+provider matrix and custom-endpoint trust boundary.
+
 Edit reviewed policy fields inline:
 
 ```text

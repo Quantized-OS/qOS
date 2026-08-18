@@ -50,7 +50,29 @@ The command prints the agent proposal and the exact qOS intent prepared for
 review. An absent source or destination token account, insufficient balance,
 or any policy mismatch fails closed.
 
-## Local 3B-class model, validation only
+## Configured local or commercial model, validation only
+
+The preferred model mode uses a named provider profile. Profiles can target a
+local endpoint or import an operator-owned API key for OpenAI, Anthropic
+Claude, Google Gemini, Cohere, Azure OpenAI, and supported
+OpenAI-compatible services. See [`MODEL_PROVIDERS.md`](MODEL_PROVIDERS.md) for
+the provider catalog, secure key-file import, custom endpoints, rotation, and
+removal.
+
+```sh
+node bin/qos-agent-demo.js \
+  --agent model \
+  --model-profile claude-prod \
+  --home .qos-ephemeral-mainnet \
+  --amount 1000000
+```
+
+Only public policy context is sent to the selected endpoint. The provider API
+key is added to the authenticated HTTP request separately; the signer, private
+key material, agent bearer tokens, and provider credential never enter the
+prompt.
+
+## Legacy local endpoint
 
 The optional model mode uses a local OpenAI-compatible chat-completions
 endpoint. Only public policy context is sent to the endpoint; the signer and

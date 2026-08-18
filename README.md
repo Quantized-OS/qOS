@@ -169,6 +169,7 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
 * `docs/AGENT_DEMO.md` — Agent-directed qOS Token-2022 transfer rehearsal
+* `docs/MODEL_PROVIDERS.md` — Commercial LLM BYOK profiles, adapters, key rotation, and custom endpoints
 * `docs/AGENT_ONBOARDING.md` — Per-agent credentials, skills, approvals, listener, and offboarding
 * `docs/WALLET_AND_POLICY.md` — Cluster readiness, Devnet funding, and atomic inline policy edits
 * `docs/BROWSER_INSTALL.md` — Verified `curl | sh` publication and trust boundary
@@ -179,10 +180,11 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
 * `bin/qos.js` — Sandbox CLI and local API server
 * `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
-* `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
+* `bin/qos-agent-demo.js` — Basic, local, or commercial-model proposal and qOS-gated transfer demo
 * `bin/qos-agent-control.js` — Agent onboarding, skill generation, managed REST/MCP service, approvals, and revocation
 * `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
 * `bin/qos-agent-external-setup.js` — Public-only external-signer home setup
+* `bin/qos-model.js` — Local/commercial model catalog, BYOK configuration, rotation, and revocation
 * `bin/qos-profile.js` — Owner-only API-token and runtime-profile provisioning
 * `bin/qos-policy.js` — Human-readable, allowlisted inline policy editor
 * `bin/qos-wallet.js` — Pinned-cluster source-wallet readiness and Devnet funding
@@ -220,7 +222,7 @@ signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.9.1 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.10.0 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
@@ -234,8 +236,9 @@ sandbox keeps a stable identity and can verify what booted. External-signer
 homes contain only a public signer descriptor and require an explicit public
 destination, so initialization creates no private keys. Encrypted software
 homes retain AES-256-GCM ciphertext and scrypt metadata. Plaintext demo homes
-retain PEM keys. Runtime API tokens, per-agent credential files, hashed agent
-registry entries, and generated skill packs persist until explicitly revoked
+retain PEM keys. Runtime API tokens, per-agent credential files, commercial
+model API-key files, hashed agent/model registry entries, and generated skill
+packs persist until explicitly revoked
 or a confirmed full uninstall removes the registered qOS installation; pending
 approvals and completed transaction details do not.
 JavaScript strings are garbage-collected and cannot be given
@@ -320,7 +323,7 @@ with production-grade firmware or non-exportable custody.
 ## Build the research release media
 
 After the host checks pass, `make release-media` creates a deterministic source
-archive, checksums, and `release-artifacts/qos-0.9.1-research-media.iso`. The
+archive, checksums, and `release-artifacts/qos-0.10.0-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
 production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.
@@ -399,8 +402,13 @@ provisioned QEMU demo must be rebuilt after any change to its own demo policy.
 
 ## Agent-directed transfer demo
 
-`bin/qos-agent-demo.js` connects either a deterministic basic agent or a local
-3B-class OpenAI-compatible model to the pinned qOS Token-2022 transfer path.
+`bin/qos-agent-demo.js` connects a deterministic basic agent, a local
+OpenAI-compatible model, or an operator-configured commercial BYOK provider to
+the pinned qOS Token-2022 transfer path. Native adapters cover OpenAI,
+Anthropic Claude, Google Gemini, and Cohere; fixed OpenAI-compatible presets
+cover xAI, Groq, Mistral, DeepSeek, OpenRouter, Together, Fireworks,
+Perplexity, and Cerebras. Azure and custom compatible endpoints are also
+available with an explicit endpoint acknowledgement.
 The agent proposes a typed action; qOS remains authoritative for the mint,
 destination, amount, accounts, fees, simulation, signing, and confirmation.
 The default is validation-only:
@@ -409,8 +417,20 @@ The default is validation-only:
 node bin/qos-agent-demo.js --home .qos-ephemeral-mainnet --amount 1000000
 ```
 
-See [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for local-model setup and the
-explicit `--broadcast --confirm-live` mainnet gates. This is an agent-directed
+To use a commercial account, import its key from an owner-only file and select
+the resulting profile (the key itself is never a CLI value):
+
+```sh
+qos-model --home .qos-ephemeral-mainnet configure claude-prod \
+  --provider anthropic --model YOUR_CLAUDE_MODEL \
+  --api-key-file /run/secrets/anthropic-api-key
+node bin/qos-agent-demo.js --agent model --model-profile claude-prod \
+  --home .qos-ephemeral-mainnet --amount 1000000
+```
+
+See [`docs/MODEL_PROVIDERS.md`](docs/MODEL_PROVIDERS.md) for BYOK configuration
+and [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for the explicit
+`--broadcast --confirm-live` mainnet gates. This is an agent-directed
 Token-2022 transfer, not a DEX swap; the reviewed DEX instruction adapter is
 still a roadmap item.
 

@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.9.1 adds strong
+qOS is a research firmware and policy-signer project. Version 0.10.0 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
@@ -64,6 +64,22 @@ validator, approval queue, and executor. Ask-mode requests exist only in process
 memory and disappear on rejection, expiry, shutdown, or offboarding. Auto mode
 intentionally removes the per-action human decision, but mainnet execution
 still requires an explicit `ag re --confirm-live` restart gate.
+
+Commercial model BYOK credentials are a separate trust domain. Each imported
+API key is copied into an owner-only, single-link regular file; only its SHA-256
+verifier appears in the model registry. Built-in providers pin HTTPS endpoints.
+Custom endpoints require explicit acknowledgement, reject plaintext HTTP and
+URL-embedded credentials, and never receive signer keys or agent bearer tokens.
+Provider error bodies are not surfaced. Redirects, compressed/non-JSON output,
+oversized output, credential-file replacement, and registry mismatches fail
+closed. The model still produces an untrusted proposal that passes through the
+same amount, destination, action, and policy validation as a local model.
+
+The qOS service account can read its stored provider keys. A compromised
+same-account process can therefore spend the associated commercial API quota.
+Use provider-side key restrictions, spend limits, isolated service accounts,
+and secret-manager mounts for production. BYOK isolation does not replace the
+external signer boundary and does not grant a model direct transaction access.
 
 Mode-0600 files separate Unix accounts, not processes sharing one account. An
 agent running as the qOS user can read other same-user credentials and any

@@ -32,6 +32,7 @@ check:
 	node --check bin/qos-agent-control.js
 	node --check bin/qos-agent-security-audit.js
 	node --check bin/qos-agent-external-setup.js
+	node --check bin/qos-model.js
 	node --check bin/qos-profile.js
 	node --check bin/qos-policy.js
 	node --check bin/qos-wallet.js

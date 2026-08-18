@@ -34,6 +34,8 @@ const COMMAND_ALIASES = new Map([
   ["tok", "token"],
   ["fw", "firmware"],
   ["ag", "agent"],
+  ["mod", "model"],
+  ["llm", "model"],
   ["wal", "wallet"],
   ["pol", "policy"],
   ["api", "serve"],
@@ -61,6 +63,10 @@ const AGENT_ACTION_ALIASES = new Map([
   ["ls", "list"], ["off", "offboard"], ["skill", "skills"],
   ["req", "requests"], ["ok", "approve"], ["no", "reject"],
   ["up", "start"], ["st", "status"], ["down", "stop"], ["re", "restart"],
+]);
+const MODEL_ACTION_ALIASES = new Map([
+  ["cat", "catalog"], ["ls", "list"], ["cfg", "configure"],
+  ["rot", "rotate"], ["rm", "remove"],
 ]);
 const ASSET_ALIASES = new Map([["s", "sol"], ["tok", "token"], ["t", "token"]]);
 
@@ -96,7 +102,10 @@ Commands (long | shorthand):
   agent | ag restart|re [--confirm-live]
   agent | ag requests|req                      agent | ag approve|ok REQUEST_ID
   agent | ag reject|no REQUEST_ID
-  agent | ag demo dry-run|dry AMOUNT [-a basic|model] [-u URL] [-m NAME]
+  model | mod catalog|cat                      model | mod list|ls
+  model | mod configure|cfg ID [options]       model | mod rotate|rot ID
+  model | mod show ID                          model | mod remove|rm ID --yes
+  agent | ag demo dry-run|dry AMOUNT [-a basic|model] [-p PROFILE]
   agent | ag demo broadcast|cast AMOUNT --confirm-live [demo options]
   serve [api|mcp] [PORT] | api [PORT]         security-audit | audit
   trade | tr
@@ -171,6 +180,8 @@ function expandAliases(tokens) {
     } else {
       expanded[1] = AGENT_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
     }
+  } else if (expanded[0] === "model" && expanded[1] !== undefined) {
+    expanded[1] = MODEL_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
   }
   return expanded;
 }
@@ -238,6 +249,7 @@ function capabilitiesFor(context) {
       ...(tokenEnabled ? ["qos-token-intent", "qos-token-transfer", "agent-directed-qos-token-transfer"] : []),
       ...(context.runtime.profile === "devnet" ? ["qemu-firmware-rehearsal"] : []),
       "loopback-agent-api-mcp",
+      "byok-model-providers",
     ],
     mainnetAutomaticExecutionRequiresLiveStart: context.policy.cluster === "mainnet-beta",
     dexTrading: false,
@@ -252,8 +264,8 @@ function printCapabilities(context) {
 
 function parseAgentOptions(tokens) {
   const options = [];
-  const allowed = new Set(["--agent", "--model-url", "--model"]);
-  const aliases = new Map([["-a", "--agent"], ["-u", "--model-url"], ["-m", "--model"]]);
+  const allowed = new Set(["--agent", "--model-profile", "--model-url", "--model"]);
+  const aliases = new Map([["-a", "--agent"], ["-p", "--model-profile"], ["-u", "--model-url"], ["-m", "--model"]]);
   for (let index = 0; index < tokens.length; index += 1) {
     const option = aliases.get(tokens[index]) ?? tokens[index];
     if (!allowed.has(option)) throw new QosError("INVALID_ARGUMENT", `Unknown agent option: ${option}`);
@@ -356,6 +368,10 @@ function dispatch(tokens, context) {
     const status = runProgram("bin/qos-policy.js", args, context);
     if (status === 0) context.policy = loadPolicy(join(context.runtime.home, "policy.json"));
     return { status, exit: false };
+  }
+  if (command === "model") {
+    const args = ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), ...(rest.length ? rest : ["list"])];
+    return { status: runProgram("bin/qos-model.js", args, context), exit: false };
   }
   if (command === "sol") {
     const [action, amount, confirmation, ...extra] = rest;

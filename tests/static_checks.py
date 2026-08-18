@@ -246,6 +246,7 @@ def main() -> None:
             "qemu-firmware-rehearsal",
             "formatHuman",
             'bin/qos-agent-control.js',
+            'bin/qos-model.js',
             'bin/qos-policy.js',
             'bin/qos-wallet.js',
         ),
@@ -355,6 +356,44 @@ def main() -> None:
             "AGENT_DESTINATION_FORBIDDEN",
             "AGENT_AMOUNT_MISMATCH",
             "AGENT_MODEL_REMOTE_FORBIDDEN",
+        ),
+    )
+    require(
+        "src/model-provider.js",
+        (
+            "api.openai.com",
+            "api.anthropic.com",
+            "generativelanguage.googleapis.com",
+            "api.cohere.com",
+            "custom-openai",
+            "MODEL_ENDPOINT_TLS_REQUIRED",
+            "CUSTOM_MODEL_ENDPOINT_ACKNOWLEDGEMENT_REQUIRED",
+            "MODEL_CREDENTIAL_MISMATCH",
+            "redirect: \"error\"",
+            "responseMimeType",
+        ),
+    )
+    require(
+        "src/model-registry.js",
+        (
+            "model-providers",
+            "api-key",
+            "privateFile: true",
+            "writePrivateJsonAtomic",
+            "credentialSha256",
+            "rotateModelProviderCredential",
+            "removeModelProvider",
+        ),
+    )
+    require(
+        "bin/qos-model.js",
+        (
+            "BYOK control",
+            "--api-key-file",
+            "--allow-custom-endpoint",
+            "configureModelProvider",
+            "rotateModelProviderCredential",
+            "removeModelProvider",
         ),
     )
     forbid("bin/qos-agent-demo.js", ("signer.pem", "privateKey", "signerKey"))
