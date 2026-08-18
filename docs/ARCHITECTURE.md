@@ -79,6 +79,23 @@ At minimum it enforces:
 Keep treasury assets in a separate cold or MPC-controlled account.  The hot
 trading key should only control a deliberately capped balance.
 
+## Model provider domain
+
+Proposal generation is pluggable and remains outside the signer trust domain.
+Local models use a literal loopback OpenAI-compatible endpoint without an API
+key. Commercial profiles use one of the fixed native protocol adapters or an
+operator-approved custom compatible endpoint. Provider API keys are stored
+separately from non-secret profile metadata and are attached only to the
+outbound HTTPS request.
+
+The prompt contains the requested amount plus public policy fields needed to
+form the typed proposal. It contains no signer key, provider key, agent bearer
+token, or arbitrary signing capability. Provider output is untrusted JSON and
+cannot expand the action schema, amount, destination, mint, or strategy scope.
+This separation also gives a future hosted API a stable boundary: cloud
+metering and qOS-token payment can wrap proposal execution without moving
+transaction authorization into the model provider.
+
 ## Implemented Solana sandbox
 
 The host-side prototype implements the first narrow slice of the target design:

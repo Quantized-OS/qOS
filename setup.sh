@@ -11,6 +11,8 @@ readonly LEGACY_INSTALLER="${SCRIPT_DIR}/install.sh"
 readonly LEGACY_BACKUP_DIRECTORY="${SCRIPT_DIR}/.qos-setup-backup"
 readonly -a MANAGED_LAUNCHERS=(
   qos
+)
+readonly -a LEGACY_MANAGED_LAUNCHERS=(
   qos-core
   qos-shell
   qos-firmware
@@ -18,10 +20,12 @@ readonly -a MANAGED_LAUNCHERS=(
   qos-agent-demo
   qos-agent-security-audit
   qos-agent-external-setup
+  qos-model
   qos-profile
   qos-policy
   qos-wallet
 )
+readonly -a ALL_MANAGED_LAUNCHERS=("${MANAGED_LAUNCHERS[@]}" "${LEGACY_MANAGED_LAUNCHERS[@]}")
 
 print_banner() {
   cat <<'EOF'
@@ -56,8 +60,8 @@ Usage:
   ./setup.sh uninstall [options]
 
 Actions:
-  install      Verify dependencies and source, provision a profile, install
-               commands, and open qOS. Mainnet setup asks whether to use an
+  install      Verify dependencies and source, provision a profile, install the
+               single qos command, and open it. Mainnet setup asks whether to use an
                existing external key or generate an accessible software key.
   uninstall    Stop qOS services and permanently remove all qOS-managed data,
                keys, credentials, toolchains, launchers, logs, and build output.
@@ -93,8 +97,21 @@ Paths and behavior:
       --offline                Skip cluster readiness checks and Devnet funding
       --no-fund                Verify Devnet but do not request its default airdrop
       --airdrop-lamports N     Devnet funding amount (default: 200000000)
+      --unattended             Never prompt and finish without opening the shell
   -n, --no-shell               Finish without entering qOS
   -h, --help                   Show this help
+
+Optional model provider:
+      --model-provider NAME    Provider from qos model catalog
+      --model-profile ID       Provider profile ID (default: provider name)
+      --model MODEL            Exact provider model ID
+      --model-endpoint URL     Local, Azure, or custom provider endpoint
+      --model-api-key-file P   Import an existing owner-only API-key file
+      --model-api-key-env VAR  Import the key from an environment variable
+      --model-api-key KEY      Import a literal key; visible in process/history
+      --allow-custom-model-endpoint
+                               Acknowledge the configured custom key destination
+      --no-model               Skip the interactive model question
 
 Optional first agent:
       --agent-id ID            Onboard one agent during setup
@@ -111,7 +128,14 @@ existing key through a reviewed non-exportable signer adapter or generate a
 local key. The generated-key choice continues exactly as --insecure and requires
 the same explicit warning acceptance. qOS never imports an existing private key.
 Devnet setup requests a confirmed faucet airdrop unless --no-fund or --offline
-is selected. Mainnet setup never funds or broadcasts.
+is selected. Mainnet setup never funds or broadcasts. Interactive setup also
+offers model onboarding: choose any built-in commercial BYOK provider, or press
+Enter for local Ollama-compatible defaults. Only the `qos` command is installed.
+
+For a prompt-free install, pass --unattended plus every required value. It does
+not waive --accept-insecure-risk or --accept-auto. Direct --model-api-key input
+is supported as requested, but --model-api-key-env or --model-api-key-file is
+safer because command-line values can be exposed by history and process tools.
 EOF
 }
 
@@ -422,7 +446,7 @@ uninstall_launchers() {
   [[ -d "${bin_directory}" ]] || die "The command path is not a directory: ${bin_directory}"
   [[ "$(stat -c '%u' "${bin_directory}")" == "$(id -u)" ]] || die "The command directory must be owned by the current user."
 
-  for name in "${MANAGED_LAUNCHERS[@]}"; do
+  for name in "${ALL_MANAGED_LAUNCHERS[@]}"; do
     path="${bin_directory}/${name}"
     [[ -e "${path}" || -L "${path}" ]] || continue
     if [[ -f "${path}" && ! -L "${path}" ]]; then
@@ -439,6 +463,30 @@ uninstall_launchers() {
 
   if (( removed == 0 )); then
     log "No managed qOS launchers were installed in ${bin_directory}."
+  fi
+}
+
+retire_legacy_launchers() {
+  local name
+  local path
+  local size
+  local removed=0
+
+  for name in "${LEGACY_MANAGED_LAUNCHERS[@]}"; do
+    path="${bin_directory}/${name}"
+    [[ -e "${path}" || -L "${path}" ]] || continue
+    if [[ -f "${path}" && ! -L "${path}" ]]; then
+      size="$(stat -c '%s' "${path}")"
+      if [[ "${size}" -le 16384 ]] && grep -Fqx "${MANAGED_MARKER}" "${path}"; then
+        unlink -- "${path}"
+        removed=$((removed + 1))
+        continue
+      fi
+    fi
+    warn "Preserved unmanaged legacy command: ${path}"
+  done
+  if (( removed > 0 )); then
+    log "Retired ${removed} legacy qOS command launcher(s); use qos for every operation."
   fi
 }
 
@@ -475,10 +523,20 @@ skip_firmware=0
 verbose=0
 open_shell=1
 wizard=0
+unattended=0
 signer_guide=0
 offline=0
 no_fund=0
 airdrop_lamports="200000000"
+model_provider=""
+model_profile=""
+model_name=""
+model_endpoint=""
+model_api_key=""
+model_api_key_file=""
+model_api_key_env=""
+allow_custom_model_endpoint=0
+skip_model=0
 agent_id=""
 agent_name=""
 agent_approval="ask"
@@ -528,6 +586,11 @@ while (($#)); do
     -w|--wizard)
       mark_seen wizard "$1"
       wizard=1
+      shift
+      ;;
+    --unattended|--non-interactive)
+      mark_seen unattended "$1"
+      unattended=1
       shift
       ;;
     -G|--signer-guide)
@@ -595,6 +658,58 @@ while (($#)); do
       mark_seen airdrop_lamports "$1"
       airdrop_lamports="$2"
       shift 2
+      ;;
+    --model-provider)
+      require_option_value "$1" "${2-}"
+      mark_seen model_provider "$1"
+      model_provider="$2"
+      shift 2
+      ;;
+    --model-profile)
+      require_option_value "$1" "${2-}"
+      mark_seen model_profile "$1"
+      model_profile="$2"
+      shift 2
+      ;;
+    --model)
+      require_option_value "$1" "${2-}"
+      mark_seen model_name "$1"
+      model_name="$2"
+      shift 2
+      ;;
+    --model-endpoint)
+      require_option_value "$1" "${2-}"
+      mark_seen model_endpoint "$1"
+      model_endpoint="$2"
+      shift 2
+      ;;
+    --model-api-key-file)
+      require_option_value "$1" "${2-}"
+      mark_seen model_api_key_file "$1"
+      model_api_key_file="$2"
+      shift 2
+      ;;
+    --model-api-key-env)
+      require_option_value "$1" "${2-}"
+      mark_seen model_api_key_env "$1"
+      model_api_key_env="$2"
+      shift 2
+      ;;
+    --model-api-key)
+      require_option_value "$1" "${2-}"
+      mark_seen model_api_key "$1"
+      model_api_key="$2"
+      shift 2
+      ;;
+    --allow-custom-model-endpoint)
+      mark_seen allow_custom_model_endpoint "$1"
+      allow_custom_model_endpoint=1
+      shift
+      ;;
+    --no-model)
+      mark_seen skip_model "$1"
+      skip_model=1
+      shift
       ;;
     --agent-id)
       require_option_value "$1" "${2-}"
@@ -667,6 +782,10 @@ fi
 
 (( ! accept_insecure_risk || insecure )) || die "--accept-insecure-risk is valid only together with --insecure."
 (( ! devnet || ! insecure )) || die "--insecure selects a mainnet software key and cannot be combined with --devnet."
+(( ! wizard || ! unattended )) || die "--wizard cannot be combined with --unattended."
+if (( unattended )); then
+  open_shell=0
+fi
 
 if [[ "${bin_directory}" != /* ]]; then
   bin_directory="$(resolve_absolute_path "${bin_directory}")"
@@ -674,8 +793,11 @@ fi
 
 if [[ "${action}" == "uninstall" ]]; then
   [[ "${devnet}" -eq 0 && "${insecure}" -eq 0 && "${accept_insecure_risk}" -eq 0 && -z "${qos_home}" && -z "${destination}" && -z "${public_key}" && -z "${signer_command}" \
-    && "${skip_setup}" -eq 0 && "${skip_firmware}" -eq 0 && "${verbose}" -eq 0 && "${open_shell}" -eq 1 && "${wizard}" -eq 0 \
+    && "${skip_setup}" -eq 0 && "${skip_firmware}" -eq 0 && "${verbose}" -eq 0 && "${open_shell}" -eq 1 && "${wizard}" -eq 0 && "${unattended}" -eq 0 \
     && "${offline}" -eq 0 && "${no_fund}" -eq 0 && "${airdrop_lamports}" == "200000000" \
+    && -z "${model_provider}" && -z "${model_profile}" && -z "${model_name}" && -z "${model_endpoint}" \
+    && -z "${model_api_key}" && -z "${model_api_key_file}" && -z "${model_api_key_env}" \
+    && "${allow_custom_model_endpoint}" -eq 0 && "${skip_model}" -eq 0 \
     && -z "${agent_id}" && -z "${agent_name}" && "${agent_approval}" == "ask" && -z "${agent_asset}" \
     && -z "${agent_max_amount}" && -z "${agent_destination}" && -z "${agent_strategy_id}" && "${accept_auto}" -eq 0 ]] \
     || die "uninstall accepts only --bin, --yes, and --help."
@@ -722,6 +844,52 @@ fi
 if [[ "${airdrop_lamports}" != "200000000" && ( "${offline}" -eq 1 || "${no_fund}" -eq 1 ) ]]; then
   die "--airdrop-lamports cannot be combined with --offline or --no-fund."
 fi
+
+model_requested=0
+if [[ -n "${model_provider}" || -n "${model_profile}" || -n "${model_name}" || -n "${model_endpoint}" \
+  || -n "${model_api_key}" || -n "${model_api_key_file}" || -n "${model_api_key_env}" \
+  || "${allow_custom_model_endpoint}" -eq 1 ]]; then
+  model_requested=1
+fi
+(( ! skip_model || ! model_requested )) || die "--no-model cannot be combined with --model-* options."
+if (( model_requested )); then
+  [[ -n "${model_provider}" ]] || die "--model-provider is required when any model option is supplied."
+  [[ "${model_provider}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+    || die "--model-provider must be a provider ID from qos model catalog."
+  [[ -n "${model_profile}" ]] || model_profile="${model_provider}"
+  [[ "${model_profile}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+    || die "--model-profile must start with a lowercase letter and contain at most 32 lowercase letters, digits, or hyphens."
+  if [[ -n "${model_api_key_env}" ]]; then
+    [[ "${model_api_key_env}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+      || die "--model-api-key-env must name a valid environment variable."
+  fi
+  model_key_source_count=0
+  [[ -z "${model_api_key}" ]] || model_key_source_count=$((model_key_source_count + 1))
+  [[ -z "${model_api_key_file}" ]] || model_key_source_count=$((model_key_source_count + 1))
+  [[ -z "${model_api_key_env}" ]] || model_key_source_count=$((model_key_source_count + 1))
+  (( model_key_source_count <= 1 )) \
+    || die "Choose exactly one of --model-api-key, --model-api-key-file, or --model-api-key-env."
+  if [[ "${model_provider}" == "local" ]]; then
+    (( model_key_source_count == 0 )) || die "Local model providers do not accept API keys."
+    [[ -n "${model_name}" ]] || model_name="qwen2.5:3b"
+    [[ -n "${model_endpoint}" ]] || model_endpoint="http://127.0.0.1:11434/v1/chat/completions"
+  else
+    [[ -n "${model_name}" ]] || die "--model is required for a commercial or custom provider."
+    (( model_key_source_count == 1 )) \
+      || die "A commercial or custom provider requires one API-key source."
+  fi
+fi
+if [[ -n "${model_api_key_env}" ]]; then
+  [[ -v ${model_api_key_env} ]] || die "Environment variable ${model_api_key_env} is not set."
+  model_api_key="${!model_api_key_env}"
+  [[ -n "${model_api_key}" ]] || die "Environment variable ${model_api_key_env} is empty."
+  unset "${model_api_key_env}"
+  model_api_key_env=""
+fi
+if [[ -n "${model_api_key_file}" ]]; then
+  model_api_key_file="$(expand_home_path "${model_api_key_file}")"
+  [[ "${model_api_key_file}" == /* ]] || model_api_key_file="$(resolve_absolute_path "${model_api_key_file}")"
+fi
 [[ "${agent_approval}" == "ask" || "${agent_approval}" == "auto" ]] || die "--agent-approval must be ask or auto."
 [[ "${accept_auto}" -eq 0 || "${agent_approval}" == "auto" ]] || die "--accept-auto requires --agent-approval auto."
 if [[ -n "${agent_name}" || -n "${agent_asset}" || -n "${agent_max_amount}" || -n "${agent_destination}" || -n "${agent_strategy_id}" || "${agent_approval}" != "ask" || "${accept_auto}" -eq 1 ]]; then
@@ -732,8 +900,10 @@ if [[ -n "${agent_id}" ]]; then
 fi
 
 interactive=0
-if [[ -t 0 && -t 1 ]] || (( wizard )); then
-  interactive=1
+if (( ! unattended )); then
+  if [[ -t 0 && -t 1 ]] || (( wizard )); then
+    interactive=1
+  fi
 fi
 banner_printed=0
 if (( interactive && ! devnet && ! insecure )) && [[ -z "${public_key}" && -z "${signer_command}" ]]; then
@@ -1010,6 +1180,76 @@ json_field() {
   ' "${field_name}"
 }
 
+model_profile_from_list() {
+  local profile_id="$1"
+  run_node -e '
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      const registry = JSON.parse(input);
+      const profile = registry.profiles.find((entry) => entry.id === process.argv[1]);
+      if (profile === undefined) process.exit(3);
+      process.stdout.write(JSON.stringify(profile));
+    });
+  ' "${profile_id}"
+}
+
+resolve_model_endpoint() {
+  run_node --input-type=module -e '
+    import { createModelProviderProfile } from "./src/model-provider.js";
+    const [id, provider, model, endpoint, allowCustomEndpoint] = process.argv.slice(1);
+    try {
+      const profile = createModelProviderProfile({
+        id,
+        provider,
+        model,
+        endpoint: endpoint === "" ? undefined : endpoint,
+        credentialSha256: provider === "local" ? null : "0".repeat(64),
+        allowCustomEndpoint: allowCustomEndpoint === "1",
+      });
+      process.stdout.write(profile.endpoint);
+    } catch (error) {
+      process.stderr.write(`qOS model configuration error: ${error?.message ?? "invalid model settings"}\n`);
+      process.exit(1);
+    }
+  ' "${model_profile}" "${model_provider}" "${model_name}" "${model_endpoint}" "${allow_custom_model_endpoint}"
+}
+
+model_key_import_path=""
+prepared_model_key_file=""
+cleanup_model_key_import() {
+  local path="${model_key_import_path:-}"
+  [[ -n "${path}" ]] || return 0
+  if [[ -f "${path}" && ! -L "${path}" && "$(stat -c '%u' "${path}")" == "$(id -u)" ]]; then
+    if unlink -- "${path}"; then
+      model_key_import_path=""
+      return 0
+    fi
+  fi
+  warn "Could not safely remove the temporary model API-key import file at ${path}; inspect it immediately."
+  return 1
+}
+trap 'cleanup_model_key_import || true' EXIT
+
+prepare_model_key_file() {
+  local model_key_value=""
+  prepared_model_key_file="${model_api_key_file}"
+  if [[ -n "${model_api_key}" ]]; then
+    model_key_value="${model_api_key}"
+  else
+    return 0
+  fi
+  [[ -n "${model_key_value}" ]] || die "The selected model API key is empty."
+  model_key_import_path="$(mktemp /tmp/qos-model-key.XXXXXX)" \
+    || die "Could not create a private temporary model credential file."
+  chmod 0600 "${model_key_import_path}"
+  printf '%s\n' "${model_key_value}" > "${model_key_import_path}"
+  prepared_model_key_file="${model_key_import_path}"
+  model_key_value=""
+  model_api_key=""
+}
+
 if [[ "${profile}" == "mainnet-external" && -e "${qos_home}" \
   && ( -z "${public_key}" || -z "${destination}" || -z "${signer_command}" ) ]]; then
   runtime_json="$(run_node bin/qos-profile.js show --home "${qos_home}")" \
@@ -1136,6 +1376,57 @@ else
     warn "Cluster readiness could not be verified. qOS will still fail closed before preparing or signing an action."
     warn "Run qos wallet status to retry."
   fi
+fi
+
+if (( model_requested )); then
+  log "Configuring model profile ${model_profile} for provider ${model_provider} without prompts."
+  normalized_model_endpoint="$(resolve_model_endpoint)" \
+    || die "The supplied model provider settings are invalid."
+  if [[ "${model_provider}" != "local" ]]; then
+    prepare_model_key_file
+  fi
+  model_list_json="$(run_node bin/qos-model.js --home "${qos_home}" --json list)"
+  if model_profile_json="$(printf '%s\n' "${model_list_json}" | model_profile_from_list "${model_profile}")"; then
+    [[ "$(printf '%s\n' "${model_profile_json}" | json_field provider)" == "${model_provider}" ]] \
+      || die "Existing model profile ${model_profile} uses a different provider; remove it explicitly before changing providers."
+    [[ "$(printf '%s\n' "${model_profile_json}" | json_field model)" == "${model_name}" ]] \
+      || die "Existing model profile ${model_profile} uses a different model; remove it explicitly before changing models."
+    [[ "$(printf '%s\n' "${model_profile_json}" | json_field endpoint)" == "${normalized_model_endpoint}" ]] \
+      || die "Existing model profile ${model_profile} uses a different endpoint; remove it explicitly before changing endpoints."
+    if [[ "${model_provider}" != "local" ]]; then
+      run_node bin/qos-model.js --home "${qos_home}" rotate "${model_profile}" \
+        --api-key-file "${prepared_model_key_file}"
+    fi
+    run_node bin/qos-model.js --home "${qos_home}" use "${model_profile}"
+    log "Verified existing model profile ${model_profile} and selected it as the default."
+  else
+    model_lookup_status=$?
+    (( model_lookup_status == 3 )) || die "The existing model provider registry could not be inspected."
+    model_args=(
+      --home "${qos_home}"
+      configure "${model_profile}"
+      --provider "${model_provider}"
+      --model "${model_name}"
+      --default
+    )
+    [[ -z "${model_endpoint}" ]] || model_args+=(--endpoint "${model_endpoint}")
+    [[ -z "${prepared_model_key_file}" ]] || model_args+=(--api-key-file "${prepared_model_key_file}")
+    (( ! allow_custom_model_endpoint )) || model_args+=(--allow-custom-endpoint)
+    run_node bin/qos-model.js "${model_args[@]}"
+  fi
+  cleanup_model_key_import \
+    || die "Setup stopped because a temporary model API-key file could not be removed safely."
+elif (( interactive && ! skip_model )); then
+  if ask_yes_no "Configure an AI model now?" "yes"; then
+    log "Opening model onboarding. Local Ollama-compatible inference is the default; commercial providers use your owner-only API key file."
+    if ! run_node bin/qos-model.js --home "${qos_home}" onboard --wizard; then
+      warn "Model onboarding did not complete. Setup will continue; run qos model onboard later."
+    fi
+  else
+    log "Model setup skipped. Run qos model onboard at any time."
+  fi
+elif (( skip_model )); then
+  log "Model setup skipped by --no-model. Run qos model onboard at any time."
 fi
 
 if (( interactive )) && [[ -z "${agent_id}" ]]; then
@@ -1330,18 +1621,9 @@ write_launcher() {
 }
 
 write_launcher qos bin/qos-shell.js
-write_launcher qos-core bin/qos.js
-write_launcher qos-shell bin/qos-shell.js
-write_launcher qos-firmware bin/qos-firmware-demo.js
-write_launcher qos-agent bin/qos-agent-control.js
-write_launcher qos-agent-demo bin/qos-agent-demo.js
-write_launcher qos-agent-security-audit bin/qos-agent-security-audit.js
-write_launcher qos-agent-external-setup bin/qos-agent-external-setup.js
-write_launcher qos-profile bin/qos-profile.js
-write_launcher qos-policy bin/qos-policy.js
-write_launcher qos-wallet bin/qos-wallet.js
+retire_legacy_launchers
 
-log "Installed qOS commands in ${bin_directory}."
+log "Installed the single qOS command in ${bin_directory}."
 log "Profile: ${qos_home}"
 log "No asset transfer has been prepared, signed, or broadcast by setup."
 if [[ "${profile}" == "devnet" ]]; then
@@ -1353,6 +1635,7 @@ Start here:
   capa              show exactly what this profile can do
   stat              show its address and key-custody status
   wal status        verify the source wallet on Devnet
+  mod on             choose a local or commercial AI model
   ag on              onboard an agent with a guided wizard
   ag st              show the auto-started REST and MCP service
   fw off s 1000000  rehearse a transfer entirely offline
@@ -1371,6 +1654,7 @@ Start here:
   capa              show mainnet capabilities and accessible key custody
   stat              inspect signer and privacy status
   wal status        show the exact SOL and qOS-token funding requirements
+  mod on             choose a local or commercial AI model
   ag                 list managed agents and the required workflow
   ag on              onboard an agent after wallet blockers are resolved
   ag st              show the auto-started REST and MCP service
@@ -1391,6 +1675,7 @@ Start here:
   capa              confirm mainnet-external custody
   stat              inspect signer and privacy status
   wal status        show the exact SOL and qOS-token funding requirements
+  mod on             choose a local or commercial AI model
   ag                 list managed agents and the required workflow
   ag on              onboard an agent after wallet blockers are resolved
   ag st              show the auto-started REST and MCP service

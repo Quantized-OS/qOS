@@ -11,19 +11,21 @@ An explicit mainnet policy supports only the pinned qOS Token-2022 mint.
 - Disposable Devnet funds for the native-SOL path
 - A separately created and deliberately funded mainnet signer for the token path
 
-There are no third-party runtime dependencies and no install step.
+There are no third-party runtime dependencies. The supported setup installs
+one operator command, `qos`; the source files under `bin/` are internal command
+implementations and are not installed separately.
 
 ## Fast path
 
 From the repository root:
 
 ```sh
-node bin/qos.js init
-node bin/qos.js airdrop --lamports 200000000
-node bin/qos.js transfer --lamports 1000000
+./setup.sh install --devnet --no-shell
+qos wallet fund 200000000
+qos sol send 1000000 --confirm-broadcast
 ```
 
-`init` creates `.qos-ephemeral-devnet/` with mode-restricted, disposable
+Setup creates a mode-restricted, disposable
 signer and receiver keys plus an allowlist policy. It creates no transaction
 log or audit key.
 It refuses to overwrite an existing directory. The generated receiver is only
@@ -38,26 +40,26 @@ before retrying the transfer.
 Show the signer and current balance:
 
 ```sh
-node bin/qos.js address
-node bin/qos.js balance
+qos address
+qos balance
 ```
 
 The privacy-preserving path prepares and submits in one process:
 
 ```sh
-node bin/qos.js transfer --lamports 1000000
+qos sol send 1000000 --confirm-broadcast
 ```
 
 The optional two-step path exposes the intent to the caller:
 
 ```sh
-node bin/qos.js prepare --lamports 1000000 > intent.json
+qos --json sol prepare 1000000 > intent.json
 ```
 
 Review `intent.json`, then submit it:
 
 ```sh
-node bin/qos.js submit --intent intent.json
+qos submit intent.json --confirm-broadcast
 ```
 
 The shell redirection above deliberately writes transaction details to
@@ -69,7 +71,7 @@ retained.
 Inspect the privacy boundary:
 
 ```sh
-node bin/qos.js privacy-status
+qos privacy
 ```
 
 To use a dedicated Devnet provider, set `SOLANA_RPC_URL`. The endpoint may
@@ -82,12 +84,12 @@ identity of a reviewed external policy signer. Use a destination wallet whose
 qOS associated token account already exists:
 
 ```sh
-node bin/qos.js init --home .qos-ephemeral-mainnet --cluster mainnet-beta \
-  --signer-public-key YOUR_EXTERNAL_SIGNER_PUBLIC_KEY \
-  --destination YOUR_MAINNET_WALLET
-export QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter
-node bin/qos.js address --home .qos-ephemeral-mainnet
-node bin/qos.js token-address --home .qos-ephemeral-mainnet
+./setup.sh install \
+  --public-key YOUR_EXTERNAL_SIGNER_PUBLIC_KEY \
+  --destination YOUR_MAINNET_WALLET \
+  --signer-command /absolute/path/to/reviewed-qos-signer-adapter
+qos address
+qos token address
 ```
 
 The policy pins:
@@ -103,17 +105,16 @@ associated token account. Then inspect its base-unit balance and prepare a
 one-token intent:
 
 ```sh
-node bin/qos.js token-balance --home .qos-ephemeral-mainnet
-node bin/qos.js token-prepare --home .qos-ephemeral-mainnet --amount 1000000
+qos token balance
+qos token prepare 1000000
 ```
 
-Mainnet submission requires this exact broadcast opt-in. It accepts the
+Mainnet submission requires the explicit shell confirmation. It accepts the
 preferred external signer or a software-key home carrying the acknowledged
 `mainnet-insecure` runtime profile created by `setup.sh install --insecure`:
 
 ```sh
-QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
+qos token send 1000000 --confirm-live
 ```
 
 A different mainnet RPC can be supplied with `SOLANA_RPC_URL`; the client still
@@ -122,19 +123,19 @@ mainnet mode.
 
 ## HTTP API
 
-Start the loopback-only service:
+Start the loopback-only core service. Setup already created its owner-only API
+token file:
 
 ```sh
-umask 077
-openssl rand -base64 48 | tr -d '\r\n' > /secure/path/qos-api-token
-chmod 600 /secure/path/qos-api-token
-export QOS_API_TOKEN_FILE=/secure/path/qos-api-token
-node bin/qos.js serve
+qos serve core 8787
 ```
 
-For a disposable Devnet-only session, `QOS_API_TOKEN` remains available as an
-environment fallback. Mainnet service mode requires `QOS_API_TOKEN_FILE`.
-The token file must be a non-symlinked, single-link, owner-only regular file.
+In a second terminal, obtain the non-secret token-file path from the active
+profile. Mainnet service mode requires this file-backed credential:
+
+```sh
+QOS_API_TOKEN_FILE="$(qos --json profile | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).apiTokenFile))')"
+```
 
 Minimal unauthenticated liveness and authenticated detailed health/policy:
 

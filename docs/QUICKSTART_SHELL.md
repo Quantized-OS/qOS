@@ -100,7 +100,7 @@ read, choose option 2 in the default wizard or run:
 The wizard prints the complete accessibility notice before creating anything,
 asks for the one allowlisted destination, and requires a `yes` acknowledgement.
 It then generates an Ed25519 key in the owner-only profile, creates the same
-mainnet policy and API surface, installs the same qOS commands, and opens the
+mainnet policy and API surface, installs the single `qos` command, and opens the
 same shell. The implemented mainnet transfer, agent, simulation, signing,
 submission, and confirmation behavior is the same as the external-signer path.
 
@@ -121,6 +121,49 @@ Do not combine `--insecure` with `--public-key`, `--signer-command`, or
 `--devnet`. Re-running the command with `--insecure` reuses the existing key;
 it never overwrites or silently rotates it.
 
+### Complete prompt-free setup
+
+`--unattended` forces non-interactive behavior even when setup is launched from
+a terminal, and it finishes without opening `qos`. Supply the model and agent
+settings in the same invocation:
+
+```sh
+bash setup.sh install \
+  --unattended \
+  --insecure \
+  --accept-insecure-risk \
+  --destination YOUR_ALLOWLISTED_DESTINATION \
+  --model-provider openai \
+  --model-profile openai \
+  --model YOUR_OPENAI_MODEL \
+  --model-api-key 'YOUR_OPENAI_API_KEY' \
+  --agent-id test-agent \
+  --agent-name 'Test agent' \
+  --agent-approval auto \
+  --agent-max-amount 1000000000 \
+  --accept-auto
+```
+
+That command creates or verifies the insecure mainnet profile, stores the model
+credential at `PROFILE/model-providers/openai/api-key` with mode `0600`, makes
+the model profile the default, onboards the policy-scoped agent, starts its
+loopback service, and installs `qos`. It does not fund the wallet, enable live
+mainnet agent execution, or broadcast a transaction.
+
+A literal `--model-api-key` is visible to shell-history and process-inspection
+tools even though qOS never prints it. Prefer either of these substitutions:
+
+```sh
+--model-api-key-env OPENAI_API_KEY
+--model-api-key-file /absolute/owner-only/provider-key
+```
+
+The environment variable must already be exported. The file form must be a
+regular, single-link file owned by the qOS user with no group or other access.
+Azure and custom compatible providers also need `--model-endpoint URL` and
+`--allow-custom-model-endpoint`. For local defaults, use only
+`--model-provider local`; no API key is accepted.
+
 ## Devnet requires an explicit option
 
 Disposable Devnet setup is never selected implicitly. Enable it with:
@@ -132,7 +175,7 @@ Disposable Devnet setup is never selected implicitly. Enable it with:
 This path creates disposable development keys and a destination, installs the
 policy, requests and confirms 0.2 Devnet SOL from the faucet, builds the locked
 RISC-V QEMU firmware, copies Cargo's output into a private single-link ELF,
-records its measurement, installs commands, and opens qOS. It never spends the
+records its measurement, installs `qos`, and opens qOS. It never spends the
 funds or broadcasts a transfer automatically. Use `--no-fund` to check the
 cluster without an airdrop or `--offline` to defer both steps.
 
@@ -160,7 +203,9 @@ to preserve it outside the qOS source directory before retrying.
 
 ## qOS command experience
 
-Setup installs `qos` as the interactive firmware shell. Start it later with:
+Setup installs exactly one operator command, `qos`, as the interactive firmware
+shell. Legacy qOS-managed companion launchers are retired during an upgrade.
+Start it later with:
 
 ```sh
 qos
@@ -181,6 +226,7 @@ shorthands are equivalent:
 | `token` | `tok` |
 | `firmware` | `fw` |
 | `agent` | `ag` |
+| `model` | `mod` |
 | `wallet` | `wal` |
 | `policy` | `pol` |
 | `serve` | `api` |
@@ -201,8 +247,8 @@ qos> capa
 qos> stat
 ```
 
-Output is readable text by default. Use `qos --json capa` for automation; the
-low-level `qos-core` interface remains JSON-oriented.
+Output is readable text by default. Use `qos --json capa` for automation. The
+same `qos` executable handles interactive and one-shot JSON use.
 
 Verify that the source wallet exists on the pinned cluster and has the exact
 fee/token requirements needed by the enabled template:
@@ -240,7 +286,7 @@ Review and prepare a mainnet qOS Token-2022 transfer:
 qos> tok addr
 qos> tok bal
 qos> tok prep 1000000
-qos> ag dry 1000000 -a basic
+qos> ag demo dry 1000000 -a basic
 ```
 
 An onchain mainnet send remains a separate action:
@@ -276,9 +322,6 @@ it is stopped. Each generated agent Bearer token remains in that agent's
 owner-only token file. Do not put it in prompts, logs, shell history, or remote
 model configuration. The service accepts loopback clients only.
 
-The low-level sandbox CLI remains available as `qos-core`; automation should
-normally prefer the restricted `qos` command surface.
-
 Onboard a scoped agent with the shell wizard:
 
 ```text
@@ -299,6 +342,21 @@ requires an onboarding acknowledgement, and mainnet execution additionally
 requires `ag re --confirm-live`. Revoke an agent with `ag off AGENT_ID`.
 See `AGENT_ONBOARDING.md` for the MCP tools, REST compatibility shape,
 generated skill pack, isolation requirements, and offboarding semantics.
+
+Configure a local or commercial BYOK proposal model independently of the
+managed-agent credential:
+
+```text
+qos> model onboard
+qos> model default
+qos> ag demo dry 1000000 -a model
+```
+
+The wizard lists commercial providers and defaults to local Ollama at
+`127.0.0.1` with `qwen2.5:3b`. `model use ID` switches the default;
+`model list`, `model show ID`, `model rotate ID --api-key-file PATH`, and
+`model remove ID --yes` never print the key. See `MODEL_PROVIDERS.md` for the
+provider matrix and custom-endpoint trust boundary.
 
 Edit reviewed policy fields inline:
 
@@ -324,7 +382,8 @@ Permanently remove all qOS-managed installation artifacts with:
 The interactive command requires typing `DELETE`. It stops managed services and
 removes registered profiles, policies, API tokens, private keys, agent tokens
 and skills, downloaded browser releases, user-local qOS toolchains, logs,
-firmware/build output, and marked launchers. This cannot be undone. Unmanaged
+firmware/build output, the `qos` launcher, and recognized legacy qOS launchers.
+This cannot be undone. Unmanaged
 launchers, shared Ubuntu packages, and an unmanaged Git source checkout are
 preserved. Symlinks are unlinked rather than followed.
 
@@ -345,6 +404,7 @@ surface. Install options include:
 - `-i`, `--insecure` generates an accessible mainnet software key after notice.
 - `-y`, `--accept-insecure-risk` acknowledges that notice for unattended setup.
 - `-w`, `--wizard` forces guided questions when input is piped.
+- `--unattended` disables every prompt and implies `--no-shell`.
 - `-G`, `--signer-guide` prints the signer walkthrough without installing.
 - `-H`, `--home PATH` selects an isolated profile location.
 - `-B`, `--bin PATH` selects the launcher directory.
@@ -358,6 +418,8 @@ surface. Install options include:
 - `--offline` defers RPC genesis and source-wallet readiness checks.
 - `--no-fund` verifies Devnet without requesting its default airdrop.
 - `--airdrop-lamports N` changes the confirmed Devnet faucet request.
+- `--model-provider` plus the `--model-*` options configures the default model.
+- `--no-model` skips the model question while retaining other guided setup.
 - `--agent-id` plus the `--agent-*` options onboards the first scoped agent.
 - `--accept-auto` acknowledges unattended automatic agent execution.
 - `-n`, `--no-shell` finishes without entering qOS.

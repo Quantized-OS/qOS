@@ -30,6 +30,12 @@ test("qOS Shell help is available before profile creation", () => {
   assert.match(result.stdout, /qOS command shell/);
   assert.match(result.stdout, /send\|snd LAMPORTS --confirm-broadcast/);
   assert.match(result.stdout, /capabilities \| capa/);
+  assert.match(result.stdout, /model \| mod catalog/);
+  assert.match(result.stdout, /model \| mod onboard\|on/);
+  assert.match(result.stdout, /profile \| prof/);
+  assert.match(result.stdout, /privacy \| priv/);
+  assert.match(result.stdout, /serve core/);
+  assert.match(result.stdout, /only installed command/);
   assert.match(result.stdout, /current source implements transfers, not DEX swaps/);
 });
 
@@ -42,6 +48,46 @@ test("qOS accepts a direct shorthand command and reports exact capabilities", (t
   assert.equal(capabilities.cluster, "devnet");
   assert.equal(capabilities.dexTrading, false);
   assert.ok(capabilities.operations.includes("qemu-firmware-rehearsal"));
+  assert.ok(capabilities.operations.includes("byok-model-providers"));
+  assert.ok(capabilities.operations.includes("loopback-core-api"));
+
+  const privacy = spawnSync(process.execPath, [SHELL, "-H", home, "--json", "priv"], { encoding: "utf8" });
+  assert.equal(privacy.status, 0, privacy.stderr);
+  assert.equal(typeof JSON.parse(privacy.stdout).retention, "string");
+
+  const unconfirmedSubmit = spawnSync(process.execPath, [SHELL, "-H", home, "--json", "sub", "intent.json"], { encoding: "utf8" });
+  assert.equal(unconfirmedSubmit.status, 1);
+  assert.equal(JSON.parse(unconfirmedSubmit.stderr).error.code, "BROADCAST_CONFIRMATION_REQUIRED");
+});
+
+test("qOS Shell exposes the commercial model catalog and empty provider registry", (t) => {
+  const home = devnetProfile(t);
+  const catalog = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "mod", "cat"], { encoding: "utf8" });
+  assert.equal(catalog.status, 0, catalog.stderr);
+  assert.ok(JSON.parse(catalog.stdout).providers.some((provider) => provider.id === "anthropic"));
+  const list = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "model"], { encoding: "utf8" });
+  assert.equal(list.status, 0, list.stderr);
+  assert.deepEqual(JSON.parse(list.stdout).profiles, []);
+});
+
+test("qOS guides local model onboarding and uses a selected default", (t) => {
+  const home = devnetProfile(t);
+  const onboard = spawnSync(process.execPath, [SHELL, "--home", home, "model", "onboard", "--wizard"], {
+    encoding: "utf8",
+    input: "\n\n\n\nyes\n",
+  });
+  assert.equal(onboard.status, 0, onboard.stderr);
+  assert.match(onboard.stdout, /Choose a model provider/);
+  assert.match(onboard.stdout, /Local OpenAI-compatible/);
+  assert.match(onboard.stdout, /Status: model-ready/);
+
+  const selected = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "model", "default"], { encoding: "utf8" });
+  assert.equal(selected.status, 0, selected.stderr);
+  const value = JSON.parse(selected.stdout);
+  assert.equal(value.defaultProfile, "local");
+  assert.equal(value.profile.model, "qwen2.5:3b");
+  assert.equal(value.profile.endpoint, "http://127.0.0.1:11434/v1/chat/completions");
+  assert.equal(value.profile.default, true);
 });
 
 test("qOS routes bare agent commands to managed onboarding and isolates the synthetic demo namespace", (t) => {

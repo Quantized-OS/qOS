@@ -9,10 +9,10 @@ function usage() {
   return `qOS runtime profile manager
 
 Usage:
-  qos-profile create --home PATH --profile devnet|mainnet-external|mainnet-insecure
-                     [--signer-command /absolute/path/to/adapter]
-                     [--accept-insecure-risk]
-  qos-profile show --home PATH
+  qos profile
+
+Profile creation is handled by ./setup.sh install. This internal module also
+supports the setup-only create operation.
 
 The generated API token remains in an owner-only file. Its value is never
 printed; only its path is returned.

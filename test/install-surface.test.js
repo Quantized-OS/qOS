@@ -36,6 +36,12 @@ test("setup actions and verified toolchain bootstrap expose side-effect-free hel
     const result = spawnSync("bash", [join(ROOT, "setup.sh"), action, "--help"], { cwd: ROOT, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /secure firmware shell/);
+    if (action === "install") {
+      assert.match(result.stdout, /--unattended/);
+      assert.match(result.stdout, /--model-provider/);
+      assert.match(result.stdout, /--model-api-key-env/);
+      assert.match(result.stdout, /--model-api-key KEY/);
+    }
   }
   for (const path of ["bin/qos-agent-control.js", "bin/qos-policy.js", "bin/qos-wallet.js"]) {
     const result = spawnSync(process.execPath, [join(ROOT, path), "--help"], { cwd: ROOT, encoding: "utf8" });
@@ -80,6 +86,25 @@ test("setup actions and verified toolchain bootstrap expose side-effect-free hel
   });
   assert.equal(mainnetDefault.status, 1);
   assert.match(mainnetDefault.stderr, /Mainnet is the default/);
+
+  const contradictoryModes = spawnSync("bash", [
+    join(ROOT, "setup.sh"), "install", "--wizard", "--unattended",
+  ], { cwd: ROOT, encoding: "utf8", env: { ...process.env, HOME: root } });
+  assert.equal(contradictoryModes.status, 1);
+  assert.match(contradictoryModes.stderr, /--wizard cannot be combined with --unattended/);
+
+  const conflictingCredentials = spawnSync("bash", [
+    join(ROOT, "setup.sh"),
+    "install",
+    "--devnet",
+    "--unattended",
+    "--model-provider", "openai",
+    "--model", "gpt-5.6-sol",
+    "--model-api-key", "sk-test-one-12345678",
+    "--model-api-key-file", join(root, "second-key"),
+  ], { cwd: ROOT, encoding: "utf8", env: { ...process.env, HOME: root } });
+  assert.equal(conflictingCredentials.status, 1);
+  assert.match(conflictingCredentials.stderr, /Choose exactly one of --model-api-key/);
 });
 
 test("setup safely retires the recognized Devnet-default install.sh before checks", (t) => {
@@ -150,6 +175,101 @@ test("setup safely retires the recognized Devnet-default install.sh before check
   assert.equal(readFileSync(join(checkout, "install.sh"), "utf8"), unrelated);
 });
 
+test("one unattended invocation configures insecure custody, a commercial model, and an automatic agent", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "qos-unattended-install-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fakeBin = join(root, "fake-bin");
+  const installBin = join(root, "installed-bin");
+  const home = join(root, "home");
+  const profileHome = join(root, "mainnet-insecure-profile");
+  mkdirSync(fakeBin, { mode: 0o700 });
+  mkdirSync(home, { mode: 0o700 });
+  for (const command of ["cargo", "rustup", "make"]) {
+    const path = join(fakeBin, command);
+    writeFileSync(path, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    chmodSync(path, 0o700);
+  }
+  writeFileSync(
+    join(fakeBin, "make"),
+    "#!/bin/sh\nif [ \"${QOS_TEST_OPENAI_API_KEY+x}\" = x ]; then exit 41; fi\nexit 0\n",
+    { mode: 0o700 },
+  );
+  chmodSync(join(fakeBin, "make"), 0o700);
+  const destination = encodeBase58(Buffer.alloc(32, 84));
+  const apiKey = "sk-test-unattended-0123456789";
+  const installArgs = [
+    join(ROOT, "setup.sh"),
+    "install",
+    "--insecure",
+    "--accept-insecure-risk",
+    "--destination", destination,
+    "--home", profileHome,
+    "--bin", installBin,
+    "--skip-setup",
+    "--offline",
+    "--unattended",
+    "--model-provider", "openai",
+    "--model-profile", "openai",
+    "--model", "gpt-5.6-sol",
+    "--model-api-key", apiKey,
+    "--agent-id", "test-agent",
+    "--agent-name", "Test agent",
+    "--agent-approval", "auto",
+    "--agent-max-amount", "1000",
+    "--accept-auto",
+  ];
+  const environment = {
+    ...process.env,
+    QOS_AGENT_AUTOSERVE: "0",
+    HOME: home,
+    PATH: `${fakeBin}:${process.env.PATH}`,
+  };
+  const result = spawnSync("bash", installArgs, { cwd: ROOT, encoding: "utf8", env: environment });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Accepted the accessible mainnet software-key notice/);
+  assert.match(result.stdout, /Configuring model profile openai for provider openai without prompts/);
+  assert.match(result.stdout, /Onboarding agent test-agent/);
+  assert.doesNotMatch(result.stdout, /Configure an AI model now\?|Onboard an AI agent now\?|Continue\? \[y\/N\]/);
+  assert.doesNotMatch(result.stdout, new RegExp(apiKey));
+  assert.doesNotMatch(result.stderr, new RegExp(apiKey));
+
+  const storedCredential = join(profileHome, "model-providers", "openai", "api-key");
+  assert.equal(readFileSync(storedCredential, "utf8"), `${apiKey}\n`);
+  assert.equal(lstatSync(storedCredential).mode & 0o777, 0o600);
+  const modelRegistry = JSON.parse(readFileSync(join(profileHome, "model-providers", "registry.json"), "utf8"));
+  assert.equal(modelRegistry.defaultProfile, "openai");
+  assert.equal(modelRegistry.profiles[0].provider, "openai");
+  assert.equal(modelRegistry.profiles[0].model, "gpt-5.6-sol");
+  assert.doesNotMatch(JSON.stringify(modelRegistry), new RegExp(apiKey));
+  const agentRegistry = JSON.parse(readFileSync(join(profileHome, "agents", "registry.json"), "utf8"));
+  assert.equal(agentRegistry.agents[0].id, "test-agent");
+  assert.equal(agentRegistry.agents[0].approvalMode, "auto");
+  assert.equal(existsSync(join(installBin, "qos")), true);
+  assert.doesNotMatch(readFileSync(join(installBin, "qos"), "utf8"), new RegExp(apiKey));
+
+  const repeated = spawnSync("bash", installArgs, { cwd: ROOT, encoding: "utf8", env: environment });
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.match(repeated.stdout, /Verified existing model profile openai and selected it as the default/);
+  assert.equal(readFileSync(storedCredential, "utf8"), `${apiKey}\n`);
+  assert.equal(lstatSync(storedCredential).mode & 0o777, 0o600);
+
+  const environmentApiKey = "sk-test-from-environment-9876543210";
+  const environmentArgs = [...installArgs];
+  const directKeyOption = environmentArgs.indexOf("--model-api-key");
+  environmentArgs[directKeyOption] = "--model-api-key-env";
+  environmentArgs[directKeyOption + 1] = "QOS_TEST_OPENAI_API_KEY";
+  const fromEnvironment = spawnSync("bash", environmentArgs, {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: { ...environment, QOS_TEST_OPENAI_API_KEY: environmentApiKey },
+  });
+  assert.equal(fromEnvironment.status, 0, fromEnvironment.stderr);
+  assert.doesNotMatch(fromEnvironment.stdout, new RegExp(environmentApiKey));
+  assert.doesNotMatch(fromEnvironment.stderr, new RegExp(environmentApiKey));
+  assert.equal(readFileSync(storedCredential, "utf8"), `${environmentApiKey}\n`);
+  assert.equal(lstatSync(storedCredential).mode & 0o777, 0o600);
+});
+
 test("setup install works repeatedly and uninstall purges all registered qOS artifacts", (t) => {
   const root = mkdtempSync(join(tmpdir(), "qos-install-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -174,6 +294,7 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
     "-k",
     "-F",
     "--offline",
+    "--model-provider", "local",
     "--agent-id", "setup-bot",
     "--agent-max-amount", "1000",
     "-n",
@@ -196,13 +317,15 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
   assert.equal(existsSync(join(profileHome, "runtime.json")), true);
   assert.equal(existsSync(join(profileHome, "api-token")), true);
   assert.equal(existsSync(join(installBin, "qos")), true);
-  assert.equal(existsSync(join(installBin, "qos-core")), true);
-  assert.equal(existsSync(join(installBin, "qos-shell")), true);
-  assert.equal(existsSync(join(installBin, "qos-agent")), true);
-  assert.equal(existsSync(join(installBin, "qos-policy")), true);
-  assert.equal(existsSync(join(installBin, "qos-wallet")), true);
+  for (const legacy of ["qos-core", "qos-shell", "qos-agent", "qos-model", "qos-policy", "qos-wallet"]) {
+    assert.equal(existsSync(join(installBin, legacy)), false, `${legacy} must not be installed`);
+  }
   assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "token")), true);
   assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "skills", "SKILL.md")), true);
+  const localModel = JSON.parse(readFileSync(join(profileHome, "model-providers", "registry.json"), "utf8"));
+  assert.equal(localModel.defaultProfile, "local");
+  assert.equal(localModel.profiles[0].model, "qwen2.5:3b");
+  assert.equal(localModel.profiles[0].endpoint, "http://127.0.0.1:11434/v1/chat/completions");
   const signerBefore = readFileSync(join(profileHome, "signer.pem"));
   const tokenBefore = readFileSync(join(profileHome, "api-token"));
   const agentTokenBefore = readFileSync(join(profileHome, "agents", "setup-bot", "token"));
@@ -267,19 +390,20 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
   assert.equal(existsSync(join(installBin, "qos")), false);
   assert.equal(readFileSync(join(installBin, "qos-core"), "utf8"), unmanagedCore);
   assert.equal(existsSync(join(installBin, "qos-shell")), false);
+  assert.equal(existsSync(join(installBin, "qos-model")), false);
   assert.equal(existsSync(profileHome), false);
   assert.equal(existsSync(join(home, ".local", "share", "qos")), false);
   assert.equal(readFileSync(join(outside, "keep"), "utf8"), "preserved\n");
   assert.match(uninstall.stdout, /Full qOS purge complete/);
 
-  const refusedReinstall = spawnSync("bash", installArgs, {
+  const cleanReinstall = spawnSync("bash", installArgs, {
     cwd: ROOT,
     encoding: "utf8",
     env: installEnvironment,
   });
-  assert.equal(refusedReinstall.status, 1);
-  assert.match(refusedReinstall.stderr, /Refusing to replace an unmanaged command/);
-  assert.equal(existsSync(join(installBin, "qos")), false);
+  assert.equal(cleanReinstall.status, 0, cleanReinstall.stderr);
+  assert.match(cleanReinstall.stderr, /Preserved unmanaged legacy command/);
+  assert.equal(existsSync(join(installBin, "qos")), true);
   assert.equal(readFileSync(join(installBin, "qos-core"), "utf8"), unmanagedCore);
 });
 
@@ -340,7 +464,7 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: `1\n${publicKey}\n${destination}\n${externalSigner}\nyes\nno\n`,
+    input: `1\n${publicKey}\n${destination}\n${externalSigner}\nyes\nno\nno\n`,
     env: environment,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -450,7 +574,7 @@ test("setup --insecure and the default generated-key choice require the same war
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: `2\n${destination}\nyes\nyes\nmainnet-bot\nMainnet bot\nyes\n1000\nyes\n`,
+    input: `2\n${destination}\nyes\nyes\n\n\n\n\nyes\nyes\nmainnet-bot\nMainnet bot\nyes\n1000\nyes\n`,
     env: environment,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -468,6 +592,10 @@ test("setup --insecure and the default generated-key choice require the same war
   assert.equal(installedAgent.id, "mainnet-bot");
   assert.equal(installedAgent.asset, "qos-token");
   assert.equal(existsSync(join(profileHome, "agents", "mainnet-bot", "token")), true);
+  const defaultModel = JSON.parse(readFileSync(join(profileHome, "model-providers", "registry.json"), "utf8"));
+  assert.equal(defaultModel.defaultProfile, "local");
+  assert.equal(defaultModel.profiles[0].model, "qwen2.5:3b");
+  assert.equal(defaultModel.profiles[0].endpoint, "http://127.0.0.1:11434/v1/chat/completions");
 
   const runtime = JSON.parse(readFileSync(join(profileHome, "runtime.json"), "utf8"));
   assert.equal(runtime.profile, "mainnet-insecure");

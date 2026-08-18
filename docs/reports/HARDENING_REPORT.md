@@ -55,7 +55,7 @@ QEMU path can no longer broadcast on mainnet.
   custody chooser with external custody preselected, an explicit `--devnet` development path,
   official pinned Node.js and rustup artifacts, upstream SHA-256 verification,
   a dedicated user toolchain, regression gates, profile provisioning, firmware
-  measurement, and atomic user-local launchers.
+  measurement, and one atomic user-local `qos` launcher.
 - An explicit `--insecure` mainnet wizard that prints the host-accessible key
   risk before changes, requires acknowledgement, generates one owner-only
   software key, and retains the same implemented mainnet operation surface.
@@ -68,7 +68,7 @@ QEMU path can no longer broadcast on mainnet.
   and executor; the generated skill pack includes the MCP contract.
 - A confirmed full `setup.sh uninstall` action that stops managed listeners and
   ownership-checks removal of registered profiles, keys, API/agent credentials,
-  toolchains, logs, downloaded releases, marked launchers, and build artifacts
+  toolchains, logs, downloaded releases, the current launcher, recognized legacy launchers, and build artifacts
   without following symlinks.
 - Backward-compatible uninstall permission repair for owner-controlled qOS
   data, profile, and agent directories left at `0755`; symlink and ownership

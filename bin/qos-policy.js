@@ -17,11 +17,11 @@ function usage() {
   return `qOS inline policy editor
 
 Usage:
-  qos-policy [--home PATH] [--json] show
-  qos-policy [--home PATH] set FIELD VALUE [--confirm-policy-change]
-  qos-policy [--home PATH] destination add|remove PUBKEY [--confirm-policy-change]
-  qos-policy [--home PATH] strategy add|remove ID [--confirm-policy-change]
-  qos-policy [--home PATH] edit
+  qos policy show
+  qos policy set FIELD VALUE [--confirm-policy-change]
+  qos policy destination add|remove PUBKEY [--confirm-policy-change]
+  qos policy strategy add|remove ID [--confirm-policy-change]
+  qos policy edit
 
 Editable fields:
   ${EDITABLE_POLICY_FIELDS.join(", ")}

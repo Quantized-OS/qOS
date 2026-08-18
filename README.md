@@ -60,8 +60,8 @@ For disposable development only, Devnet must be selected explicitly:
 Setup installs verified user-local Node.js and Rust toolchains, Ubuntu/QEMU
 packages, runs the complete test suite, provisions the selected profile and
 private API token, verifies the source wallet against the pinned cluster,
-installs `qos` plus supporting commands under `~/.local/bin`, then opens the
-restricted qOS firmware shell. Devnet requests a confirmed faucet airdrop by
+installs exactly one operator command, `qos`, under `~/.local/bin`, then opens
+the restricted qOS firmware shell. Devnet requests a confirmed faucet airdrop by
 default; `--no-fund` or `--offline` disables that step. Mainnet never funds or
 broadcasts automatically. Onboarding an agent generates its scoped skill pack
 and automatically starts one authenticated loopback REST/MCP service. The
@@ -80,6 +80,35 @@ installs dependencies or creates the key. This profile has the same implemented
 mainnet qOS transfer and agent capabilities as the external-signer profile; only
 the custody boundary changes. Programs running as the user can copy the key.
 
+For one prompt-free invocation that also configures a commercial model and the
+first scoped agent, pass every value explicitly:
+
+```sh
+bash setup.sh install \
+  --unattended \
+  --insecure \
+  --accept-insecure-risk \
+  --destination YOUR_ALLOWLISTED_DESTINATION \
+  --model-provider openai \
+  --model-profile openai \
+  --model YOUR_OPENAI_MODEL \
+  --model-api-key 'YOUR_OPENAI_API_KEY' \
+  --agent-id test-agent \
+  --agent-name 'Test agent' \
+  --agent-approval auto \
+  --agent-max-amount 1000000000 \
+  --accept-auto
+```
+
+`--unattended` suppresses every wizard and finishes without opening the shell;
+it does not bypass either risk acknowledgement. The literal key form is
+supported, copied into the profile's mode-`0600` credential file, and never
+printed. It can still be exposed by shell history or process inspection. Prefer
+`--model-api-key-env OPENAI_API_KEY` after exporting that variable, or
+`--model-api-key-file /owner-only/path`, on a real host. Re-running the same
+invocation verifies the model settings, refreshes the supplied model key, and
+preserves the qOS signing key and agent credential.
+
 If no reviewed adapter is available yet, the wizard stops before installing
 anything and prints the signer checklist. It is also available directly:
 
@@ -96,6 +125,7 @@ Inside the shell, start with:
 qos> capa
 qos> stat
 qos> wal status
+qos> mod on
 qos> ag on
 qos> ag st
 qos> pol show
@@ -169,6 +199,7 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/SIGNER_POLICY.md` — Narrow Solana order-intent signing contract
 * `docs/SANDBOX.md` — Devnet setup, CLI and HTTP API guide
 * `docs/AGENT_DEMO.md` — Agent-directed qOS Token-2022 transfer rehearsal
+* `docs/MODEL_PROVIDERS.md` — Commercial LLM BYOK profiles, adapters, key rotation, and custom endpoints
 * `docs/AGENT_ONBOARDING.md` — Per-agent credentials, skills, approvals, listener, and offboarding
 * `docs/WALLET_AND_POLICY.md` — Cluster readiness, Devnet funding, and atomic inline policy edits
 * `docs/BROWSER_INSTALL.md` — Verified `curl | sh` publication and trust boundary
@@ -177,16 +208,8 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `docs/AGENT_SECURITY_TEST.md` — Synthetic red-team test for agent/key boundaries
 * `docs/PRIVACY_ZK_CUSTODY.md` — Agent-safe key custody, AES-256-GCM keys, and SNARK verifier contract
 * `src/` — Dependency-free Solana RPC, policy, transaction, signer, relay, and ephemeral-session modules
-* `bin/qos.js` — Sandbox CLI and local API server
-* `bin/qos-firmware-demo.js` — QEMU provisioning, typed-intent mailbox, verification, and relay
-* `bin/qos-agent-demo.js` — Basic or local-model agent proposal and qOS-gated transfer demo
-* `bin/qos-agent-control.js` — Agent onboarding, skill generation, managed REST/MCP service, approvals, and revocation
-* `bin/qos-agent-security-audit.js` — Synthetic agent security analysis runner
-* `bin/qos-agent-external-setup.js` — Public-only external-signer home setup
-* `bin/qos-profile.js` — Owner-only API-token and runtime-profile provisioning
-* `bin/qos-policy.js` — Human-readable, allowlisted inline policy editor
-* `bin/qos-wallet.js` — Pinned-cluster source-wallet readiness and Devnet funding
-* `bin/qos-shell.js` — Restricted interactive and non-interactive command shell
+* `bin/qos-shell.js` — The only installed command; restricted interactive and one-shot qOS interface
+* `bin/` — Private command implementations dispatched behind `qos` subcommands; they are not installed as companion executables
 * `setup.sh` — Mainnet-default setup, wallet/agent onboarding, and confirmed full-purge uninstall
 * `web/index.html` — Install-first qos.systems landing page with Linux, macOS, and Windows choices
 * `web/install.sh` — Checksum-verifying POSIX browser bootstrap served separately from the source root
@@ -220,7 +243,7 @@ signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.9.1 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.11.1 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
@@ -234,8 +257,9 @@ sandbox keeps a stable identity and can verify what booted. External-signer
 homes contain only a public signer descriptor and require an explicit public
 destination, so initialization creates no private keys. Encrypted software
 homes retain AES-256-GCM ciphertext and scrypt metadata. Plaintext demo homes
-retain PEM keys. Runtime API tokens, per-agent credential files, hashed agent
-registry entries, and generated skill packs persist until explicitly revoked
+retain PEM keys. Runtime API tokens, per-agent credential files, commercial
+model API-key files, hashed agent/model registry entries, and generated skill
+packs persist until explicitly revoked
 or a confirmed full uninstall removes the registered qOS installation; pending
 approvals and completed transaction details do not.
 JavaScript strings are garbage-collected and cannot be given
@@ -249,10 +273,10 @@ For an AI agent or any other untrusted automation, initialize qOS with an
 already provisioned public key and destination:
 
 ```sh
-node bin/qos.js init --signer-public-key YOUR_SIGNER_PUBLIC_KEY \
-  --destination YOUR_ALLOWLISTED_DESTINATION
-QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter \
-  node bin/qos.js address
+./setup.sh install --public-key YOUR_SIGNER_PUBLIC_KEY \
+  --destination YOUR_ALLOWLISTED_DESTINATION \
+  --signer-command /absolute/path/to/reviewed-qos-signer-adapter
+qos address
 ```
 
 The qOS process stores no private key in this mode. The external adapter should
@@ -320,7 +344,7 @@ with production-grade firmware or non-exportable custody.
 ## Build the research release media
 
 After the host checks pass, `make release-media` creates a deterministic source
-archive, checksums, and `release-artifacts/qos-0.9.1-research-media.iso`. The
+archive, checksums, and `release-artifacts/qos-0.11.1-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
 production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.
@@ -332,17 +356,18 @@ archive.
 
 ## Run a real Solana Devnet transaction
 
-Initialize disposable signer, receiver, and policy files:
+Install a disposable Devnet profile without immediately entering the shell:
 
 ```sh
-node bin/qos.js init
+./setup.sh install --devnet --no-shell
 ```
 
-Fund the printed signer with Devnet SOL, then send 0.001 Devnet SOL to the generated allowlisted receiver:
+Fund the printed signer with Devnet SOL, then send 0.001 Devnet SOL to the
+generated allowlisted receiver:
 
 ```sh
-node bin/qos.js airdrop --lamports 200000000
-node bin/qos.js transfer --lamports 1000000
+qos wallet fund 200000000
+qos sol send 1000000 --confirm-broadcast
 ```
 
 The transfer command checks the RPC genesis hash, creates a fresh bounded intent, applies policy, calculates the network fee, signs, simulates, broadcasts, polls `getSignatureStatuses`, and returns a Devnet Explorer link only after confirmation. The public Devnet faucet and RPC can rate-limit requests; a dedicated Devnet RPC may be selected with `SOLANA_RPC_URL`, but its genesis hash must match the pinned policy.
@@ -350,7 +375,7 @@ The transfer command checks the RPC genesis hash, creates a fresh bounded intent
 To allow an existing Devnet wallet instead of generating a receiver:
 
 ```sh
-node bin/qos.js init --destination YOUR_DEVNET_PUBLIC_KEY
+./setup.sh install --devnet --destination YOUR_DEVNET_PUBLIC_KEY --no-shell
 ```
 
 For the local HTTP interface and the complete two-step prepare/submit flow, see [`docs/SANDBOX.md`](docs/SANDBOX.md).
@@ -363,16 +388,15 @@ Token-2022 program, uses six decimals, and currently exposes metadata-pointer
 and token-metadata mint extensions. The signer checks those properties and
 fails closed if they change.
 
-Initialize a separate mainnet sandbox with the public identity of a reviewed
-external policy signer and an allowlisted destination wallet:
+Install a mainnet profile with the public identity of a reviewed external
+policy signer and an allowlisted destination wallet:
 
 ```sh
-node bin/qos.js init --home .qos-ephemeral-mainnet --cluster mainnet-beta \
-  --signer-public-key YOUR_EXTERNAL_SIGNER_PUBLIC_KEY \
-  --destination YOUR_MAINNET_WALLET
-export QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter
-node bin/qos.js address --home .qos-ephemeral-mainnet
-node bin/qos.js token-address --home .qos-ephemeral-mainnet
+./setup.sh install --public-key YOUR_EXTERNAL_SIGNER_PUBLIC_KEY \
+  --destination YOUR_MAINNET_WALLET \
+  --signer-command /absolute/path/to/reviewed-qos-signer-adapter
+qos address
+qos token address
 ```
 
 Fund the printed signer with enough SOL for fees and send qOS tokens to its
@@ -381,16 +405,14 @@ associated token account. Verify the source balance and prepare a one-token
 intent; token amounts are base units, so `1000000` is one token:
 
 ```sh
-node bin/qos.js token-balance --home .qos-ephemeral-mainnet
-node bin/qos.js token-prepare --home .qos-ephemeral-mainnet --amount 1000000
+qos token balance
+qos token prepare 1000000
 ```
 
-Mainnet broadcast requires both an explicit transfer command and a separate
-environment opt-in:
+Mainnet broadcast requires an explicit shell confirmation:
 
 ```sh
-QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-  node bin/qos.js token-transfer --home .qos-ephemeral-mainnet --amount 1000000
+qos token send 1000000 --confirm-live
 ```
 
 Review `.qos-ephemeral-mainnet/policy.json` before funding the signer. The
@@ -399,18 +421,37 @@ provisioned QEMU demo must be rebuilt after any change to its own demo policy.
 
 ## Agent-directed transfer demo
 
-`bin/qos-agent-demo.js` connects either a deterministic basic agent or a local
-3B-class OpenAI-compatible model to the pinned qOS Token-2022 transfer path.
+`qos agent demo` connects a deterministic basic agent, a local
+OpenAI-compatible model, or an operator-configured commercial BYOK provider to
+the pinned qOS Token-2022 transfer path. Native adapters cover OpenAI,
+Anthropic Claude, Google Gemini, and Cohere; fixed OpenAI-compatible presets
+cover xAI, Groq, Mistral, DeepSeek, OpenRouter, Together, Fireworks,
+Perplexity, and Cerebras. Azure and custom compatible endpoints are also
+available with an explicit endpoint acknowledgement.
 The agent proposes a typed action; qOS remains authoritative for the mint,
 destination, amount, accounts, fees, simulation, signing, and confirmation.
 The default is validation-only:
 
 ```sh
-node bin/qos-agent-demo.js --home .qos-ephemeral-mainnet --amount 1000000
+qos agent demo dry 1000000
 ```
 
-See [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for local-model setup and the
-explicit `--broadcast --confirm-live` mainnet gates. This is an agent-directed
+To use a local or commercial account, run the guided model onboarding. It
+defaults to local Ollama-compatible inference; selecting a commercial provider
+imports its key from an owner-only file without placing the key in a CLI value:
+
+```sh
+qos model onboard
+qos model default
+qos agent demo dry 1000000 --agent model
+```
+
+Use `qos model use ID` to switch defaults or `--model-profile ID` for a
+one-run override.
+
+See [`docs/MODEL_PROVIDERS.md`](docs/MODEL_PROVIDERS.md) for BYOK configuration
+and [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for the explicit
+`--broadcast --confirm-live` mainnet gates. This is an agent-directed
 Token-2022 transfer, not a DEX swap; the reviewed DEX instruction adapter is
 still a roadmap item.
 
@@ -419,7 +460,7 @@ still a roadmap item.
 Run the red-team harness before giving any automation access to a qOS host:
 
 ```sh
-node bin/qos-agent-security-audit.js
+qos security-audit
 ```
 
 It creates disposable synthetic keys only. The harness demonstrates why
@@ -463,10 +504,10 @@ rejects an over-limit amount and a replayed nonce on screen before QEMU exits.
 After installing QEMU, Rust, and the `riscv64imac-unknown-none-elf` Rust target:
 
 ```sh
-node bin/qos-firmware-demo.js build
-node bin/qos-firmware-demo.js run --offline --lamports 1000000
-node bin/qos-firmware-demo.js run --lamports 1000000
-node bin/qos-firmware-demo.js run --lamports 1000000 --broadcast
+qos firmware build
+qos firmware offline sol 1000000
+qos firmware live sol 1000000
+qos firmware broadcast sol 1000000 --confirm-live
 ```
 
 The first command builds a measured, key-independent policy ELF. The runtime
@@ -486,11 +527,11 @@ For the qOS Token-2022 path, use a separate disposable software-key demo home
 verification-only mode:
 
 ```sh
-node bin/qos.js init --home .qos-qemu-mainnet-demo --cluster mainnet-beta \
-  --destination YOUR_DEMO_DESTINATION
-node bin/qos-firmware-demo.js build --home .qos-qemu-mainnet-demo
-node bin/qos-firmware-demo.js run --home .qos-qemu-mainnet-demo \
-  --asset token --amount 1000000 --offline
+./setup.sh install --insecure --accept-insecure-risk \
+  --destination YOUR_DEMO_DESTINATION --home .qos-qemu-mainnet-demo \
+  --offline --no-shell
+qos --home .qos-qemu-mainnet-demo firmware build
+qos --home .qos-qemu-mainnet-demo firmware offline token 1000000
 ```
 
 The QEMU runner refuses mainnet broadcast because its software seed is visible

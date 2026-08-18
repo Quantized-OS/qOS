@@ -1,6 +1,6 @@
 # Synthetic agent security analysis
 
-`qos-agent-security-audit` is a red-team harness for the agent boundary. It is
+`qos security-audit` is a red-team harness for the agent boundary. It is
 designed to answer two separate questions:
 
 1. What happens if an agent can read qOS software-key material?
@@ -14,11 +14,7 @@ passphrases, or key fingerprints.
 ## Run it
 
 ```sh
-node bin/qos-agent-security-audit.js
-# or
-npm run security:agent
-# or
-make agent-security-test
+qos security-audit
 ```
 
 The command exits successfully as `PASS_WITH_EXPECTED_RISKS` when the harness
@@ -51,18 +47,16 @@ profile, the agent may still request policy-compliant actions, so the external
 adapter must independently enforce the same typed policy and remain isolated
 from the agent.
 
-To create a new public-only external-signer home from an existing policy:
+To create a public-only external-signer profile, use the supported setup flow:
 
 ```sh
-npm run setup:agent-external -- \
+./setup.sh install \
   --public-key EXTERNAL_SIGNER_PUBLIC_KEY \
-  --source-home .qos-ephemeral-mainnet \
-  --home .qos-ephemeral-mainnet-external \
-  --signer-command /absolute/path/to/reviewed-signer-adapter \
-  --create
+  --destination ALLOWLISTED_DESTINATION \
+  --signer-command /absolute/path/to/reviewed-signer-adapter
 ```
 
-The public key must be supplied by the external signer. The helper refuses to
+The public key must be supplied by the external signer. Setup refuses to
 generate, import, copy, or expose a private key and does not transfer balances.
 
 This is a basic boundary test, not an independent audit. It does not test a

@@ -60,10 +60,10 @@ Automation can request the stable JSON representation explicitly:
 
 ```sh
 qos --json capa
-qos-wallet --json status
+qos --json wallet status
 ```
 
-The low-level `qos-core` interface remains JSON-oriented.
+The same `qos` command handles interactive, readable, and one-shot JSON output.
 
 ## Inline policy editing
 

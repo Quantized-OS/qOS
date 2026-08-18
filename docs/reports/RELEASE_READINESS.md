@@ -49,11 +49,11 @@ an installer.
   mainnet custody is the default and disposable Devnet mode requires
   `--devnet`. The flow uses verified official toolchain artifacts, private
   runtime/API-token provisioning, measured Devnet QEMU firmware, atomic
-  user-local launchers, and a bannered restricted interactive/non-interactive
+  one user-local `qos` launcher, and a bannered restricted interactive/non-interactive
   `qos` shell with shorthand commands.
 - Confirmed `setup.sh uninstall` stops managed services and removes registered
   profiles, keys, policies, API/agent credentials, downloaded releases,
-  toolchains, logs, marked launchers, and build artifacts without following
+  toolchains, logs, the current launcher, recognized legacy launchers, and build artifacts without following
   symlinks. Shared packages and an unmanaged Git checkout remain.
 - Uninstall now repairs legacy `0755` modes only after proving each qOS data,
   profile, and agent path is a real directory owned by the current user. It

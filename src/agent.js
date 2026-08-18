@@ -1,12 +1,10 @@
 import { decodeBase58 } from "./base58.js";
 import { assertQos } from "./errors.js";
+import { createModelProviderProfile, requestModelCompletion } from "./model-provider.js";
 import { parseUnsigned } from "./policy.js";
-import { TextDecoder } from "node:util";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]"]);
 const MAX_REASON_LENGTH = 256;
-const MAX_MODEL_CONTENT_LENGTH = 4096;
-const MAX_MODEL_RESPONSE_BYTES = 64 * 1024;
 
 function parseAmount(value, field) {
   const amount = parseUnsigned(String(value), 64, field);
@@ -82,46 +80,6 @@ function assertLoopbackModelUrl(modelUrl) {
   return parsed.toString();
 }
 
-async function readModelResponse(response) {
-  const contentType = response.headers.get("content-type");
-  assertQos(typeof contentType === "string" && /^application\/json(?:\s*;|$)/i.test(contentType), "AGENT_MODEL_INVALID", "Local agent model response must use application/json");
-  const contentEncoding = response.headers.get("content-encoding");
-  assertQos(contentEncoding === null || contentEncoding === "identity", "AGENT_MODEL_INVALID", "Compressed local agent model responses are not accepted");
-  const declaredLength = response.headers.get("content-length");
-  let expectedLength;
-  if (declaredLength !== null) {
-    assertQos(/^(0|[1-9][0-9]*)$/.test(declaredLength), "AGENT_MODEL_INVALID", "Local agent model returned an invalid Content-Length");
-    assertQos(Number(declaredLength) <= MAX_MODEL_RESPONSE_BYTES, "AGENT_MODEL_RESPONSE_TOO_LARGE", "Local agent model response exceeds 64 KiB");
-    expectedLength = Number(declaredLength);
-  }
-  assertQos(response.body !== null, "AGENT_MODEL_INVALID", "Local agent model returned an empty response");
-
-  const chunks = [];
-  let length = 0;
-  try {
-    for await (const chunk of response.body) {
-      const bytes = Buffer.from(chunk);
-      length += bytes.length;
-      if (length > MAX_MODEL_RESPONSE_BYTES) {
-        bytes.fill(0);
-        assertQos(false, "AGENT_MODEL_RESPONSE_TOO_LARGE", "Local agent model response exceeds 64 KiB");
-      }
-      chunks.push(bytes);
-    }
-    assertQos(expectedLength === undefined || length === expectedLength, "AGENT_MODEL_INVALID", "Local agent model response length does not match Content-Length");
-    const body = Buffer.concat(chunks);
-    try {
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
-    } catch {
-      assertQos(false, "AGENT_MODEL_INVALID", "Local agent model returned invalid JSON");
-    } finally {
-      body.fill(0);
-    }
-  } finally {
-    for (const chunk of chunks) chunk.fill(0);
-  }
-}
-
 function modelPrompt({ amount, destination, mint, decimals, maxAmount }) {
   return [
     "Return JSON only. You are a constrained qOS demo agent.",
@@ -140,6 +98,19 @@ function modelPrompt({ amount, destination, mint, decimals, maxAmount }) {
   ].join("\n");
 }
 
+function planFromContent(content, context) {
+  let candidate = content.trim();
+  const fenced = candidate.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/iu);
+  if (fenced) candidate = fenced[1].trim();
+  let rawPlan;
+  try {
+    rawPlan = JSON.parse(candidate);
+  } catch {
+    assertQos(false, "AGENT_MODEL_INVALID", "Model provider did not return a JSON proposal");
+  }
+  return normalizeAgentPlan(rawPlan, context);
+}
+
 /**
  * Ask a local OpenAI-compatible endpoint for a proposal. Only public policy
  * context is sent; the qOS signer and key material never enter this request.
@@ -152,53 +123,46 @@ export async function modelAgentPlan({
   mint,
   decimals,
   maxAmount,
+  fetchImpl = globalThis.fetch,
 }) {
   const endpoint = assertLoopbackModelUrl(url);
-  assertQos(typeof model === "string" && /^[a-zA-Z0-9._:/-]{1,128}$/.test(model), "AGENT_MODEL_INVALID", "Agent model name is invalid");
+  const profile = createModelProviderProfile({
+    id: "legacy-local",
+    provider: "local",
+    model,
+    endpoint,
+    credentialSha256: null,
+  });
+  const content = await requestModelCompletion({
+    profile,
+    system: "You output only the requested JSON object.",
+    prompt: modelPrompt({ amount, destination, mint, decimals, maxAmount }),
+    fetchImpl,
+  });
+  return planFromContent(content, { amount, destination, maxAmount });
+}
 
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "accept": "application/json", "content-type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_tokens: 256,
-        messages: [
-          { role: "system", content: "You output only the requested JSON object." },
-          { role: "user", content: modelPrompt({ amount, destination, mint, decimals, maxAmount }) },
-        ],
-      }),
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
-    assertQos(false, "AGENT_MODEL_UNAVAILABLE", "Local agent model could not be reached");
-  }
-
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {});
-    assertQos(false, "AGENT_MODEL_UNAVAILABLE", `Local agent model returned HTTP ${response.status}`);
-  }
-
-  let payload;
-  try {
-    payload = await readModelResponse(response);
-  } catch (error) {
-    await response.body?.cancel().catch(() => {});
-    throw error;
-  }
-
-  const content = payload?.choices?.[0]?.message?.content;
-  assertQos(typeof content === "string" && content.length > 0 && content.length <= MAX_MODEL_CONTENT_LENGTH, "AGENT_MODEL_INVALID", "Local agent model returned no usable proposal");
-
-  let rawPlan;
-  try {
-    rawPlan = JSON.parse(content);
-  } catch {
-    assertQos(false, "AGENT_MODEL_INVALID", "Local agent model did not return a JSON proposal");
-  }
-
-  return normalizeAgentPlan(rawPlan, { amount, destination, maxAmount });
+/**
+ * Ask an operator-configured local or commercial model provider for a proposal.
+ * The provider receives public policy context only; credentials are added to
+ * the HTTP request separately and never become part of the model prompt.
+ */
+export async function configuredModelAgentPlan({
+  profile,
+  credentialFile = undefined,
+  amount,
+  destination,
+  mint,
+  decimals,
+  maxAmount,
+  fetchImpl = globalThis.fetch,
+}) {
+  const content = await requestModelCompletion({
+    profile,
+    credentialFile,
+    system: "You output only the requested JSON object.",
+    prompt: modelPrompt({ amount, destination, mint, decimals, maxAmount }),
+    fetchImpl,
+  });
+  return planFromContent(content, { amount, destination, maxAmount });
 }

@@ -56,11 +56,9 @@ function usage() {
   return `qOS QEMU firmware transaction demo
 
 Usage:
-  node bin/qos-firmware-demo.js build [--home PATH]
-  node bin/qos-firmware-demo.js run [--home PATH] [--asset sol|token]
-                                     [--lamports N | --amount N] [--offline | --broadcast]
-  node bin/qos-firmware-demo.js demo [--home PATH] [--asset sol|token]
-                                      [--lamports N | --amount N] [--offline | --broadcast]
+  qos firmware build
+  qos firmware offline|live [sol|token] [AMOUNT]
+  qos firmware broadcast [sol|token] [AMOUNT] --confirm-live
 
 build provisions a Devnet key-independent M-mode RV64 ELF and records its measurement.
 run reads signer.pem only to create an unlinked RAM key mailbox for QEMU.
@@ -337,8 +335,8 @@ function provisioningEnv(home, policy) {
 
 export function buildFirmware(home) {
   assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
-  assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
-  assertQos(existsSync(join(home, "signer.pem")), "SANDBOX_NOT_INITIALIZED", `No qOS signer found in ${home}; run node bin/qos.js init first`);
+  assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run ./setup.sh install --devnet first`);
+  assertQos(existsSync(join(home, "signer.pem")), "SANDBOX_NOT_INITIALIZED", `No disposable software signer found in ${home}; provision a Devnet profile with ./setup.sh install --devnet`);
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   assertFirmwareProfileSupported(policy);
   assertQos(commandAvailable("cargo"), "CARGO_REQUIRED", "Install Rust/Cargo before building the firmware demo");
@@ -500,7 +498,7 @@ function verifyFirmwareTransaction(signature, record, intent) {
 export async function runFirmware(home, { asset = "sol", lamports = undefined, amount = undefined, broadcast = false, offline = false } = {}) {
   const qemu = process.env.QOS_FIRMWARE_DEMO_QEMU ?? DEFAULT_QEMU;
   assertPrivateDirectory(home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS sandbox home" });
-  assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run node bin/qos.js init first`);
+  assertQos(existsSync(policyPath(home)), "SANDBOX_NOT_INITIALIZED", `No qOS policy found at ${policyPath(home)}; run ./setup.sh install --devnet first`);
   const policy = loadPolicy(policyPath(home), process.env.SOLANA_RPC_URL);
   assertFirmwareProfileSupported(policy);
   assertTrustedExecutable(qemu, "QEMU");

@@ -1,6 +1,6 @@
 # Privacy, SNARKs, and agent-safe key custody
 
-qOS v0.9.1 separates possession of a signing capability from possession of the
+qOS v0.11.1 separates possession of a signing capability from possession of the
 private key. This distinction is the central rule for agent deployments: the
 agent may submit a typed request, but it should never receive, load, export, or
 serialize the Ed25519 key.
@@ -20,14 +20,11 @@ scrypt-derived 256-bit key material. A passphrase file must be mode 0600 and is
 passed by path, never by command-line value or environment value. Encryption at
 rest does not stop a compromised process from using a key after decryption.
 
-Create an encrypted software home:
-
-```sh
-umask 077
-openssl rand -base64 48 > /secure/path/qos-passphrase
-node bin/qos.js init --key-passphrase-file /secure/path/qos-passphrase
-QOS_KEY_PASSPHRASE_FILE=/secure/path/qos-passphrase node bin/qos.js address
-```
+The v0.11 single-command onboarding does not provision encrypted software-key
+profiles. Supported operator choices are disposable Devnet, recommended
+external mainnet custody, or the explicitly acknowledged host-readable
+`--insecure` mainnet workaround. The encrypted-key implementation remains a
+research component rather than an installed command path.
 
 ## External signer protocol
 
@@ -69,8 +66,10 @@ but does not stop a compromised agent from misusing the signing capability.
 Run qOS as a dedicated unprivileged account; a root qOS process defeats the
 ownership separation that this launcher check is intended to preserve.
 
-Mainnet submission requires this external non-exportable profile. Encrypted or
-plaintext software signers are rejected even when the broadcast opt-in is set.
+External non-exportable custody is the recommended mainnet profile. The setup
+wizard can also create an explicitly acknowledged `mainnet-insecure` profile;
+that host-readable software key can submit the same typed operations but is not
+an agent-safe custody boundary. Other software-key profile shapes fail closed.
 The command protocol is still only a transport: production deployments must
 place access control and policy enforcement inside the HSM, enclave, firmware,
 or separately isolated service.

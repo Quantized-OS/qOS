@@ -101,7 +101,7 @@ Input archive SHA-256:
   and acknowledgement path before any key is created.
 - Added a restricted `qos` firmware shell with a qOS banner, direct commands,
   readable operator output, explicit JSON mode, documented shorthand aliases,
-  and a separate `qos-core` launcher for the low-level CLI.
+  and one installed command surface for shell and automation use.
 - Added source-wallet readiness and default confirmed Devnet faucet funding;
   mainnet reports the exact signer, fee reserve, pinned mint, derived source
   account, and blockers without claiming it can manufacture live assets.
@@ -113,7 +113,8 @@ Input archive SHA-256:
   extension policy, and transaction templates remain locked.
 - Require confirmation for a full uninstall that stops managed listeners and
   ownership-checks removal of registered profiles, policies, keys, API/agent
-  credentials, downloaded releases, toolchains, logs, marked launchers, and
+  credentials, downloaded releases, toolchains, logs, the current launcher,
+  recognized legacy launchers, and
   build output without following symlinks. Preserve shared packages and an
   unmanaged Git checkout.
 - Guide new mainnet operators through signer readiness, public identity,

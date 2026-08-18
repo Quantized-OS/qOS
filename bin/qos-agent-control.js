@@ -41,18 +41,17 @@ function usage() {
   return `qOS agent onboarding and control
 
 Usage:
-  qos-agent [--home PATH] onboard [options]
-  qos-agent [--home PATH] list
-  qos-agent [--home PATH] show ID
-  qos-agent [--home PATH] skills ID
-  qos-agent [--home PATH] offboard ID [--yes]
-  qos-agent [--home PATH] start [--port 8790]
-  qos-agent [--home PATH] status
-  qos-agent [--home PATH] stop
-  qos-agent [--home PATH] restart [--port 8790] [--confirm-live]
-  qos-agent [--home PATH] listen [--host 127.0.0.1] [--port 8790] [--confirm-live]
-  qos-agent [--home PATH] requests [--url http://127.0.0.1:8790]
-  qos-agent [--home PATH] approve|reject REQUEST_ID [--url URL]
+  qos agent onboard [options]
+  qos agent list
+  qos agent show ID
+  qos agent skills ID
+  qos agent offboard ID [--yes]
+  qos agent start [--port 8790]
+  qos agent status
+  qos agent stop
+  qos agent restart [--port 8790] [--confirm-live]
+  qos agent requests
+  qos agent approve|reject REQUEST_ID
 
 Onboard options:
   -I, --id ID                 Stable lowercase agent ID

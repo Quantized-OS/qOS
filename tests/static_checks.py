@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static safety checks for the firmware starter; not cryptographic tests."""
 
+import json
 from pathlib import Path
 from typing import Tuple
 
@@ -246,6 +247,7 @@ def main() -> None:
             "qemu-firmware-rehearsal",
             "formatHuman",
             'bin/qos-agent-control.js',
+            'bin/qos-model.js',
             'bin/qos-policy.js',
             'bin/qos-wallet.js',
         ),
@@ -357,6 +359,47 @@ def main() -> None:
             "AGENT_MODEL_REMOTE_FORBIDDEN",
         ),
     )
+    require(
+        "src/model-provider.js",
+        (
+            "api.openai.com",
+            "api.anthropic.com",
+            "generativelanguage.googleapis.com",
+            "api.cohere.com",
+            "custom-openai",
+            "MODEL_ENDPOINT_TLS_REQUIRED",
+            "CUSTOM_MODEL_ENDPOINT_ACKNOWLEDGEMENT_REQUIRED",
+            "MODEL_CREDENTIAL_MISMATCH",
+            "redirect: \"error\"",
+            "responseMimeType",
+        ),
+    )
+    require(
+        "src/model-registry.js",
+        (
+            "model-providers",
+            "api-key",
+            "privateFile: true",
+            "writePrivateJsonAtomic",
+            "credentialSha256",
+            "rotateModelProviderCredential",
+            "removeModelProvider",
+        ),
+    )
+    require(
+        "bin/qos-model.js",
+        (
+            "model onboarding and BYOK control",
+            "Choose a model provider",
+            "qwen2.5:3b",
+            "--api-key-file",
+            "--allow-custom-endpoint",
+            "configureModelProvider",
+            "setDefaultModelProvider",
+            "rotateModelProviderCredential",
+            "removeModelProvider",
+        ),
+    )
     forbid("bin/qos-agent-demo.js", ("signer.pem", "privateKey", "signerKey"))
     require(
         "src/agent-security.js",
@@ -420,9 +463,17 @@ def main() -> None:
             "--insecure",
             "--accept-insecure-risk",
             "--wizard",
+            "--unattended",
             "--signer-guide",
             "--offline",
             "--no-fund",
+            "--model-provider",
+            "--model-api-key-file",
+            "--model-api-key-env",
+            "--model-api-key",
+            "--allow-custom-model-endpoint",
+            "cleanup_model_key_import",
+            "chmod 0600 \"${model_key_import_path}\"",
             "--agent-id",
             "--agent-approval",
             "--accept-auto",
@@ -441,9 +492,8 @@ def main() -> None:
             "--install-toolchains",
             "make check",
             "write_launcher qos bin/qos-shell.js",
-            "write_launcher qos-agent bin/qos-agent-control.js",
-            "write_launcher qos-policy bin/qos-policy.js",
-            "write_launcher qos-wallet bin/qos-wallet.js",
+            "retire_legacy_launchers",
+            "Configure an AI model now?",
             "uninstall_launchers",
             "unlink --",
             "FULL qOS PURGE",
@@ -451,6 +501,19 @@ def main() -> None:
             "No asset transfer has been prepared, signed, or broadcast by setup",
         ),
     )
+    forbid(
+        "setup.sh",
+        (
+            "write_launcher qos-core",
+            "write_launcher qos-shell",
+            "write_launcher qos-agent",
+            "write_launcher qos-model",
+            "write_launcher qos-policy",
+            "write_launcher qos-wallet",
+        ),
+    )
+    package = json.loads((ROOT / "package.json").read_text())
+    assert package["bin"] == {"qos": "./bin/qos-shell.js"}, "package.json must expose only the qos command"
     require(
         "scripts/qos-install-state.js",
         (
