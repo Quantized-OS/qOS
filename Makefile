@@ -37,6 +37,7 @@ check:
 	node --check bin/qos-policy.js
 	node --check bin/qos-wallet.js
 	node --check bin/qos-shell.js
+	node --check src/platform-sdk.js
 	node --check scripts/qos-install-state.js
 	node --test
 

@@ -59,6 +59,34 @@ export const TOKEN_INTENT_KEYS = [
   "operatorApproval",
 ];
 
+export const CLOUD_SETTLEMENT_INTENT_KEYS = [
+  "version",
+  "requestNonce",
+  "clusterGenesis",
+  "venueId",
+  "marketId",
+  "side",
+  "mint",
+  "grossAmount",
+  "treasuryAmount",
+  "burnAmount",
+  "burnBasisPoints",
+  "burnRemainderBefore",
+  "burnRemainderAfter",
+  "maxFeeLamports",
+  "maxCuPrice",
+  "maxRelayTip",
+  "destination",
+  "sourceTokenAccount",
+  "destinationTokenAccount",
+  "tokenProgram",
+  "decimals",
+  "recentBlockhash",
+  "expiresAtSlot",
+  "strategyId",
+  "operatorApproval",
+];
+
 const POLICY_KEYS = [
   "version",
   "cluster",
@@ -197,15 +225,16 @@ export function validateIntent(intent, policy, currentSlot) {
   assertQos(intent && typeof intent === "object" && !Array.isArray(intent), "INVALID_INTENT_SHAPE", "Intent must be an object");
   if (intent.version === 1) return validateNativeIntent(intent, policy, currentSlot);
   if (intent.version === 2) return validateTokenIntent(intent, policy, currentSlot);
-  assertQos(false, "UNSUPPORTED_INTENT", "Only native OrderIntentV1 and TokenTransferIntentV2 are supported");
+  if (intent.version === 3) return validateCloudSettlementIntent(intent, policy, currentSlot);
+  assertQos(false, "UNSUPPORTED_INTENT", "Only native, token-transfer, and qOS Cloud settlement intents are supported");
 }
 
-function validateCommonIntent(intent, policy, currentSlot) {
+function validateCommonIntent(intent, policy, currentSlot, expectedSide = "SEND") {
   const nonce = parseUnsigned(intent.requestNonce, 128, "requestNonce");
   assertQos(nonce > 0n, "INVALID_NONCE", "requestNonce must be greater than zero");
   assertQos(intent.clusterGenesis === policy.clusterGenesis, "WRONG_CLUSTER", "Intent is not pinned to the configured cluster");
   assertQos(intent.venueId === policy.venueId && intent.marketId === policy.marketId, "VENUE_NOT_ALLOWED", "Venue or market is not allowlisted");
-  assertQos(intent.side === "SEND", "SIDE_NOT_ALLOWED", "Transfer side must be SEND");
+  assertQos(intent.side === expectedSide, "SIDE_NOT_ALLOWED", `Intent side must be ${expectedSide}`);
   const maxFee = parseUnsigned(intent.maxFeeLamports, 64, "maxFeeLamports");
   assertQos(maxFee <= parseUnsigned(policy.maxFeeLamports, 64, "policy.maxFeeLamports"), "FEE_LIMIT_EXCEEDED", "Requested fee cap exceeds policy");
   assertQos(parseUnsigned(intent.maxCuPrice, 64, "maxCuPrice") <= parseUnsigned(policy.maxComputeUnitPrice, 64, "policy.maxComputeUnitPrice"), "CU_PRICE_LIMIT_EXCEEDED", "Compute-unit price exceeds policy");
@@ -249,4 +278,29 @@ function validateTokenIntent(intent, policy, currentSlot) {
   assertQos(amount > 0n, "ZERO_AMOUNT", "Token transfer amount must be greater than zero");
   assertQos(amount <= parseUnsigned(token.maxTransferAmount, 64, "policy.tokenTransfer.maxTransferAmount"), "AMOUNT_LIMIT_EXCEEDED", "Token transfer exceeds the policy amount limit");
   return { ...common, kind: "token", amount };
+}
+
+function validateCloudSettlementIntent(intent, policy, currentSlot) {
+  assertQos(hasExactKeys(intent, CLOUD_SETTLEMENT_INTENT_KEYS), "INVALID_INTENT_SHAPE", "Cloud settlement intent has missing or unknown fields");
+  assertQos(policy.tokenTransfer !== null, "TOKEN_TRANSFERS_DISABLED", "Policy does not enable qOS settlement");
+  const common = validateCommonIntent(intent, policy, currentSlot, "SETTLE");
+  const token = policy.tokenTransfer;
+  assertQos(intent.mint === token.mint && intent.tokenProgram === token.tokenProgram && intent.decimals === token.decimals, "MINT_NOT_ALLOWED", "Settlement mint, program, or decimals do not match policy");
+  assertQos(intent.burnBasisPoints === 100, "CLOUD_BURN_POLICY_CHANGED", "Cloud settlement must burn exactly one percent cumulatively");
+  decodeBase58(intent.mint, 32);
+  decodeBase58(intent.tokenProgram, 32);
+  decodeBase58(intent.sourceTokenAccount, 32);
+  decodeBase58(intent.destinationTokenAccount, 32);
+  assertQos(intent.sourceTokenAccount !== intent.destinationTokenAccount, "DUPLICATE_TOKEN_ACCOUNT", "Settlement source and destination token accounts must differ");
+  const grossAmount = parseUnsigned(intent.grossAmount, 64, "grossAmount");
+  const treasuryAmount = parseUnsigned(intent.treasuryAmount, 64, "treasuryAmount");
+  const burnAmount = parseUnsigned(intent.burnAmount, 64, "burnAmount");
+  const remainderBefore = parseUnsigned(intent.burnRemainderBefore, 7, "burnRemainderBefore");
+  const remainderAfter = parseUnsigned(intent.burnRemainderAfter, 7, "burnRemainderAfter");
+  assertQos(grossAmount > 0n && grossAmount <= parseUnsigned(token.maxTransferAmount, 64, "policy.tokenTransfer.maxTransferAmount"), "AMOUNT_LIMIT_EXCEEDED", "Cloud settlement exceeds the policy amount limit");
+  assertQos(remainderBefore < 100n && remainderAfter < 100n, "CLOUD_BURN_REMAINDER_INVALID", "Cloud burn remainder must be between 0 and 99 base units");
+  const burnNumerator = remainderBefore + grossAmount;
+  assertQos(burnAmount === burnNumerator / 100n && remainderAfter === burnNumerator % 100n, "CLOUD_BURN_POLICY_CHANGED", "Cloud burn amount does not equal the cumulative one-percent policy");
+  assertQos(treasuryAmount + burnAmount === grossAmount, "CLOUD_SETTLEMENT_SPLIT_INVALID", "Cloud treasury and burn amounts must equal the gross charge");
+  return { ...common, kind: "cloud-settlement", amount: grossAmount, grossAmount, treasuryAmount, burnAmount, remainderBefore, remainderAfter };
 }

@@ -78,6 +78,37 @@ function tokenIntent(overrides = {}) {
   };
 }
 
+function cloudSettlementIntent(overrides = {}) {
+  return {
+    version: 3,
+    requestNonce: "1",
+    clusterGenesis: MAINNET_GENESIS_HASH,
+    venueId: VENUE_ID,
+    marketId: MARKET_ID,
+    side: "SETTLE",
+    mint: QOS_TOKEN_MINT,
+    grossAmount: "1000000",
+    treasuryAmount: "990000",
+    burnAmount: "10000",
+    burnBasisPoints: 100,
+    burnRemainderBefore: "0",
+    burnRemainderAfter: "0",
+    maxFeeLamports: "100000",
+    maxCuPrice: "0",
+    maxRelayTip: "0",
+    destination,
+    sourceTokenAccount: encodeBase58(Buffer.alloc(32, 25)),
+    destinationTokenAccount: encodeBase58(Buffer.alloc(32, 26)),
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    decimals: 6,
+    recentBlockhash: blockhash,
+    expiresAtSlot: "200",
+    strategyId: 1,
+    operatorApproval: null,
+    ...overrides,
+  };
+}
+
 test("mainnet policy pins the complete Solana mainnet genesis hash", () => {
   assert.equal(MAINNET_GENESIS_HASH, "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d");
 });
@@ -142,4 +173,13 @@ test("token policy rejects a changed mint, program, decimals, account reuse, or 
   const same = encodeBase58(Buffer.alloc(32, 23));
   assert.throws(() => validateIntent(tokenIntent({ sourceTokenAccount: same, destinationTokenAccount: same }), configured, 100), { code: "DUPLICATE_TOKEN_ACCOUNT" });
   assert.throws(() => validateIntent(tokenIntent({ amount: "1000000001" }), configured, 100), { code: "AMOUNT_LIMIT_EXCEEDED" });
+});
+
+test("cloud settlement policy enforces the cumulative one-percent burn", () => {
+  const values = validateIntent(cloudSettlementIntent(), mainnetPolicy(), 100);
+  assert.equal(values.kind, "cloud-settlement");
+  assert.equal(values.treasuryAmount, 990_000n);
+  assert.equal(values.burnAmount, 10_000n);
+  assert.throws(() => validateIntent(cloudSettlementIntent({ burnAmount: "9999", treasuryAmount: "990001" }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
+  assert.throws(() => validateIntent(cloudSettlementIntent({ burnBasisPoints: 99 }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
 });
