@@ -8,7 +8,7 @@ function usage() {
   console.log(`qOS synthetic agent security analysis
 
 Usage:
-  node bin/qos-agent-security-audit.js
+  qos security-audit
 
 This command creates disposable synthetic qOS homes under /tmp, runs an
 adversarial key-access probe, tests plaintext/encrypted/external signer

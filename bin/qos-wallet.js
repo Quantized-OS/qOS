@@ -12,8 +12,8 @@ function usage() {
   return `qOS source-wallet onboarding
 
 Usage:
-  qos-wallet [--home PATH] [--json] status
-  qos-wallet [--home PATH] [--json] fund-devnet [--lamports N] [--confirm-airdrop]
+  qos wallet status
+  qos wallet fund [LAMPORTS]
 
 status verifies the RPC genesis, source address, SOL fee reserve, and the pinned
 qOS Token-2022 source account when enabled. fund-devnet requests and confirms a

@@ -1,6 +1,6 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.10.0 gives every automated agent a separate, revocable credential and a
+qOS 0.11.0 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
@@ -181,5 +181,5 @@ The agent sends exactly:
 
 to `POST http://127.0.0.1:8790/v1/actions` with its own Bearer token. JSON is
 correct for an agent protocol; the qOS operator CLI renders the resulting state
-in readable text by default. Use `qos --json ...` or `qos-agent --json ...` for
-machine-readable operator output.
+in readable text by default. Use `qos --json ...` for machine-readable operator
+output; no separate agent executable is installed.

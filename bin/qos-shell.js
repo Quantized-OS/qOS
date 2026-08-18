@@ -38,6 +38,9 @@ const COMMAND_ALIASES = new Map([
   ["llm", "model"],
   ["wal", "wallet"],
   ["pol", "policy"],
+  ["prof", "profile"],
+  ["priv", "privacy"],
+  ["sub", "submit"],
   ["api", "serve"],
   ["audit", "security-audit"],
   ["tr", "trade"],
@@ -65,7 +68,8 @@ const AGENT_ACTION_ALIASES = new Map([
   ["up", "start"], ["st", "status"], ["down", "stop"], ["re", "restart"],
 ]);
 const MODEL_ACTION_ALIASES = new Map([
-  ["cat", "catalog"], ["ls", "list"], ["cfg", "configure"],
+  ["on", "onboard"], ["cat", "catalog"], ["ls", "list"],
+  ["cfg", "configure"], ["def", "default"], ["set", "use"],
   ["rot", "rotate"], ["rm", "remove"],
 ]);
 const ASSET_ALIASES = new Map([["s", "sol"], ["tok", "token"], ["t", "token"]]);
@@ -95,6 +99,8 @@ Commands (long | shorthand):
   policy | pol show|edit
   policy | pol set FIELD VALUE [--confirm-policy-change]
   policy | pol destination|strategy add|remove VALUE [--confirm-policy-change]
+  profile | prof                              privacy | priv
+  submit | sub INTENT_FILE --confirm-broadcast [--proof PROOF_FILE]
   agent | ag                                  list managed agents and next steps
   agent | ag onboard|on [onboarding flags]    agent | ag list|ls
   agent | ag show|skills|offboard ID           agent | ag status|st
@@ -102,17 +108,21 @@ Commands (long | shorthand):
   agent | ag restart|re [--confirm-live]
   agent | ag requests|req                      agent | ag approve|ok REQUEST_ID
   agent | ag reject|no REQUEST_ID
+  model | mod onboard|on                       guided local/BYOK model setup
   model | mod catalog|cat                      model | mod list|ls
+  model | mod default|def                      model | mod use|set ID
   model | mod configure|cfg ID [options]       model | mod rotate|rot ID
   model | mod show ID                          model | mod remove|rm ID --yes
   agent | ag demo dry-run|dry AMOUNT [-a basic|model] [-p PROFILE]
   agent | ag demo broadcast|cast AMOUNT --confirm-live [demo options]
-  serve [api|mcp] [PORT] | api [PORT]         security-audit | audit
+  serve [agent|api|mcp] [PORT] | api [PORT]
+  serve core [PORT]                           security-audit | audit
   trade | tr
   help | h | ?           exit | x | q
 
 The shell never executes arbitrary shell text. Broadcast commands require the
 listed confirmation option and remain constrained by the qOS policy signer.
+qos is the only installed command; every operator feature is grouped here.
 The current source implements transfers, not DEX swaps; trade reports the
 missing reviewed venue template instead of submitting anything.
 `;
@@ -191,6 +201,7 @@ function runProgram(script, args, context, extraEnvironment = {}, { captureJson 
     ...process.env,
     QOS_HOME: context.runtime.home,
     QOS_API_TOKEN_FILE: context.runtime.apiTokenFile,
+    QOS_CALLER_CWD: context.cwd,
     ...(context.runtime.signerCommand === null ? {} : { QOS_SIGNER_COMMAND: context.runtime.signerCommand }),
     ...extraEnvironment,
   };
@@ -249,6 +260,7 @@ function capabilitiesFor(context) {
       ...(tokenEnabled ? ["qos-token-intent", "qos-token-transfer", "agent-directed-qos-token-transfer"] : []),
       ...(context.runtime.profile === "devnet" ? ["qemu-firmware-rehearsal"] : []),
       "loopback-agent-api-mcp",
+      "loopback-core-api",
       "byok-model-providers",
     ],
     mainnetAutomaticExecutionRequiresLiveStart: context.policy.cluster === "mainnet-beta",
@@ -288,6 +300,7 @@ function printAgentGuide() {
 7. Mainnet live mode: ag re --confirm-live
 8. Revoke access: ag off AGENT_ID
 
+Model setup: mod on  (choose local inference or a commercial BYOK provider)
 The synthetic proposal demo is separate: ag demo dry AMOUNT
 Live demo submission requires: ag demo cast AMOUNT --confirm-live
 `);
@@ -363,6 +376,17 @@ function dispatch(tokens, context) {
     }
     throw new QosError("INVALID_ARGUMENT", "Use wallet status or wallet fund");
   }
+  if (command === "profile") {
+    if (rest.length > 1 || (rest.length === 1 && rest[0] !== "show")) throw new QosError("INVALID_ARGUMENT", "profile accepts no arguments or show");
+    return {
+      status: runProgram("bin/qos-profile.js", ["show", "--home", context.runtime.home], context, {}, { captureJson: true }),
+      exit: false,
+    };
+  }
+  if (command === "privacy") {
+    if (rest.length) throw new QosError("INVALID_ARGUMENT", "privacy accepts no arguments");
+    return { status: qos(["privacy-status"], context), exit: false };
+  }
   if (command === "policy") {
     const args = ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), ...(rest.length ? rest : ["show"])];
     const status = runProgram("bin/qos-policy.js", args, context);
@@ -405,6 +429,34 @@ function dispatch(tokens, context) {
       };
     }
     throw new QosError("INVALID_ARGUMENT", "Use token address, token balance, token prepare, or token send");
+  }
+  if (command === "submit") {
+    const [intentFile, ...options] = rest;
+    if (typeof intentFile !== "string" || intentFile.startsWith("--")) throw new QosError("MISSING_ARGUMENT", "submit requires an intent file");
+    let confirmed = false;
+    let proofFile;
+    for (let index = 0; index < options.length; index += 1) {
+      const option = options[index];
+      if (option === "--confirm-broadcast") {
+        if (confirmed) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --confirm-broadcast");
+        confirmed = true;
+      } else if (option === "--proof") {
+        if (proofFile !== undefined) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --proof");
+        proofFile = options[++index];
+        if (!proofFile || proofFile.startsWith("--")) throw new QosError("MISSING_ARGUMENT", "--proof requires a file");
+      } else {
+        throw new QosError("INVALID_ARGUMENT", `Unknown submit option: ${option}`);
+      }
+    }
+    if (!confirmed) throw new QosError("BROADCAST_CONFIRMATION_REQUIRED", "submit requires --confirm-broadcast");
+    return {
+      status: qos([
+        "submit",
+        "--intent", resolve(context.cwd, intentFile),
+        ...(proofFile === undefined ? [] : ["--proof", resolve(context.cwd, proofFile)]),
+      ], context, { QOS_ENABLE_MAINNET_BROADCAST: "I_UNDERSTAND" }),
+      exit: false,
+    };
   }
   if (command === "firmware") {
     const [action] = rest;
@@ -474,11 +526,21 @@ function dispatch(tokens, context) {
     };
   }
   if (command === "serve") {
-    const serveArguments = rest[0] === "api" || rest[0] === "mcp" ? rest.slice(1) : rest;
-    if (serveArguments.length > 1) throw new QosError("INVALID_ARGUMENT", "Use serve, serve PORT, serve api PORT, serve mcp PORT, or api PORT");
+    const namespace = ["agent", "api", "mcp", "core"].includes(rest[0]) ? rest[0] : "agent";
+    const serveArguments = namespace === "agent" && !["agent", "api", "mcp"].includes(rest[0]) ? rest : rest.slice(1);
+    if (serveArguments.length > 1) throw new QosError("INVALID_ARGUMENT", "Use serve, serve PORT, serve agent PORT, serve mcp PORT, or serve core PORT");
     const port = serveArguments[0];
     if (port !== undefined && (!/^[1-9][0-9]{0,4}$/.test(port) || Number(port) > 65535)) {
       throw new QosError("INVALID_PORT", "API port must be a canonical integer between 1 and 65535");
+    }
+    if (namespace === "core") {
+      return {
+        status: runProgram("bin/qos.js", [
+          "serve", "--home", context.runtime.home,
+          ...(port ? ["--port", port] : []),
+        ], context, { QOS_HUMAN_OUTPUT: "1" }),
+        exit: false,
+      };
     }
     const args = ["--home", context.runtime.home, ...(context.json ? ["--json"] : []), "start", ...(port ? ["--port", port] : [])];
     return {
@@ -497,7 +559,7 @@ function contextFor(home, json = false) {
   if (typeof home !== "string") throw new QosError("MISSING_RUNTIME_PROFILE", "Use --home or QOS_HOME to select an installed qOS profile");
   const runtime = loadRuntimeProfile(resolve(home));
   const policy = loadPolicy(join(runtime.home, "policy.json"));
-  return { runtime, policy, json };
+  return { runtime, policy, json, cwd: process.cwd() };
 }
 
 async function main() {

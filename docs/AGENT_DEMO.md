@@ -23,13 +23,11 @@ verification, and confirmation.
 
 ## Prerequisites
 
-Use a separate mainnet home and review its `policy.json`. Mainnet submission
-requires an external non-exportable signer; software-key profiles are rejected.
-Configure the reviewed adapter before running any example:
-
-```sh
-export QOS_SIGNER_COMMAND=/absolute/path/to/reviewed-qos-signer-adapter
-```
+Use the mainnet profile created by `./setup.sh install` and review it with
+`qos policy show`. External non-exportable custody is recommended; an
+acknowledged `--insecure` profile has a host-readable key and is unsafe for an
+untrusted agent. The installed `qos` launcher carries the selected profile and
+reviewed signer-adapter path.
 
 The signer needs enough SOL for one transaction fee and enough qOS base units.
 The destination owner must already have its qOS associated token account. qOS
@@ -41,9 +39,7 @@ The built-in agent is deterministic and useful for the first rehearsal. It
 does not broadcast by default:
 
 ```sh
-node bin/qos-agent-demo.js \
-  --home .qos-ephemeral-mainnet \
-  --amount 1000000
+qos agent demo dry 1000000
 ```
 
 The command prints the agent proposal and the exact qOS intent prepared for
@@ -60,34 +56,31 @@ the provider catalog, secure key-file import, custom endpoints, rotation, and
 removal.
 
 ```sh
-node bin/qos-agent-demo.js \
-  --agent model \
-  --model-profile claude-prod \
-  --home .qos-ephemeral-mainnet \
-  --amount 1000000
+qos model onboard
+qos agent demo dry 1000000 --agent model
 ```
+
+Onboarding makes the chosen provider the default. Use `qos model use ID` to
+switch defaults or add `--model-profile ID` to override one run.
 
 Only public policy context is sent to the selected endpoint. The provider API
 key is added to the authenticated HTTP request separately; the signer, private
 key material, agent bearer tokens, and provider credential never enter the
 prompt.
 
-## Legacy local endpoint
+## Local endpoint
 
 The optional model mode uses a local OpenAI-compatible chat-completions
 endpoint. Only public policy context is sent to the endpoint; the signer and
 any private key material are never included. The endpoint must be loopback so
 the proposal context is not sent to a remote service.
 
-For an Ollama/LM Studio/llama.cpp-compatible endpoint, set the URL and model:
+Choose local in the onboarding wizard. Pressing Enter accepts the Ollama
+defaults (`qwen2.5:3b` and the loopback chat-completions endpoint):
 
 ```sh
-QOS_AGENT_MODEL_URL=http://127.0.0.1:11434/v1/chat/completions \
-QOS_AGENT_MODEL=qwen2.5:3b \
-node bin/qos-agent-demo.js \
-  --agent model \
-  --home .qos-ephemeral-mainnet \
-  --amount 1000000
+qos model onboard
+qos agent demo dry 1000000 --agent model
 ```
 
 The response must be a JSON proposal with the exact requested amount and
@@ -97,17 +90,11 @@ the destination, or increase the amount.
 ## Explicit live broadcast
 
 First inspect the dry-run output and verify the exact amount, destination,
-mint, and token accounts. Then the live command requires both a CLI flag and a
-separate environment opt-in:
+mint, and token accounts. Then the live shell command requires its explicit
+confirmation gate:
 
 ```sh
-QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND \
-node bin/qos-agent-demo.js \
-  --agent model \
-  --home .qos-ephemeral-mainnet \
-  --amount 1000000 \
-  --broadcast \
-  --confirm-live
+qos agent demo broadcast 1000000 --agent model --confirm-live
 ```
 
 Use the smallest amount needed for the recording. The command prints the

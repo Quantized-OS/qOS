@@ -100,7 +100,7 @@ read, choose option 2 in the default wizard or run:
 The wizard prints the complete accessibility notice before creating anything,
 asks for the one allowlisted destination, and requires a `yes` acknowledgement.
 It then generates an Ed25519 key in the owner-only profile, creates the same
-mainnet policy and API surface, installs the same qOS commands, and opens the
+mainnet policy and API surface, installs the single `qos` command, and opens the
 same shell. The implemented mainnet transfer, agent, simulation, signing,
 submission, and confirmation behavior is the same as the external-signer path.
 
@@ -132,7 +132,7 @@ Disposable Devnet setup is never selected implicitly. Enable it with:
 This path creates disposable development keys and a destination, installs the
 policy, requests and confirms 0.2 Devnet SOL from the faucet, builds the locked
 RISC-V QEMU firmware, copies Cargo's output into a private single-link ELF,
-records its measurement, installs commands, and opens qOS. It never spends the
+records its measurement, installs `qos`, and opens qOS. It never spends the
 funds or broadcasts a transfer automatically. Use `--no-fund` to check the
 cluster without an airdrop or `--offline` to defer both steps.
 
@@ -160,7 +160,9 @@ to preserve it outside the qOS source directory before retrying.
 
 ## qOS command experience
 
-Setup installs `qos` as the interactive firmware shell. Start it later with:
+Setup installs exactly one operator command, `qos`, as the interactive firmware
+shell. Legacy qOS-managed companion launchers are retired during an upgrade.
+Start it later with:
 
 ```sh
 qos
@@ -181,6 +183,7 @@ shorthands are equivalent:
 | `token` | `tok` |
 | `firmware` | `fw` |
 | `agent` | `ag` |
+| `model` | `mod` |
 | `wallet` | `wal` |
 | `policy` | `pol` |
 | `serve` | `api` |
@@ -201,8 +204,8 @@ qos> capa
 qos> stat
 ```
 
-Output is readable text by default. Use `qos --json capa` for automation; the
-low-level `qos-core` interface remains JSON-oriented.
+Output is readable text by default. Use `qos --json capa` for automation. The
+same `qos` executable handles interactive and one-shot JSON use.
 
 Verify that the source wallet exists on the pinned cluster and has the exact
 fee/token requirements needed by the enabled template:
@@ -240,7 +243,7 @@ Review and prepare a mainnet qOS Token-2022 transfer:
 qos> tok addr
 qos> tok bal
 qos> tok prep 1000000
-qos> ag dry 1000000 -a basic
+qos> ag demo dry 1000000 -a basic
 ```
 
 An onchain mainnet send remains a separate action:
@@ -276,9 +279,6 @@ it is stopped. Each generated agent Bearer token remains in that agent's
 owner-only token file. Do not put it in prompts, logs, shell history, or remote
 model configuration. The service accepts loopback clients only.
 
-The low-level sandbox CLI remains available as `qos-core`; automation should
-normally prefer the restricted `qos` command surface.
-
 Onboard a scoped agent with the shell wizard:
 
 ```text
@@ -304,11 +304,13 @@ Configure a local or commercial BYOK proposal model independently of the
 managed-agent credential:
 
 ```text
-qos> model catalog
-qos> model configure claude-prod --provider anthropic --model MODEL_ID --api-key-file /run/secrets/anthropic-key
-qos> ag demo dry 1000000 -a model -p claude-prod
+qos> model onboard
+qos> model default
+qos> ag demo dry 1000000 -a model
 ```
 
+The wizard lists commercial providers and defaults to local Ollama at
+`127.0.0.1` with `qwen2.5:3b`. `model use ID` switches the default;
 `model list`, `model show ID`, `model rotate ID --api-key-file PATH`, and
 `model remove ID --yes` never print the key. See `MODEL_PROVIDERS.md` for the
 provider matrix and custom-endpoint trust boundary.
@@ -337,7 +339,8 @@ Permanently remove all qOS-managed installation artifacts with:
 The interactive command requires typing `DELETE`. It stops managed services and
 removes registered profiles, policies, API tokens, private keys, agent tokens
 and skills, downloaded browser releases, user-local qOS toolchains, logs,
-firmware/build output, and marked launchers. This cannot be undone. Unmanaged
+firmware/build output, the `qos` launcher, and recognized legacy qOS launchers.
+This cannot be undone. Unmanaged
 launchers, shared Ubuntu packages, and an unmanaged Git source checkout are
 preserved. Symlinks are unlinked rather than followed.
 

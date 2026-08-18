@@ -23,7 +23,8 @@ import { readPrivateJson, writePrivateJsonAtomic } from "./private-json.js";
 import { loadRuntimeProfile } from "./runtime-profile.js";
 import { assertPrivateDirectory, readSecureFile } from "./secure-file.js";
 
-const REGISTRY_KEYS = ["version", "profiles"];
+const REGISTRY_V1_KEYS = ["version", "profiles"];
+const REGISTRY_V2_KEYS = ["version", "defaultProfile", "profiles"];
 const MAX_PROFILES = 32;
 
 export function modelProviderPaths(home, id = undefined) {
@@ -52,20 +53,38 @@ function ensureProviderDirectory(home) {
 }
 
 function validateRegistry(registry) {
-  assertQos(registry && typeof registry === "object" && !Array.isArray(registry) && hasExactKeys(registry, REGISTRY_KEYS), "MODEL_REGISTRY_INVALID", "Model provider registry has missing or unknown fields");
-  assertQos(registry.version === 1 && Array.isArray(registry.profiles) && registry.profiles.length <= MAX_PROFILES, "MODEL_REGISTRY_INVALID", "Model provider registry version or size is invalid");
+  assertQos(registry && typeof registry === "object" && !Array.isArray(registry), "MODEL_REGISTRY_INVALID", "Model provider registry has missing or unknown fields");
+  const versionOne = registry.version === 1 && hasExactKeys(registry, REGISTRY_V1_KEYS);
+  const versionTwo = registry.version === 2 && hasExactKeys(registry, REGISTRY_V2_KEYS);
+  assertQos(versionOne || versionTwo, "MODEL_REGISTRY_INVALID", "Model provider registry version or fields are invalid");
+  assertQos(Array.isArray(registry.profiles) && registry.profiles.length <= MAX_PROFILES, "MODEL_REGISTRY_INVALID", "Model provider registry size is invalid");
   const profiles = registry.profiles.map(validateModelProviderProfile);
   assertQos(new Set(profiles.map((profile) => profile.id)).size === profiles.length, "MODEL_REGISTRY_INVALID", "Model provider registry contains duplicate IDs");
   assertQos(profiles.every((profile, index) => index === 0 || profiles[index - 1].id < profile.id), "MODEL_REGISTRY_INVALID", "Model provider registry must be sorted by ID");
-  return Object.freeze({ version: 1, profiles: Object.freeze(profiles) });
+  const defaultProfile = versionOne
+    ? (profiles.length === 1 ? profiles[0].id : null)
+    : registry.defaultProfile;
+  assertQos(defaultProfile === null || (typeof defaultProfile === "string" && profiles.some((profile) => profile.id === defaultProfile)), "MODEL_REGISTRY_INVALID", "Default model profile is not present in the registry");
+  return Object.freeze({ version: 2, defaultProfile, profiles: Object.freeze(profiles) });
+}
+
+function emptyRegistry() {
+  return Object.freeze({ version: 2, defaultProfile: null, profiles: Object.freeze([]) });
+}
+
+function publicRegistryProfile(record, defaultProfile) {
+  return Object.freeze({
+    ...publicModelProviderProfile(record),
+    default: record.id === defaultProfile,
+  });
 }
 
 export function loadModelProviderRegistry(home) {
   const paths = modelProviderPaths(home);
   loadRuntimeProfile(paths.home);
-  if (!existsSync(paths.root)) return Object.freeze({ version: 1, profiles: Object.freeze([]) });
+  if (!existsSync(paths.root)) return emptyRegistry();
   assertPrivateDirectory(paths.root, { errorCode: "INSECURE_MODEL_PROVIDER_DIRECTORY", label: "Model provider directory" });
-  if (!existsSync(paths.registry)) return Object.freeze({ version: 1, profiles: Object.freeze([]) });
+  if (!existsSync(paths.registry)) return emptyRegistry();
   return validateRegistry(readPrivateJson(paths.registry, {
     errorCode: "MODEL_REGISTRY_INVALID",
     label: "Model provider registry",
@@ -145,9 +164,11 @@ export function configureModelProvider(home, {
   endpoint = undefined,
   apiKeyFile = undefined,
   allowCustomEndpoint = false,
+  makeDefault = false,
 } = {}) {
   const resolvedHome = resolve(home);
-  assertQos(typeof provider === "string" && modelProviderCatalog().some((entry) => entry.id === provider), "MODEL_PROVIDER_UNSUPPORTED", "Model provider is unsupported; use qos-model catalog to list built-in and compatible providers");
+  assertQos(typeof provider === "string" && modelProviderCatalog().some((entry) => entry.id === provider), "MODEL_PROVIDER_UNSUPPORTED", "Model provider is unsupported; use qos model catalog to list built-in and compatible providers");
+  assertQos(typeof makeDefault === "boolean", "MODEL_DEFAULT_INVALID", "Model default selection is invalid");
   const requiresCredential = provider !== "local";
   assertQos(requiresCredential ? typeof apiKeyFile === "string" : apiKeyFile === undefined, requiresCredential ? "MODEL_CREDENTIAL_REQUIRED" : "MODEL_CREDENTIAL_FORBIDDEN", requiresCredential ? "Remote model providers require --api-key-file" : "Local model providers must not receive an API key");
   let imported;
@@ -172,11 +193,12 @@ export function configureModelProvider(home, {
       chmodSync(paths.profile, 0o700);
       if (imported !== undefined) writeCredentialAtomic(paths.credential, imported.normalized);
       const next = {
-        version: 1,
+        version: 2,
+        defaultProfile: makeDefault || registry.defaultProfile === null ? record.id : registry.defaultProfile,
         profiles: [...registry.profiles, record].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
       };
-      validateRegistry(next);
-      writePrivateJsonAtomic(rootPaths.registry, next, { errorCode: "MODEL_REGISTRY_WRITE_FAILED", label: "Model provider registry" });
+      const validated = validateRegistry(next);
+      writePrivateJsonAtomic(rootPaths.registry, validated, { errorCode: "MODEL_REGISTRY_WRITE_FAILED", label: "Model provider registry" });
     } catch (error) {
       if (existsSync(paths.credential)) {
         try { unlinkSync(paths.credential); } catch {}
@@ -187,7 +209,8 @@ export function configureModelProvider(home, {
       throw error;
     }
     validateRuntimeFiles(resolvedHome, record);
-    return publicModelProviderProfile(record);
+    const current = loadModelProviderRegistry(resolvedHome);
+    return publicRegistryProfile(record, current.defaultProfile);
   } finally {
     imported?.normalized.fill(0);
     imported?.bytes.fill(0);
@@ -196,24 +219,62 @@ export function configureModelProvider(home, {
 
 export function listModelProviders(home) {
   const resolvedHome = resolve(home);
-  return loadModelProviderRegistry(resolvedHome).profiles.map((record) => {
+  const registry = loadModelProviderRegistry(resolvedHome);
+  return registry.profiles.map((record) => {
     validateRuntimeFiles(resolvedHome, record);
-    return publicModelProviderProfile(record);
+    return publicRegistryProfile(record, registry.defaultProfile);
   });
 }
 
 export function getModelProvider(home, id) {
   const resolvedHome = resolve(home);
-  const record = loadModelProviderRegistry(resolvedHome).profiles.find((profile) => profile.id === id);
+  const registry = loadModelProviderRegistry(resolvedHome);
+  const record = registry.profiles.find((profile) => profile.id === id);
   assertQos(record !== undefined, "MODEL_PROFILE_NOT_FOUND", `Model profile ${id} is not configured`);
   validateRuntimeFiles(resolvedHome, record);
-  return publicModelProviderProfile(record);
+  return publicRegistryProfile(record, registry.defaultProfile);
 }
 
-export function loadModelProviderForRequest(home, id) {
+export function getDefaultModelProvider(home) {
   const resolvedHome = resolve(home);
-  const record = loadModelProviderRegistry(resolvedHome).profiles.find((profile) => profile.id === id);
+  const registry = loadModelProviderRegistry(resolvedHome);
+  if (registry.defaultProfile === null) {
+    return Object.freeze({ defaultProfile: null, profile: null });
+  }
+  const record = registry.profiles.find((profile) => profile.id === registry.defaultProfile);
+  validateRuntimeFiles(resolvedHome, record);
+  return Object.freeze({
+    defaultProfile: registry.defaultProfile,
+    profile: publicRegistryProfile(record, registry.defaultProfile),
+  });
+}
+
+export function setDefaultModelProvider(home, id) {
+  const resolvedHome = resolve(home);
+  const rootPaths = ensureProviderDirectory(resolvedHome);
+  const registry = loadModelProviderRegistry(resolvedHome);
+  const record = registry.profiles.find((profile) => profile.id === id);
   assertQos(record !== undefined, "MODEL_PROFILE_NOT_FOUND", `Model profile ${id} is not configured`);
+  validateRuntimeFiles(resolvedHome, record);
+  const next = validateRegistry({
+    version: 2,
+    defaultProfile: id,
+    profiles: registry.profiles,
+  });
+  writePrivateJsonAtomic(rootPaths.registry, next, { errorCode: "MODEL_REGISTRY_WRITE_FAILED", label: "Model provider registry" });
+  return publicRegistryProfile(record, id);
+}
+
+export function loadModelProviderForRequest(home, id = undefined) {
+  const resolvedHome = resolve(home);
+  const registry = loadModelProviderRegistry(resolvedHome);
+  const selectedId = id ?? registry.defaultProfile;
+  if (selectedId === null) {
+    assertQos(registry.profiles.length > 0, "MODEL_PROFILE_NOT_CONFIGURED", "No model is configured; run qos model onboard first");
+    assertQos(false, "MODEL_PROFILE_SELECTION_REQUIRED", "No default model is selected; run qos model use ID or pass --model-profile ID");
+  }
+  const record = registry.profiles.find((profile) => profile.id === selectedId);
+  assertQos(record !== undefined, "MODEL_PROFILE_NOT_FOUND", `Model profile ${selectedId} is not configured`);
   const paths = validateRuntimeFiles(resolvedHome, record);
   return Object.freeze({
     profile: record,
@@ -246,9 +307,13 @@ export function rotateModelProviderCredential(home, id, { apiKeyFile } = {}) {
     try {
       const profiles = [...registry.profiles];
       profiles[index] = updated;
-      writePrivateJsonAtomic(modelProviderPaths(resolvedHome).registry, { version: 1, profiles }, { errorCode: "MODEL_REGISTRY_WRITE_FAILED", label: "Model provider registry" });
+      writePrivateJsonAtomic(modelProviderPaths(resolvedHome).registry, {
+        version: 2,
+        defaultProfile: registry.defaultProfile,
+        profiles,
+      }, { errorCode: "MODEL_REGISTRY_WRITE_FAILED", label: "Model provider registry" });
       validateRuntimeFiles(resolvedHome, updated);
-      return { ...publicModelProviderProfile(updated), credentialRotated: true };
+      return { ...publicRegistryProfile(updated, registry.defaultProfile), credentialRotated: true };
     } catch (error) {
       try {
         writeCredentialAtomic(paths.credential, previous);
@@ -271,7 +336,12 @@ export function removeModelProvider(home, id) {
   const registry = loadModelProviderRegistry(resolvedHome);
   const record = registry.profiles.find((profile) => profile.id === id);
   assertQos(record !== undefined, "MODEL_PROFILE_NOT_FOUND", `Model profile ${id} is not configured`);
-  const next = { version: 1, profiles: registry.profiles.filter((profile) => profile.id !== id) };
+  const profiles = registry.profiles.filter((profile) => profile.id !== id);
+  const next = validateRegistry({
+    version: 2,
+    defaultProfile: registry.defaultProfile === id ? (profiles[0]?.id ?? null) : registry.defaultProfile,
+    profiles,
+  });
   writePrivateJsonAtomic(rootPaths.registry, next, { errorCode: "MODEL_REGISTRY_WRITE_FAILED", label: "Model provider registry" });
   const paths = modelProviderPaths(resolvedHome, id);
   let credentialRemoved = record.credentialSha256 === null;
@@ -293,5 +363,6 @@ export function removeModelProvider(home, id) {
     credentialRemoved,
     cleanupWarning,
     remainingProfiles: next.profiles.length,
+    defaultProfile: next.defaultProfile,
   };
 }

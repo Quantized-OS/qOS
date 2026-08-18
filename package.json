@@ -1,22 +1,11 @@
 {
   "name": "qos-solana-sandbox",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Policy signer for native SOL and the pinned qOS Token-2022 mint",
   "type": "module",
   "bin": {
-    "qos": "./bin/qos-shell.js",
-    "qos-core": "./bin/qos.js",
-    "qos-firmware-demo": "./bin/qos-firmware-demo.js",
-    "qos-agent": "./bin/qos-agent-control.js",
-    "qos-agent-demo": "./bin/qos-agent-demo.js",
-    "qos-agent-security-audit": "./bin/qos-agent-security-audit.js",
-    "qos-agent-external-setup": "./bin/qos-agent-external-setup.js",
-    "qos-model": "./bin/qos-model.js",
-    "qos-profile": "./bin/qos-profile.js",
-    "qos-policy": "./bin/qos-policy.js",
-    "qos-wallet": "./bin/qos-wallet.js",
-    "qos-shell": "./bin/qos-shell.js"
+    "qos": "./bin/qos-shell.js"
   },
   "scripts": {
     "start": "node ./bin/qos.js serve",

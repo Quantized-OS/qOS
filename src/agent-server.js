@@ -326,7 +326,7 @@ export function startAgentServer(service, {
           result: {
             protocolVersion,
             capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: "qOS", version: "0.10.0" },
+            serverInfo: { name: "qOS", version: "0.11.0" },
             instructions: "Use qos_capabilities first. qos_request_transfer accepts only an amount; qOS pins every other security-relevant field.",
           },
         });

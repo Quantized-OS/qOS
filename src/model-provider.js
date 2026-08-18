@@ -236,7 +236,7 @@ export function createModelProviderProfile({
   allowCustomEndpoint = false,
 } = {}) {
   assertQos(typeof id === "string" && MODEL_PROFILE_ID.test(id), "MODEL_PROFILE_ID_INVALID", "Model profile ID must start with a lowercase letter and contain at most 32 lowercase letters, digits, or hyphens");
-  assertQos(typeof provider === "string" && Object.hasOwn(PROVIDERS, provider), "MODEL_PROVIDER_UNSUPPORTED", "Model provider is unsupported; use qos-model catalog to list built-in and compatible providers");
+  assertQos(typeof provider === "string" && Object.hasOwn(PROVIDERS, provider), "MODEL_PROVIDER_UNSUPPORTED", "Model provider is unsupported; use qos model catalog to list built-in and compatible providers");
   assertQos(typeof model === "string" && MODEL_NAME.test(model), "MODEL_NAME_INVALID", "Model name contains unsupported characters or is too long");
   const selected = PROVIDERS[provider];
   const resolved = resolvedEndpoint(selected, model, endpoint, allowCustomEndpoint);

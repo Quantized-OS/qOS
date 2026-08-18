@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.10.0 adds strong
+qOS is a research firmware and policy-signer project. Version 0.11.0 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
@@ -39,7 +39,7 @@ The command adapter is launched with an absolute non-symlinked executable,
 bounded I/O, no shell, a deadline, a minimal environment, and a fixed working
 directory. Those launcher controls do not replace signer-side authorization.
 
-Run `node bin/qos-agent-security-audit.js` to exercise this boundary with
+Run `qos security-audit` to exercise this boundary with
 synthetic disposable keys. The harness intentionally proves that plaintext
 software keys and exposed passphrases are recoverable by a process with file
 access; those profiles are not acceptable for an agent deployment.

@@ -12,11 +12,12 @@ function usage() {
   console.log(`qOS agent-directed Token-2022 transfer demo
 
 Usage:
-  node bin/qos-agent-demo.js --home <dir> --amount <base units> [options]
+  qos agent demo dry AMOUNT [options]
+  qos agent demo broadcast AMOUNT --confirm-live [options]
 
 Options:
   --agent basic|model       Proposal agent (default: basic)
-  --model-profile <id>      Configured local or commercial BYOK provider profile
+  --model-profile <id>      Override the default onboarded model profile
   --model-url <url>         Legacy loopback OpenAI-compatible endpoint
   --model <name>            Legacy local model name (default: qwen2.5:3b)
   --destination <pubkey>    Must match the destination pinned in policy
@@ -26,6 +27,7 @@ Options:
   --help                    Show this help
 
 Default behavior prepares and validates an intent without broadcasting it.
+With --agent model, qOS uses the default selected by qos model onboard/use.
 This demo transfers the pinned qOS Token-2022 asset; it is not a DEX swap.
 `);
 }
@@ -104,12 +106,16 @@ async function main() {
     decimals: service.policy.tokenTransfer.decimals,
   };
 
-  const explicitLegacyModel = options["model-url"] !== undefined || options.model !== undefined;
-  assertQos(!(options["model-profile"] && explicitLegacyModel), "CLI_ARGUMENT_INVALID", "--model-profile cannot be combined with legacy --model-url or --model");
-  const modelProfileId = options["model-profile"] ?? (explicitLegacyModel ? undefined : process.env.QOS_AGENT_MODEL_PROFILE);
+  const cliLegacyModel = options["model-url"] !== undefined || options.model !== undefined;
+  assertQos(!(options["model-profile"] && cliLegacyModel), "CLI_ARGUMENT_INVALID", "--model-profile cannot be combined with legacy --model-url or --model");
+  let modelProfileId = options["model-profile"] ?? process.env.QOS_AGENT_MODEL_PROFILE;
+  const environmentLegacyModel = modelProfileId === undefined
+    && (process.env.QOS_AGENT_MODEL_URL !== undefined || process.env.QOS_AGENT_MODEL !== undefined);
+  const explicitLegacyModel = cliLegacyModel || environmentLegacyModel;
   let selectedProvider;
-  if (options.agent === "model" && modelProfileId) {
+  if (options.agent === "model" && !explicitLegacyModel) {
     selectedProvider = loadModelProviderForRequest(resolve(options.home), modelProfileId);
+    modelProfileId = selectedProvider.profile.id;
   }
 
   const plan = options.agent === "basic"

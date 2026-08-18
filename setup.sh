@@ -11,6 +11,8 @@ readonly LEGACY_INSTALLER="${SCRIPT_DIR}/install.sh"
 readonly LEGACY_BACKUP_DIRECTORY="${SCRIPT_DIR}/.qos-setup-backup"
 readonly -a MANAGED_LAUNCHERS=(
   qos
+)
+readonly -a LEGACY_MANAGED_LAUNCHERS=(
   qos-core
   qos-shell
   qos-firmware
@@ -23,6 +25,7 @@ readonly -a MANAGED_LAUNCHERS=(
   qos-policy
   qos-wallet
 )
+readonly -a ALL_MANAGED_LAUNCHERS=("${MANAGED_LAUNCHERS[@]}" "${LEGACY_MANAGED_LAUNCHERS[@]}")
 
 print_banner() {
   cat <<'EOF'
@@ -57,8 +60,8 @@ Usage:
   ./setup.sh uninstall [options]
 
 Actions:
-  install      Verify dependencies and source, provision a profile, install
-               commands, and open qOS. Mainnet setup asks whether to use an
+  install      Verify dependencies and source, provision a profile, install the
+               single qos command, and open it. Mainnet setup asks whether to use an
                existing external key or generate an accessible software key.
   uninstall    Stop qOS services and permanently remove all qOS-managed data,
                keys, credentials, toolchains, launchers, logs, and build output.
@@ -112,7 +115,9 @@ existing key through a reviewed non-exportable signer adapter or generate a
 local key. The generated-key choice continues exactly as --insecure and requires
 the same explicit warning acceptance. qOS never imports an existing private key.
 Devnet setup requests a confirmed faucet airdrop unless --no-fund or --offline
-is selected. Mainnet setup never funds or broadcasts.
+is selected. Mainnet setup never funds or broadcasts. Interactive setup also
+offers model onboarding: choose any built-in commercial BYOK provider, or press
+Enter for local Ollama-compatible defaults. Only the `qos` command is installed.
 EOF
 }
 
@@ -423,7 +428,7 @@ uninstall_launchers() {
   [[ -d "${bin_directory}" ]] || die "The command path is not a directory: ${bin_directory}"
   [[ "$(stat -c '%u' "${bin_directory}")" == "$(id -u)" ]] || die "The command directory must be owned by the current user."
 
-  for name in "${MANAGED_LAUNCHERS[@]}"; do
+  for name in "${ALL_MANAGED_LAUNCHERS[@]}"; do
     path="${bin_directory}/${name}"
     [[ -e "${path}" || -L "${path}" ]] || continue
     if [[ -f "${path}" && ! -L "${path}" ]]; then
@@ -440,6 +445,30 @@ uninstall_launchers() {
 
   if (( removed == 0 )); then
     log "No managed qOS launchers were installed in ${bin_directory}."
+  fi
+}
+
+retire_legacy_launchers() {
+  local name
+  local path
+  local size
+  local removed=0
+
+  for name in "${LEGACY_MANAGED_LAUNCHERS[@]}"; do
+    path="${bin_directory}/${name}"
+    [[ -e "${path}" || -L "${path}" ]] || continue
+    if [[ -f "${path}" && ! -L "${path}" ]]; then
+      size="$(stat -c '%s' "${path}")"
+      if [[ "${size}" -le 16384 ]] && grep -Fqx "${MANAGED_MARKER}" "${path}"; then
+        unlink -- "${path}"
+        removed=$((removed + 1))
+        continue
+      fi
+    fi
+    warn "Preserved unmanaged legacy command: ${path}"
+  done
+  if (( removed > 0 )); then
+    log "Retired ${removed} legacy qOS command launcher(s); use qos for every operation."
   fi
 }
 
@@ -1139,6 +1168,17 @@ else
   fi
 fi
 
+if (( interactive )); then
+  if ask_yes_no "Configure an AI model now?" "yes"; then
+    log "Opening model onboarding. Local Ollama-compatible inference is the default; commercial providers use your owner-only API key file."
+    if ! run_node bin/qos-model.js --home "${qos_home}" onboard --wizard; then
+      warn "Model onboarding did not complete. Setup will continue; run qos model onboard later."
+    fi
+  else
+    log "Model setup skipped. Run qos model onboard at any time."
+  fi
+fi
+
 if (( interactive )) && [[ -z "${agent_id}" ]]; then
   if ask_yes_no "Onboard an AI agent now?" "no"; then
     prompt_required "Agent ID (lowercase letters, digits, hyphens)"
@@ -1331,19 +1371,9 @@ write_launcher() {
 }
 
 write_launcher qos bin/qos-shell.js
-write_launcher qos-core bin/qos.js
-write_launcher qos-shell bin/qos-shell.js
-write_launcher qos-firmware bin/qos-firmware-demo.js
-write_launcher qos-agent bin/qos-agent-control.js
-write_launcher qos-agent-demo bin/qos-agent-demo.js
-write_launcher qos-agent-security-audit bin/qos-agent-security-audit.js
-write_launcher qos-agent-external-setup bin/qos-agent-external-setup.js
-write_launcher qos-model bin/qos-model.js
-write_launcher qos-profile bin/qos-profile.js
-write_launcher qos-policy bin/qos-policy.js
-write_launcher qos-wallet bin/qos-wallet.js
+retire_legacy_launchers
 
-log "Installed qOS commands in ${bin_directory}."
+log "Installed the single qOS command in ${bin_directory}."
 log "Profile: ${qos_home}"
 log "No asset transfer has been prepared, signed, or broadcast by setup."
 if [[ "${profile}" == "devnet" ]]; then
@@ -1355,6 +1385,7 @@ Start here:
   capa              show exactly what this profile can do
   stat              show its address and key-custody status
   wal status        verify the source wallet on Devnet
+  mod on             choose a local or commercial AI model
   ag on              onboard an agent with a guided wizard
   ag st              show the auto-started REST and MCP service
   fw off s 1000000  rehearse a transfer entirely offline
@@ -1373,6 +1404,7 @@ Start here:
   capa              show mainnet capabilities and accessible key custody
   stat              inspect signer and privacy status
   wal status        show the exact SOL and qOS-token funding requirements
+  mod on             choose a local or commercial AI model
   ag                 list managed agents and the required workflow
   ag on              onboard an agent after wallet blockers are resolved
   ag st              show the auto-started REST and MCP service
@@ -1393,6 +1425,7 @@ Start here:
   capa              confirm mainnet-external custody
   stat              inspect signer and privacy status
   wal status        show the exact SOL and qOS-token funding requirements
+  mod on             choose a local or commercial AI model
   ag                 list managed agents and the required workflow
   ag on              onboard an agent after wallet blockers are resolved
   ag st              show the auto-started REST and MCP service

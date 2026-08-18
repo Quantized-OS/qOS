@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static safety checks for the firmware starter; not cryptographic tests."""
 
+import json
 from pathlib import Path
 from typing import Tuple
 
@@ -388,10 +389,13 @@ def main() -> None:
     require(
         "bin/qos-model.js",
         (
-            "BYOK control",
+            "model onboarding and BYOK control",
+            "Choose a model provider",
+            "qwen2.5:3b",
             "--api-key-file",
             "--allow-custom-endpoint",
             "configureModelProvider",
+            "setDefaultModelProvider",
             "rotateModelProviderCredential",
             "removeModelProvider",
         ),
@@ -480,9 +484,8 @@ def main() -> None:
             "--install-toolchains",
             "make check",
             "write_launcher qos bin/qos-shell.js",
-            "write_launcher qos-agent bin/qos-agent-control.js",
-            "write_launcher qos-policy bin/qos-policy.js",
-            "write_launcher qos-wallet bin/qos-wallet.js",
+            "retire_legacy_launchers",
+            "Configure an AI model now?",
             "uninstall_launchers",
             "unlink --",
             "FULL qOS PURGE",
@@ -490,6 +493,19 @@ def main() -> None:
             "No asset transfer has been prepared, signed, or broadcast by setup",
         ),
     )
+    forbid(
+        "setup.sh",
+        (
+            "write_launcher qos-core",
+            "write_launcher qos-shell",
+            "write_launcher qos-agent",
+            "write_launcher qos-model",
+            "write_launcher qos-policy",
+            "write_launcher qos-wallet",
+        ),
+    )
+    package = json.loads((ROOT / "package.json").read_text())
+    assert package["bin"] == {"qos": "./bin/qos-shell.js"}, "package.json must expose only the qos command"
     require(
         "scripts/qos-install-state.js",
         (

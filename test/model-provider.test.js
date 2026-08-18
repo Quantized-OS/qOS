@@ -16,12 +16,15 @@ import test from "node:test";
 import { configuredModelAgentPlan } from "../src/agent.js";
 import {
   configureModelProvider,
+  getDefaultModelProvider,
   getModelProvider,
   listModelProviders,
+  loadModelProviderRegistry,
   loadModelProviderForRequest,
   modelProviderPaths,
   removeModelProvider,
   rotateModelProviderCredential,
+  setDefaultModelProvider,
 } from "../src/model-registry.js";
 import {
   createModelProviderProfile,
@@ -73,6 +76,7 @@ test("BYOK registry stores credentials separately and never returns or serialize
   });
   const paths = modelProviderPaths(home, "openai-prod");
   assert.equal(configured.credentialConfigured, true);
+  assert.equal(configured.default, true);
   assert.equal(JSON.stringify(configured).includes(apiKey), false);
   assert.equal(JSON.stringify(getModelProvider(home, "openai-prod")).includes("credentialSha256"), false);
   assert.equal(lstatSync(paths.credential).mode & 0o077, 0);
@@ -80,11 +84,41 @@ test("BYOK registry stores credentials separately and never returns or serialize
   assert.equal(lstatSync(paths.profile).mode & 0o077, 0);
   assert.equal(readFileSync(paths.registry, "utf8").includes(apiKey), false);
   assert.equal(listModelProviders(home).length, 1);
+  assert.equal(getDefaultModelProvider(home).defaultProfile, "openai-prod");
+  assert.equal(loadModelProviderForRequest(home).profile.id, "openai-prod");
 
   const removed = removeModelProvider(home, "openai-prod");
   assert.equal(removed.credentialRevoked, true);
   assert.equal(removed.credentialRemoved, true);
   assert.equal(listModelProviders(home).length, 0);
+});
+
+test("model defaults are explicit, switchable, and version-1 registries migrate safely", (t) => {
+  const { home } = fixture(t);
+  configureModelProvider(home, {
+    id: "ollama",
+    provider: "local",
+    model: "qwen2.5:3b",
+    endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+  });
+  configureModelProvider(home, {
+    id: "lm-studio",
+    provider: "local",
+    model: "local-model",
+    endpoint: "http://127.0.0.1:1234/v1/chat/completions",
+  });
+  assert.equal(getDefaultModelProvider(home).defaultProfile, "ollama");
+  assert.equal(getModelProvider(home, "lm-studio").default, false);
+  assert.equal(setDefaultModelProvider(home, "lm-studio").default, true);
+  assert.equal(loadModelProviderForRequest(home).profile.id, "lm-studio");
+
+  const paths = modelProviderPaths(home);
+  const current = JSON.parse(readFileSync(paths.registry, "utf8"));
+  writeFileSync(paths.registry, `${JSON.stringify({ version: 1, profiles: current.profiles }, null, 2)}\n`, { mode: 0o600 });
+  assert.equal(loadModelProviderRegistry(home).defaultProfile, null);
+  assert.throws(() => loadModelProviderForRequest(home), { code: "MODEL_PROFILE_SELECTION_REQUIRED" });
+  assert.equal(setDefaultModelProvider(home, "ollama").default, true);
+  assert.equal(JSON.parse(readFileSync(paths.registry, "utf8")).version, 2);
 });
 
 test("provider profiles pin fixed endpoints and require acknowledgement for custom destinations", () => {

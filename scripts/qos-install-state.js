@@ -27,7 +27,7 @@ const MANAGED_MARKER = "# qOS managed launcher";
 const MANAGED_LAUNCHERS = [
   "qos", "qos-core", "qos-shell", "qos-firmware", "qos-agent",
   "qos-agent-demo", "qos-agent-security-audit", "qos-agent-external-setup",
-  "qos-profile", "qos-policy", "qos-wallet",
+  "qos-model", "qos-profile", "qos-policy", "qos-wallet",
 ];
 
 function parseArgs(argv) {

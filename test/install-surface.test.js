@@ -196,12 +196,9 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
   assert.equal(existsSync(join(profileHome, "runtime.json")), true);
   assert.equal(existsSync(join(profileHome, "api-token")), true);
   assert.equal(existsSync(join(installBin, "qos")), true);
-  assert.equal(existsSync(join(installBin, "qos-core")), true);
-  assert.equal(existsSync(join(installBin, "qos-shell")), true);
-  assert.equal(existsSync(join(installBin, "qos-agent")), true);
-  assert.equal(existsSync(join(installBin, "qos-model")), true);
-  assert.equal(existsSync(join(installBin, "qos-policy")), true);
-  assert.equal(existsSync(join(installBin, "qos-wallet")), true);
+  for (const legacy of ["qos-core", "qos-shell", "qos-agent", "qos-model", "qos-policy", "qos-wallet"]) {
+    assert.equal(existsSync(join(installBin, legacy)), false, `${legacy} must not be installed`);
+  }
   assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "token")), true);
   assert.equal(existsSync(join(profileHome, "agents", "setup-bot", "skills", "SKILL.md")), true);
   const signerBefore = readFileSync(join(profileHome, "signer.pem"));
@@ -274,14 +271,14 @@ test("setup install works repeatedly and uninstall purges all registered qOS art
   assert.equal(readFileSync(join(outside, "keep"), "utf8"), "preserved\n");
   assert.match(uninstall.stdout, /Full qOS purge complete/);
 
-  const refusedReinstall = spawnSync("bash", installArgs, {
+  const cleanReinstall = spawnSync("bash", installArgs, {
     cwd: ROOT,
     encoding: "utf8",
     env: installEnvironment,
   });
-  assert.equal(refusedReinstall.status, 1);
-  assert.match(refusedReinstall.stderr, /Refusing to replace an unmanaged command/);
-  assert.equal(existsSync(join(installBin, "qos")), false);
+  assert.equal(cleanReinstall.status, 0, cleanReinstall.stderr);
+  assert.match(cleanReinstall.stderr, /Preserved unmanaged legacy command/);
+  assert.equal(existsSync(join(installBin, "qos")), true);
   assert.equal(readFileSync(join(installBin, "qos-core"), "utf8"), unmanagedCore);
 });
 
@@ -342,7 +339,7 @@ test("setup defaults to a public-only mainnet external-signer profile", (t) => {
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: `1\n${publicKey}\n${destination}\n${externalSigner}\nyes\nno\n`,
+    input: `1\n${publicKey}\n${destination}\n${externalSigner}\nyes\nno\nno\n`,
     env: environment,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -452,7 +449,7 @@ test("setup --insecure and the default generated-key choice require the same war
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    input: `2\n${destination}\nyes\nyes\nmainnet-bot\nMainnet bot\nyes\n1000\nyes\n`,
+    input: `2\n${destination}\nyes\nyes\n\n\n\n\nyes\nyes\nmainnet-bot\nMainnet bot\nyes\n1000\nyes\n`,
     env: environment,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -470,6 +467,10 @@ test("setup --insecure and the default generated-key choice require the same war
   assert.equal(installedAgent.id, "mainnet-bot");
   assert.equal(installedAgent.asset, "qos-token");
   assert.equal(existsSync(join(profileHome, "agents", "mainnet-bot", "token")), true);
+  const defaultModel = JSON.parse(readFileSync(join(profileHome, "model-providers", "registry.json"), "utf8"));
+  assert.equal(defaultModel.defaultProfile, "local");
+  assert.equal(defaultModel.profiles[0].model, "qwen2.5:3b");
+  assert.equal(defaultModel.profiles[0].endpoint, "http://127.0.0.1:11434/v1/chat/completions");
 
   const runtime = JSON.parse(readFileSync(join(profileHome, "runtime.json"), "utf8"));
   assert.equal(runtime.profile, "mainnet-insecure");

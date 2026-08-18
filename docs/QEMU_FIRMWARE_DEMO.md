@@ -53,8 +53,8 @@ infrastructure must additionally pin and verify the Rust toolchain and
 dependency source artifacts. The demo uses an isolated build-local Cargo home
 so user-level Cargo configuration, wrappers, and credentials are not inherited.
 
-Run `node bin/qos-firmware-demo.js --help` for the complete command-line
-surface. The repository wrapper also supports a build-only path that does not
+Run `qos --help` for the complete installed command surface. The repository
+wrapper also supports a build-only path that does not
 require QEMU when prerequisites are already installed:
 
 ```sh
@@ -67,7 +67,7 @@ Use the initialized `.qos-ephemeral-devnet` signer and its pinned destination. I
 not need funds for the offline rehearsal:
 
 ```sh
-node bin/qos-firmware-demo.js build
+qos firmware build
 ```
 
 This is a policy provisioning step. It reads the signer only to record its
@@ -87,7 +87,7 @@ The build requires exactly one allowlisted destination. If `QOS_HOME` or
 ## Rehearse without broadcasting
 
 ```sh
-node bin/qos-firmware-demo.js run --offline --lamports 1000000
+qos firmware offline sol 1000000
 ```
 
 Expected firmware portion:
@@ -116,8 +116,8 @@ host and guest mailbox buffers after firmware imports it.
 Fund the signer, then run without either mode flag:
 
 ```sh
-node bin/qos.js balance
-node bin/qos-firmware-demo.js run --lamports 1000000
+qos balance
+qos firmware live sol 1000000
 ```
 
 This fetches a live blockhash and slot, calculates the fee, checks that the
@@ -131,13 +131,13 @@ available lamports.
 Check that the firmware signer still has Devnet SOL:
 
 ```sh
-node bin/qos.js balance
+qos balance
 ```
 
 Then run the live demonstration:
 
 ```sh
-node bin/qos-firmware-demo.js run --lamports 1000000 --broadcast
+qos firmware broadcast sol 1000000 --confirm-live
 ```
 
 The host will refuse to relay if the RPC genesis, ELF measurement, signer,
@@ -151,11 +151,11 @@ Create a separate disposable software-key demo home. Do not reuse the external
 mainnet custody home described in [`SANDBOX.md`](SANDBOX.md):
 
 ```sh
-node bin/qos.js init --home .qos-qemu-mainnet-demo --cluster mainnet-beta \
-  --destination YOUR_DEMO_DESTINATION
-node bin/qos-firmware-demo.js build --home .qos-qemu-mainnet-demo
-node bin/qos-firmware-demo.js run --home .qos-qemu-mainnet-demo \
-  --asset token --amount 1000000 --offline
+./setup.sh install --insecure --accept-insecure-risk \
+  --destination YOUR_DEMO_DESTINATION --home .qos-qemu-mainnet-demo \
+  --offline --no-shell
+qos --home .qos-qemu-mainnet-demo firmware build
+qos --home .qos-qemu-mainnet-demo firmware offline token 1000000
 ```
 
 The offline token rehearsal verifies the firmware's pinned mint, Token-2022
