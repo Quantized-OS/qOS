@@ -142,6 +142,28 @@ policy operations are in
 policy-gated transfers, not DEX swaps; `trade` fails closed until a reviewed
 venue template exists.
 
+## Separate qOS Cloud project
+
+This repository is only the qOS firmware, restricted shell, self-hosted setup,
+model/agent framework, and policy signer. It does not contain the managed
+website, Phantom account service, customer wallets, orchestration backend,
+hourly metering, market-price feed, or billing ledger.
+
+Those components live in the independent
+[`Quantized-OS/qOS-Cloud`](https://github.com/Quantized-OS/qOS-Cloud)
+repository. qOS exports the versioned `qos-solana-sandbox/platform-sdk`
+interface that an installed Cloud release may consume. The Cloud project
+remains independently installable and versioned; it never belongs under this
+source tree.
+
+The supported integration contract is documented in
+[`docs/PLATFORM_SDK.md`](docs/PLATFORM_SDK.md).
+
+Self-hosted installation remains unchanged on Linux, macOS, and Windows and has
+no managed runtime charge. The qOS core still enforces the atomic settlement
+template used by Cloud—99% to the pinned treasury and a cumulative 1%
+Token-2022 burn—without owning the Cloud business logic or service.
+
 ## Why qOS
 
 Crypto traders need more than faster bots. They need machines that can prove what they booted, protect signing authority if user space is compromised, and reject trades that violate policy.

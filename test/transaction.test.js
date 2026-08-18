@@ -4,9 +4,11 @@ import { generateKeyPairSync, verify } from "node:crypto";
 import { encodeBase58 } from "../src/base58.js";
 import { publicKeyObjectFromRaw, rawPublicKey } from "../src/key-store.js";
 import {
+  buildCloudSettlementMessage,
   buildNativeTransferMessage,
   buildTokenTransferCheckedMessage,
   encodeShortVec,
+  parseCloudSettlementMessage,
   parseNativeTransferMessage,
   parseTokenTransferCheckedMessage,
   signMessage,
@@ -123,4 +125,50 @@ test("Token-2022 parser rejects a changed instruction opcode", () => {
   const tampered = Buffer.from(message);
   tampered[tampered.length - 10] = 3;
   assert.throws(() => parseTokenTransferCheckedMessage(tampered), { code: "WRONG_INSTRUCTION" });
+});
+
+test("qOS Cloud settlement atomically transfers 99 percent and burns 1 percent", () => {
+  const payer = encodeBase58(Buffer.alloc(32, 31));
+  const sourceTokenAccount = encodeBase58(Buffer.alloc(32, 32));
+  const destinationTokenAccount = encodeBase58(Buffer.alloc(32, 33));
+  const recentBlockhash = encodeBase58(Buffer.alloc(32, 34));
+  const message = buildCloudSettlementMessage({
+    payer,
+    sourceTokenAccount,
+    destinationTokenAccount,
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    treasuryAmount: 990_000n,
+    burnAmount: 10_000n,
+    decimals: 6,
+    recentBlockhash,
+  });
+  assert.deepEqual(parseCloudSettlementMessage(message), {
+    payer,
+    sourceTokenAccount,
+    destinationTokenAccount,
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    recentBlockhash,
+    treasuryAmount: 990_000n,
+    burnAmount: 10_000n,
+    decimals: 6,
+  });
+});
+
+test("qOS Cloud settlement supports a deferred sub-base-unit burn remainder", () => {
+  const message = buildCloudSettlementMessage({
+    payer: encodeBase58(Buffer.alloc(32, 35)),
+    sourceTokenAccount: encodeBase58(Buffer.alloc(32, 36)),
+    destinationTokenAccount: encodeBase58(Buffer.alloc(32, 37)),
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    treasuryAmount: 99n,
+    burnAmount: 0n,
+    decimals: 6,
+    recentBlockhash: encodeBase58(Buffer.alloc(32, 38)),
+  });
+  const parsed = parseCloudSettlementMessage(message);
+  assert.equal(parsed.treasuryAmount, 99n);
+  assert.equal(parsed.burnAmount, 0n);
 });

@@ -4,6 +4,10 @@
   "private": true,
   "description": "Policy signer for native SOL and the pinned qOS Token-2022 mint",
   "type": "module",
+  "exports": {
+    "./platform-sdk": "./src/platform-sdk.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "qos": "./bin/qos-shell.js"
   },
@@ -14,7 +18,7 @@
     "security:agent": "node ./bin/qos-agent-security-audit.js",
     "setup:agent-external": "node ./bin/qos-agent-external-setup.js",
     "test": "node --test",
-    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --check ./bin/qos-agent-control.js && node --check ./bin/qos-agent-security-audit.js && node --check ./bin/qos-agent-external-setup.js && node --check ./bin/qos-model.js && node --check ./bin/qos-profile.js && node --check ./bin/qos-policy.js && node --check ./bin/qos-wallet.js && node --check ./bin/qos-shell.js && node --check ./scripts/qos-install-state.js && node --test"
+    "check": "python3 ./tests/static_checks.py && node --check ./bin/qos.js && node --check ./bin/qos-firmware-demo.js && node --check ./bin/qos-agent-demo.js && node --check ./bin/qos-agent-control.js && node --check ./bin/qos-agent-security-audit.js && node --check ./bin/qos-agent-external-setup.js && node --check ./bin/qos-model.js && node --check ./bin/qos-profile.js && node --check ./bin/qos-policy.js && node --check ./bin/qos-wallet.js && node --check ./bin/qos-shell.js && node --check ./src/platform-sdk.js && node --check ./scripts/qos-install-state.js && node --test"
   },
   "engines": {
     "node": ">=20"

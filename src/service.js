@@ -21,8 +21,10 @@ import { SolanaRpc } from "./rpc.js";
 import { EphemeralSession } from "./session.js";
 import {
   assembleSignedTransaction,
+  buildCloudSettlementMessage,
   buildNativeTransferMessage,
   buildTokenTransferCheckedMessage,
+  parseCloudSettlementMessage,
   parseNativeTransferMessage,
   parseTokenTransferCheckedMessage,
 } from "./transaction.js";
@@ -157,6 +159,27 @@ function parseTokenPrepareOptions(options, policy, session) {
   parseUnsigned(requestNonce, 128, "requestNonce");
   assertQos(Number.isInteger(strategyId), "INVALID_STRATEGY_ID", "strategyId must be an integer");
   return { destination, amount, maxFeeLamports, strategyId, requestNonce };
+}
+
+function parseCloudSettlementOptions(options, policy, session) {
+  assertQos(policy.tokenTransfer !== null, "TOKEN_TRANSFERS_DISABLED", "Policy does not enable qOS Cloud settlement");
+  assertQos(options && typeof options === "object" && !Array.isArray(options), "INVALID_PREPARE_REQUEST", "Cloud settlement request must be an object");
+  const allowed = new Set(["requestNonce", "destination", "grossAmount", "burnRemainderBefore", "maxFeeLamports", "strategyId"]);
+  assertQos(Object.keys(options).every((key) => allowed.has(key)), "INVALID_PREPARE_REQUEST", "Cloud settlement request contains unknown fields");
+  const destination = options.destination ?? policy.allowedDestinations[0];
+  const grossAmount = options.grossAmount;
+  const burnRemainderBefore = options.burnRemainderBefore ?? "0";
+  const maxFeeLamports = options.maxFeeLamports ?? policy.maxFeeLamports;
+  const strategyId = options.strategyId ?? policy.allowedStrategyIds[0];
+  const requestNonce = options.requestNonce ?? session.nextNonce();
+  const gross = parseUnsigned(grossAmount, 64, "grossAmount");
+  const remainder = parseUnsigned(burnRemainderBefore, 7, "burnRemainderBefore");
+  parseUnsigned(maxFeeLamports, 64, "maxFeeLamports");
+  parseUnsigned(requestNonce, 128, "requestNonce");
+  assertQos(gross > 0n, "ZERO_AMOUNT", "Cloud settlement amount must be greater than zero");
+  assertQos(remainder < 100n, "CLOUD_BURN_REMAINDER_INVALID", "Cloud burn remainder must be between 0 and 99 base units");
+  assertQos(Number.isInteger(strategyId), "INVALID_STRATEGY_ID", "strategyId must be an integer");
+  return { destination, grossAmount, burnRemainderBefore, maxFeeLamports, strategyId, requestNonce, gross, remainder };
 }
 
 export class QosService {
@@ -353,6 +376,61 @@ export class QosService {
     return intent;
   }
 
+  async prepareCloudSettlementIntent(options = {}) {
+    const parsed = parseCloudSettlementOptions(options, this.policy, this.session);
+    const source = this.tokenAddresses(this.publicKey).tokenAccount;
+    const destinationTokenAccount = this.tokenAddresses(parsed.destination).tokenAccount;
+    assertQos(source !== destinationTokenAccount, "DUPLICATE_TOKEN_ACCOUNT", "Cloud settlement destination must differ from the billing token account");
+    const [genesis, blockhashResult, currentSlot] = await Promise.all([
+      this.assertCluster(),
+      this.rpc.getLatestBlockhash(),
+      this.rpc.getSlot(),
+    ]);
+    assertQos(typeof blockhashResult?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid latest blockhash");
+    const slot = parseRpcSlot(currentSlot);
+    const burnNumerator = parsed.remainder + parsed.gross;
+    const burnAmount = burnNumerator / 100n;
+    const treasuryAmount = parsed.gross - burnAmount;
+    const intent = {
+      version: 3,
+      requestNonce: parsed.requestNonce,
+      clusterGenesis: genesis,
+      venueId: this.policy.venueId,
+      marketId: this.policy.marketId,
+      side: "SETTLE",
+      mint: this.policy.tokenTransfer.mint,
+      grossAmount: parsed.gross.toString(),
+      treasuryAmount: treasuryAmount.toString(),
+      burnAmount: burnAmount.toString(),
+      burnBasisPoints: 100,
+      burnRemainderBefore: parsed.remainder.toString(),
+      burnRemainderAfter: (burnNumerator % 100n).toString(),
+      maxFeeLamports: parsed.maxFeeLamports,
+      maxCuPrice: "0",
+      maxRelayTip: "0",
+      destination: parsed.destination,
+      sourceTokenAccount: source,
+      destinationTokenAccount,
+      tokenProgram: this.policy.tokenTransfer.tokenProgram,
+      decimals: this.policy.tokenTransfer.decimals,
+      recentBlockhash: blockhashResult.value.blockhash,
+      expiresAtSlot: (slot + BigInt(this.policy.maxIntentTtlSlots)).toString(),
+      strategyId: parsed.strategyId,
+      operatorApproval: null,
+    };
+    const values = validateIntent(intent, this.policy, currentSlot);
+    await verifyTokenTransferAccounts({
+      rpc: this.rpc,
+      tokenPolicy: this.policy.tokenTransfer,
+      sourceOwner: this.publicKey,
+      destinationOwner: intent.destination,
+      sourceTokenAccount: intent.sourceTokenAccount,
+      destinationTokenAccount: intent.destinationTokenAccount,
+      amount: values.grossAmount,
+    });
+    return intent;
+  }
+
   async submitIntent(request) {
     const { intent, privacyProof } = unwrapProofRequest(request);
     const [genesis, currentSlot] = await Promise.all([
@@ -393,18 +471,34 @@ export class QosService {
         destinationTokenAccount: intent.destinationTokenAccount,
         amount: values.amount,
       });
-      message = buildTokenTransferCheckedMessage({
-        payer: this.publicKey,
-        sourceTokenAccount: intent.sourceTokenAccount,
-        destinationTokenAccount: intent.destinationTokenAccount,
-        mint: intent.mint,
-        tokenProgram: intent.tokenProgram,
-        amount: values.amount,
-        decimals: intent.decimals,
-        recentBlockhash: intent.recentBlockhash,
-      });
-      const parsedMessage = parseTokenTransferCheckedMessage(message);
-      assertQos(parsedMessage.payer === this.publicKey && parsedMessage.sourceTokenAccount === intent.sourceTokenAccount && parsedMessage.destinationTokenAccount === intent.destinationTokenAccount && parsedMessage.mint === intent.mint && parsedMessage.tokenProgram === intent.tokenProgram && parsedMessage.amount === values.amount && parsedMessage.decimals === intent.decimals, "TEMPLATE_SELF_CHECK_FAILED", "Constructed token message did not match the authorized intent");
+      if (values.kind === "cloud-settlement") {
+        message = buildCloudSettlementMessage({
+          payer: this.publicKey,
+          sourceTokenAccount: intent.sourceTokenAccount,
+          destinationTokenAccount: intent.destinationTokenAccount,
+          mint: intent.mint,
+          tokenProgram: intent.tokenProgram,
+          treasuryAmount: values.treasuryAmount,
+          burnAmount: values.burnAmount,
+          decimals: intent.decimals,
+          recentBlockhash: intent.recentBlockhash,
+        });
+        const parsedMessage = parseCloudSettlementMessage(message);
+        assertQos(parsedMessage.payer === this.publicKey && parsedMessage.sourceTokenAccount === intent.sourceTokenAccount && parsedMessage.destinationTokenAccount === intent.destinationTokenAccount && parsedMessage.mint === intent.mint && parsedMessage.tokenProgram === intent.tokenProgram && parsedMessage.treasuryAmount === values.treasuryAmount && parsedMessage.burnAmount === values.burnAmount && parsedMessage.decimals === intent.decimals, "TEMPLATE_SELF_CHECK_FAILED", "Constructed cloud settlement did not match the authorized intent");
+      } else {
+        message = buildTokenTransferCheckedMessage({
+          payer: this.publicKey,
+          sourceTokenAccount: intent.sourceTokenAccount,
+          destinationTokenAccount: intent.destinationTokenAccount,
+          mint: intent.mint,
+          tokenProgram: intent.tokenProgram,
+          amount: values.amount,
+          decimals: intent.decimals,
+          recentBlockhash: intent.recentBlockhash,
+        });
+        const parsedMessage = parseTokenTransferCheckedMessage(message);
+        assertQos(parsedMessage.payer === this.publicKey && parsedMessage.sourceTokenAccount === intent.sourceTokenAccount && parsedMessage.destinationTokenAccount === intent.destinationTokenAccount && parsedMessage.mint === intent.mint && parsedMessage.tokenProgram === intent.tokenProgram && parsedMessage.amount === values.amount && parsedMessage.decimals === intent.decimals, "TEMPLATE_SELF_CHECK_FAILED", "Constructed token message did not match the authorized intent");
+      }
     }
     const messageBase64 = message.toString("base64");
     const fee = await this.rpc.getFeeForMessage(messageBase64);
@@ -450,7 +544,17 @@ export class QosService {
       signer: signed.publicKey,
       destination: intent.destination,
       asset: values.kind,
-      ...(values.kind === "native" ? { lamports: intent.inputAmount } : {
+      ...(values.kind === "native" ? { lamports: intent.inputAmount } : values.kind === "cloud-settlement" ? {
+        mint: intent.mint,
+        grossAmount: intent.grossAmount,
+        treasuryAmount: intent.treasuryAmount,
+        burnAmount: intent.burnAmount,
+        burnBasisPoints: intent.burnBasisPoints,
+        burnRemainderAfter: intent.burnRemainderAfter,
+        decimals: intent.decimals,
+        sourceTokenAccount: intent.sourceTokenAccount,
+        destinationTokenAccount: intent.destinationTokenAccount,
+      } : {
         mint: intent.mint,
         amount: intent.amount,
         decimals: intent.decimals,

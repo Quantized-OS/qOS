@@ -208,8 +208,8 @@ unusable.
 
 ## Cloud-service boundary
 
-This release implements local and commercial BYOK proposal providers only. It
-does not implement a hosted qOS API, shared cloud key custody, usage metering,
-or `$qos` payment. A future cloud service should keep tenant credentials in a
-managed secret store, isolate tenants and spend limits, perform server-side
-model calls, and expose only the existing typed qOS action boundary.
+This repository implements local and commercial BYOK proposal providers only.
+It does not contain a hosted qOS API, shared cloud key custody, usage metering,
+or qOS-token payment service. Those managed components belong to the separate
+`Quantized-OS/qOS-Cloud` project, which consumes the versioned qOS platform SDK
+and exposes only the existing typed qOS action boundary.

@@ -96,6 +96,63 @@ export function buildTokenTransferCheckedMessage({
   ]);
 }
 
+export function buildCloudSettlementMessage({
+  payer,
+  sourceTokenAccount,
+  destinationTokenAccount,
+  mint,
+  tokenProgram,
+  treasuryAmount,
+  burnAmount,
+  decimals,
+  recentBlockhash,
+}) {
+  assertQos(tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "qOS Cloud settlement requires the pinned Token-2022 program");
+  assertQos(Number.isInteger(decimals) && decimals >= 0 && decimals <= 255, "INVALID_TOKEN_DECIMALS", "Token decimals must fit in u8");
+  const treasury = BigInt(treasuryAmount);
+  const burn = BigInt(burnAmount);
+  assertQos(treasury >= 0n && burn >= 0n && treasury + burn > 0n, "ZERO_AMOUNT", "Cloud settlement must transfer or burn at least one base unit");
+  const accounts = [
+    decodeBase58(payer, 32),
+    decodeBase58(sourceTokenAccount, 32),
+    decodeBase58(destinationTokenAccount, 32),
+    decodeBase58(mint, 32),
+    decodeBase58(tokenProgram, 32),
+  ];
+  assertQos(new Set(accounts.map((account) => account.toString("hex"))).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Cloud settlement requires five distinct accounts");
+  const instructions = [];
+  if (treasury > 0n) {
+    const transferData = Buffer.concat([Buffer.from([12]), u64le(treasury), Buffer.from([decimals])]);
+    instructions.push(Buffer.concat([
+      Buffer.from([4]),
+      encodeShortVec(4),
+      Buffer.from([1, 3, 2, 0]),
+      encodeShortVec(transferData.length),
+      transferData,
+    ]));
+  }
+  if (burn > 0n) {
+    const burnData = Buffer.concat([Buffer.from([15]), u64le(burn), Buffer.from([decimals])]);
+    instructions.push(Buffer.concat([
+      Buffer.from([4]),
+      encodeShortVec(3),
+      Buffer.from([1, 3, 0]),
+      encodeShortVec(burnData.length),
+      burnData,
+    ]));
+  }
+  return Buffer.concat([
+    // Mint is writable because BurnChecked reduces total supply. Only the
+    // Token-2022 program is an unsigned read-only account.
+    Buffer.from([1, 0, 1]),
+    encodeShortVec(accounts.length),
+    ...accounts,
+    decodeBase58(recentBlockhash, 32),
+    encodeShortVec(instructions.length),
+    ...instructions,
+  ]);
+}
+
 export function signMessage(message, privateKey) {
   const publicKeyBytes = rawPublicKey(privateKey);
   let signature;
@@ -221,5 +278,55 @@ export function parseTokenTransferCheckedMessage(message) {
     recentBlockhash,
     amount: data.readBigUInt64LE(1),
     decimals: data[9],
+  };
+}
+
+export function parseCloudSettlementMessage(message) {
+  const reader = new Reader(message);
+  const header = [reader.byte(), reader.byte(), reader.byte()];
+  assertQos(header[0] === 1 && header[1] === 0 && header[2] === 1, "UNEXPECTED_MESSAGE_HEADER", "Cloud settlement header does not match the pinned template");
+  const accountCount = reader.shortVec();
+  assertQos(accountCount === 5, "UNEXPECTED_ACCOUNTS", "Cloud settlement requires exactly five accounts");
+  const accounts = Array.from({ length: accountCount }, () => encodeBase58(reader.bytes(32)));
+  assertQos(new Set(accounts).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Cloud settlement contains duplicate accounts");
+  const recentBlockhash = encodeBase58(reader.bytes(32));
+  const instructionCount = reader.shortVec();
+  assertQos(instructionCount === 1 || instructionCount === 2, "UNEXPECTED_INSTRUCTIONS", "Cloud settlement requires one or two pinned instructions");
+  let treasuryAmount = 0n;
+  let burnAmount = 0n;
+  let decimals;
+  for (let index = 0; index < instructionCount; index += 1) {
+    const programIndex = reader.byte();
+    const accountIndexCount = reader.shortVec();
+    const indexes = [...reader.bytes(accountIndexCount)];
+    const dataLength = reader.shortVec();
+    const data = reader.bytes(dataLength);
+    assertQos(programIndex === 4 && accounts[programIndex] === TOKEN_2022_PROGRAM_ID, "WRONG_PROGRAM", "Cloud settlement may invoke only the pinned Token-2022 program");
+    assertQos(data.length === 10, "WRONG_INSTRUCTION", "Cloud settlement instruction data is not canonical");
+    const amount = data.readBigUInt64LE(1);
+    assertQos(amount > 0n, "ZERO_AMOUNT", "Cloud settlement instructions must use positive amounts");
+    if (data[0] === 12) {
+      assertQos(treasuryAmount === 0n && index === 0 && accountIndexCount === 4 && indexes[0] === 1 && indexes[1] === 3 && indexes[2] === 2 && indexes[3] === 0, "WRONG_INSTRUCTION", "Cloud settlement TransferChecked accounts or ordering changed");
+      treasuryAmount = amount;
+    } else if (data[0] === 15) {
+      assertQos(burnAmount === 0n && accountIndexCount === 3 && indexes[0] === 1 && indexes[1] === 3 && indexes[2] === 0, "WRONG_INSTRUCTION", "Cloud settlement BurnChecked accounts changed");
+      burnAmount = amount;
+    } else {
+      assertQos(false, "WRONG_INSTRUCTION", "Cloud settlement permits only TransferChecked and BurnChecked");
+    }
+    assertQos(decimals === undefined || decimals === data[9], "INVALID_TOKEN_DECIMALS", "Cloud settlement instructions disagree on token decimals");
+    decimals = data[9];
+  }
+  assertQos(reader.offset === reader.buffer.length, "TRAILING_TRANSACTION_DATA", "Cloud settlement contains trailing bytes");
+  return {
+    payer: accounts[0],
+    sourceTokenAccount: accounts[1],
+    destinationTokenAccount: accounts[2],
+    mint: accounts[3],
+    tokenProgram: accounts[4],
+    recentBlockhash,
+    treasuryAmount,
+    burnAmount,
+    decimals,
   };
 }
