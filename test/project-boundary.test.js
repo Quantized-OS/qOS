@@ -23,4 +23,5 @@ test("qOS exports a versioned platform SDK without embedding the Cloud service",
   assert.equal(sdk.QOS_PLATFORM_SDK_VERSION, 1);
   assert.equal(typeof sdk.QosService, "function");
   assert.equal(typeof sdk.configureModelProvider, "function");
+  assert.equal(typeof sdk.changePolicyDestination, "function");
 });

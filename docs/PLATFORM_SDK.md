@@ -7,12 +7,18 @@ independent host services:
 import {
   QOS_PLATFORM_SDK_VERSION,
   QosService,
+  changePolicyDestination,
   configureModelProvider,
   ensureRuntimeProfile,
   initializeSandbox,
   onboardAgent,
 } from "qos-solana-sandbox/platform-sdk";
 ```
+
+`changePolicyDestination(home, "add" | "remove", publicKey)` is the validated,
+atomic SDK surface for services that need more than one reviewed token
+destination. It preserves the policy's non-empty allowlist and all locked
+transaction-template fields.
 
 The package export maps `qos-solana-sandbox/platform-sdk` to
 `src/platform-sdk.js`. Consumers must not import other `src/*` paths or assume a
