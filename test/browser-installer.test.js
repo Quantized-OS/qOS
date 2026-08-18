@@ -73,7 +73,7 @@ test("web release builder emits the front page and thin platform bootstraps", (t
   assert.match(homepage, /data-os="windows"/);
   assert.match(homepage, /wizard first asks whether to use your existing external key or generate a local key/);
   const manifest = JSON.parse(readFileSync(join(root, "RELEASE.json"), "utf8"));
-  assert.equal(manifest.version, "0.11.0");
+  assert.equal(manifest.version, "0.11.1");
   assert.equal(manifest.homepage, "index.html");
   assert.deepEqual(manifest.bootstraps, {
     linux: "install.sh",
@@ -100,14 +100,14 @@ test("GitHub release builder emits the exact verified installer assets", (t) => 
   assert.equal(createHash("sha256").update(archive).digest("hex"), checksum.slice(0, 64));
   const listing = spawnSync("tar", ["-tzf", join(root, "qos-source.tar.gz")], { encoding: "utf8" });
   assert.equal(listing.status, 0, listing.stderr);
-  assert.match(listing.stdout, /^qos-0\.11\.0\//m);
-  assert.match(listing.stdout, /^qos-0\.11\.0\/setup\.sh$/m);
-  assert.match(listing.stdout, /^qos-0\.11\.0\/web\/index\.html$/m);
-  assert.match(listing.stdout, /^qos-0\.11\.0\/web\/install-macos\.sh$/m);
-  assert.match(listing.stdout, /^qos-0\.11\.0\/web\/install-windows\.ps1$/m);
-  assert.doesNotMatch(listing.stdout, /^qos-0\.11\.0\/install\.sh$/m);
+  assert.match(listing.stdout, /^qos-0\.11\.1\//m);
+  assert.match(listing.stdout, /^qos-0\.11\.1\/setup\.sh$/m);
+  assert.match(listing.stdout, /^qos-0\.11\.1\/web\/index\.html$/m);
+  assert.match(listing.stdout, /^qos-0\.11\.1\/web\/install-macos\.sh$/m);
+  assert.match(listing.stdout, /^qos-0\.11\.1\/web\/install-windows\.ps1$/m);
+  assert.doesNotMatch(listing.stdout, /^qos-0\.11\.1\/install\.sh$/m);
   const manifest = JSON.parse(readFileSync(join(root, "RELEASE.json"), "utf8"));
-  assert.equal(manifest.version, "0.11.0");
+  assert.equal(manifest.version, "0.11.1");
   assert.equal(manifest.repository, "Quantized-OS/qOS");
   assert.equal(manifest.source_sha256, checksum.slice(0, 64));
 });

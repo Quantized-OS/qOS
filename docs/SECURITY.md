@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.11.0 adds strong
+qOS is a research firmware and policy-signer project. Version 0.11.1 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
@@ -80,6 +80,14 @@ same-account process can therefore spend the associated commercial API quota.
 Use provider-side key restrictions, spend limits, isolated service accounts,
 and secret-manager mounts for production. BYOK isolation does not replace the
 external signer boundary and does not grant a model direct transaction access.
+
+Unattended setup accepts `--model-api-key` for automation compatibility and
+copies the value into the same owner-only mode-`0600` credential file without
+printing it or placing it in child arguments or environments. The setup process's original
+command line can still be visible in shell history, `/proc`, process monitors,
+CI logs, or orchestration metadata. Prefer `--model-api-key-file` or
+`--model-api-key-env`; treat any literal command-line key as potentially
+exposed and rotate it if the host or automation system records arguments.
 
 Mode-0600 files separate Unix accounts, not processes sharing one account. An
 agent running as the qOS user can read other same-user credentials and any

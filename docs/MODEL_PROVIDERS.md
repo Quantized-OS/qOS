@@ -80,6 +80,46 @@ separate mode-0600 profile file; provider metadata stores only a SHA-256
 verifier. Keys are never printed or exposed through the managed REST/MCP
 listener.
 
+## Configure a model during unattended setup
+
+The installer can create the default model profile in the same prompt-free
+invocation that provisions custody and an agent:
+
+```sh
+bash setup.sh install \
+  --unattended \
+  --insecure --accept-insecure-risk \
+  --destination YOUR_ALLOWLISTED_DESTINATION \
+  --model-provider openai \
+  --model-profile openai \
+  --model YOUR_OPENAI_MODEL \
+  --model-api-key-env OPENAI_API_KEY \
+  --agent-id test-agent \
+  --agent-approval ask \
+  --agent-max-amount 1000000000
+```
+
+Use exactly one credential source for a commercial provider:
+
+| Option | Behavior |
+| --- | --- |
+| `--model-api-key-file PATH` | Imports an existing owner-only file; recommended for managed hosts. |
+| `--model-api-key-env NAME` | Reads an exported variable, unsets it inside setup, and never places the value in child arguments or environments. |
+| `--model-api-key KEY` | Accepts the literal value and saves it, but the value can be exposed by shell history and process listings. |
+
+All three forms end at the same internal
+`PROFILE/model-providers/ID/api-key` file with mode `0600`; the registry stores
+only its verifier. The literal form exists for automation compatibility, not
+because command-line arguments are an appropriate secret store. Setup never
+prints the key. Repeating identical model settings refreshes the supplied
+credential and keeps that profile as the default. Changing its provider, model,
+or endpoint requires explicitly removing the old model profile first.
+
+For a local default, `--model-provider local` is sufficient. qOS fills in the
+`local` profile ID, `qwen2.5:3b`, and the loopback Ollama endpoint and rejects
+all API-key options. Azure and custom providers additionally require
+`--model-endpoint` and `--allow-custom-model-endpoint`.
+
 The guided wizard is recommended. The equivalent explicit commands are:
 
 ```sh

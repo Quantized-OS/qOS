@@ -1,6 +1,6 @@
 # Privacy, SNARKs, and agent-safe key custody
 
-qOS v0.11.0 separates possession of a signing capability from possession of the
+qOS v0.11.1 separates possession of a signing capability from possession of the
 private key. This distinction is the central rule for agent deployments: the
 agent may submit a typed request, but it should never receive, load, export, or
 serialize the Ed25519 key.

@@ -60,8 +60,9 @@ Configure options:
       --wizard                 Force guided onboarding with piped input
 
 API keys are copied into the selected qOS profile as owner-only files and are
-never printed, stored in provider metadata, added to prompts, or passed on the
-command line. Local profiles do not accept an API key. Built-in commercial
+never printed, stored in provider metadata, or added to prompts. This command
+accepts only an API-key file path, never the key value. Local profiles do not
+accept an API key. Built-in commercial
 providers use fixed HTTPS endpoints; custom endpoints require acknowledgement.
 Guided onboarding defaults local models to Ollama at 127.0.0.1 with
 qwen2.5:3b. Commercial model IDs are entered explicitly because account access,

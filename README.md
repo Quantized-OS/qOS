@@ -80,6 +80,35 @@ installs dependencies or creates the key. This profile has the same implemented
 mainnet qOS transfer and agent capabilities as the external-signer profile; only
 the custody boundary changes. Programs running as the user can copy the key.
 
+For one prompt-free invocation that also configures a commercial model and the
+first scoped agent, pass every value explicitly:
+
+```sh
+bash setup.sh install \
+  --unattended \
+  --insecure \
+  --accept-insecure-risk \
+  --destination YOUR_ALLOWLISTED_DESTINATION \
+  --model-provider openai \
+  --model-profile openai \
+  --model YOUR_OPENAI_MODEL \
+  --model-api-key 'YOUR_OPENAI_API_KEY' \
+  --agent-id test-agent \
+  --agent-name 'Test agent' \
+  --agent-approval auto \
+  --agent-max-amount 1000000000 \
+  --accept-auto
+```
+
+`--unattended` suppresses every wizard and finishes without opening the shell;
+it does not bypass either risk acknowledgement. The literal key form is
+supported, copied into the profile's mode-`0600` credential file, and never
+printed. It can still be exposed by shell history or process inspection. Prefer
+`--model-api-key-env OPENAI_API_KEY` after exporting that variable, or
+`--model-api-key-file /owner-only/path`, on a real host. Re-running the same
+invocation verifies the model settings, refreshes the supplied model key, and
+preserves the qOS signing key and agent credential.
+
 If no reviewed adapter is available yet, the wizard stops before installing
 anything and prints the signer checklist. It is also available directly:
 
@@ -214,7 +243,7 @@ signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.11.0 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.11.1 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
@@ -315,7 +344,7 @@ with production-grade firmware or non-exportable custody.
 ## Build the research release media
 
 After the host checks pass, `make release-media` creates a deterministic source
-archive, checksums, and `release-artifacts/qos-0.11.0-research-media.iso`. The
+archive, checksums, and `release-artifacts/qos-0.11.1-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
 production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.
@@ -409,7 +438,7 @@ qos agent demo dry 1000000
 
 To use a local or commercial account, run the guided model onboarding. It
 defaults to local Ollama-compatible inference; selecting a commercial provider
-imports its key from an owner-only file (the key itself is never a CLI value):
+imports its key from an owner-only file without placing the key in a CLI value:
 
 ```sh
 qos model onboard

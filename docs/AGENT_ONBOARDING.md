@@ -1,6 +1,6 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.11.0 gives every automated agent a separate, revocable credential and a
+qOS 0.11.1 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
@@ -61,7 +61,7 @@ For unattended automatic mode, add both `--approval auto` and
 `--agent-*` flags:
 
 ```sh
-./setup.sh install --insecure --accept-insecure-risk \
+./setup.sh install --unattended --insecure --accept-insecure-risk \
   --destination YOUR_DESTINATION \
   --agent-id treasury-bot \
   --agent-approval ask \
