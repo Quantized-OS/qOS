@@ -11,6 +11,7 @@ export { assertQos, publicError, QosError } from "./errors.js";
 export { publicKeyAddress, publicKeyObjectFromRaw } from "./key-store.js";
 export { modelProviderCatalog } from "./model-provider.js";
 export { configureModelProvider } from "./model-registry.js";
+export { changePolicyDestination } from "./policy-store.js";
 export { readPrivateJson, writePrivateJsonAtomic } from "./private-json.js";
 export { ensureRuntimeProfile } from "./runtime-profile.js";
 export { readSecureFile } from "./secure-file.js";
