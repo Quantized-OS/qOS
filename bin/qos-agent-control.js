@@ -30,7 +30,7 @@ const VALUE_OPTIONS = new Set([
   "--destination", "--strategy-id", "--host", "--port", "--url",
   "--instance",
 ]);
-const FLAG_OPTIONS = new Set(["--json", "--accept-auto", "--yes", "--confirm-live", "--daemon-child", "--managed-proxy"]);
+const FLAG_OPTIONS = new Set(["--json", "--accept-auto", "--enable-dex", "--yes", "--confirm-live", "--daemon-child", "--managed-proxy"]);
 const OPTION_ALIASES = new Map([
   ["-H", "--home"], ["-j", "--json"], ["-I", "--id"], ["-N", "--name"],
   ["-A", "--approval"], ["-a", "--asset"], ["-M", "--max-amount"],
@@ -62,6 +62,7 @@ Onboard options:
   -D, --destination PUBKEY    Must already be in the qOS policy
   -S, --strategy-id ID        Must already be in the qOS policy
       --accept-auto           Required for unattended automatic execution
+      --enable-dex            Permit this agent to request configured swaps
       --yes                   Accept the final onboarding summary
 
 The onboarding wizard runs when required values are omitted in a terminal.
@@ -169,6 +170,7 @@ async function onboardingOptions(options) {
     destination: options.values.get("--destination"),
     strategyId: parseStrategy(options.values.get("--strategy-id")),
     acceptAuto: options.flags.has("--accept-auto"),
+    enableDexTrading: options.flags.has("--enable-dex"),
   };
   if (result.asset !== undefined) assertAssetEnabled(result.asset, enabledAssets);
   const missing = result.id === undefined || result.maxAmount === undefined;
@@ -386,7 +388,7 @@ async function main() {
   const [command = "list", ...rest] = options.positional;
   let result;
   if (command === "onboard") {
-    assertOptionSurface(options, ["--id", "--name", "--approval", "--asset", "--max-amount", "--destination", "--strategy-id"], ["--accept-auto", "--yes"]);
+    assertOptionSurface(options, ["--id", "--name", "--approval", "--asset", "--max-amount", "--destination", "--strategy-id"], ["--accept-auto", "--enable-dex", "--yes"]);
     if (rest.length) throw new QosError("INVALID_ARGUMENT", "agent onboard accepts options, not positional values");
     const agent = onboardAgent(options.home, await onboardingOptions(options));
     const listener = process.env.QOS_AGENT_AUTOSERVE === "0"

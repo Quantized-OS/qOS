@@ -1,20 +1,24 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.11.3 gives every automated agent a separate, revocable credential and a
+qOS 0.12.0 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
 
-This release supports two reviewed action templates:
+This release supports three reviewed action surfaces:
 
 | Profile | Agent action | Onchain instruction |
 | --- | --- | --- |
 | Devnet | `transfer_sol` | One native System Program transfer |
 | Mainnet | `transfer_qos` | One pinned qOS Token-2022 `TransferChecked` |
+| Mainnet, when configured | `swap` | One manual ExactIn Jupiter order constrained by the profile DEX policy |
 
-There is no reviewed DEX venue or swap template. Calling these transfers
-“arbitrary crypto trading” would be inaccurate. Unknown actions, programs,
-mints, accounts, fields, and destinations fail before signing.
+DEX access is opt-in per profile and per agent. A swap request cannot select an
+endpoint or an arbitrary transaction; it supplies only the allowlisted input
+mint, output mint, and base-unit amount. qOS checks the configured pair,
+per-swap and daily budgets, slippage, route and network fees, cooldown, daily
+count, signer set, router, and confirmation result before updating persistent
+trading state.
 
 ## Guided onboarding in qOS
 
@@ -57,7 +61,8 @@ qos agent onboard \
 ```
 
 For unattended automatic mode, add both `--approval auto` and
-`--accept-auto`. Setup can create the first agent with the equivalent
+`--accept-auto`. After configuring DEX policy, add `--enable-dex` to expose the
+swap tool to that agent. Setup can create the first agent with the equivalent
 `--agent-*` flags:
 
 ```sh
@@ -79,6 +84,7 @@ PROFILE/agents/AGENT_ID/
     SKILL.md
     capabilities.md
     transfer.md
+    swap.md
     mcp.md
     approval.md
     manifest.json
@@ -91,8 +97,8 @@ qos> ag skills treasury-bot
 ```
 
 The skill pack states the exact MCP and REST endpoints, action, destination, strategy,
-amount encoding, approval mode, and token-file path. It explicitly forbids
-arbitrary signing and DEX claims. The token is hashed in the registry and never
+amount encoding, DEX pair and limits, approval mode, and token-file path. It
+explicitly forbids arbitrary signing. The token is hashed in the registry and never
 stored in a manifest or printed by qOS.
 
 File mode `0600` prevents access by other Unix accounts. It does not isolate
@@ -183,3 +189,13 @@ to `POST http://127.0.0.1:8790/v1/actions` with its own Bearer token. JSON is
 correct for an agent protocol; the qOS operator CLI renders the resulting state
 in readable text by default. Use `qos --json ...` for machine-readable operator
 output; no separate agent executable is installed.
+
+When DEX is enabled for the agent, call `qos_request_swap` with exactly:
+
+```json
+{"inputMint":"ALLOWLISTED_INPUT_MINT","outputMint":"ALLOWLISTED_OUTPUT_MINT","amount":"BASE_UNITS"}
+```
+
+`ask` mode holds this request for approval. `auto` mode executes it immediately
+only while the listener was explicitly started live and every current firmware
+limit still passes.

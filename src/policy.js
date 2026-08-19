@@ -131,6 +131,7 @@ const POLICY_KEYS = [
   "inputMint",
   "outputMint",
   "tokenTransfer",
+  "dexTrading",
   "allowedDestinations",
   "allowedStrategyIds",
   "maxTransferLamports",
@@ -144,6 +145,8 @@ const POLICY_KEYS = [
   "confirmationTimeoutMs",
 ];
 
+const LEGACY_POLICY_KEYS = POLICY_KEYS.filter((key) => key !== "dexTrading");
+
 const TOKEN_POLICY_KEYS = [
   "mint",
   "tokenProgram",
@@ -151,6 +154,54 @@ const TOKEN_POLICY_KEYS = [
   "maxTransferAmount",
   "allowedMintExtensions",
 ];
+
+const DEX_POLICY_KEYS = [
+  "provider",
+  "endpoint",
+  "receiver",
+  "allowedPairs",
+  "maxSlippageBps",
+  "maxRouteFeeBps",
+  "maxFeeLamports",
+  "minIntervalSeconds",
+  "maxSwapsPerDay",
+];
+
+const LEGACY_DEX_POLICY_KEYS = DEX_POLICY_KEYS.filter((key) => key !== "receiver");
+
+const DEX_PAIR_KEYS = ["inputMint", "outputMint", "maxInputAmount", "dailyInputLimit"];
+
+export function validateDexTradingPolicy(value) {
+  if (value === null) return null;
+  if (value && typeof value === "object" && !Array.isArray(value) && hasExactKeys(value, LEGACY_DEX_POLICY_KEYS)) {
+    value = { ...value, receiver: null };
+  }
+  assertQos(value && typeof value === "object" && !Array.isArray(value) && hasExactKeys(value, DEX_POLICY_KEYS), "INVALID_DEX_POLICY", "DEX policy has missing or unknown fields");
+  assertQos(value.provider === "jupiter", "INVALID_DEX_PROVIDER", "Only the reviewed Jupiter provider is supported");
+  assertQos(value.endpoint === "https://api.jup.ag/swap/v2", "INVALID_DEX_ENDPOINT", "Jupiter swaps must use the pinned HTTPS endpoint");
+  assertQos(value.receiver === null || typeof value.receiver === "string", "INVALID_DEX_RECEIVER", "DEX receiver must be null or a Solana public key");
+  if (value.receiver !== null) decodeBase58(value.receiver, 32);
+  assertQos(Array.isArray(value.allowedPairs) && value.allowedPairs.length >= 1 && value.allowedPairs.length <= 16, "INVALID_DEX_PAIR_ALLOWLIST", "DEX policy must allow between one and sixteen mint pairs");
+  const pairs = value.allowedPairs.map((pair) => {
+    assertQos(pair && typeof pair === "object" && !Array.isArray(pair) && hasExactKeys(pair, DEX_PAIR_KEYS), "INVALID_DEX_PAIR", "DEX pair has missing or unknown fields");
+    decodeBase58(pair.inputMint, 32);
+    decodeBase58(pair.outputMint, 32);
+    assertQos(pair.inputMint !== pair.outputMint, "INVALID_DEX_PAIR", "DEX input and output mints must differ");
+    const maxInputAmount = parseUnsigned(pair.maxInputAmount, 64, "dexTrading.allowedPairs.maxInputAmount");
+    const dailyInputLimit = parseUnsigned(pair.dailyInputLimit, 64, "dexTrading.allowedPairs.dailyInputLimit");
+    assertQos(maxInputAmount > 0n && dailyInputLimit >= maxInputAmount, "INVALID_DEX_LIMIT", "DEX daily input limit must be at least the maximum input per swap");
+    return Object.freeze({ ...pair });
+  });
+  const pairIds = pairs.map((pair) => `${pair.inputMint}>${pair.outputMint}`);
+  assertQos(new Set(pairIds).size === pairIds.length, "DUPLICATE_DEX_PAIR", "DEX pair allowlist contains duplicates");
+  assertQos(Number.isInteger(value.maxSlippageBps) && value.maxSlippageBps >= 1 && value.maxSlippageBps <= 1_000, "INVALID_DEX_SLIPPAGE", "DEX slippage cap must be between 1 and 1000 basis points");
+  assertQos(Number.isInteger(value.maxRouteFeeBps) && value.maxRouteFeeBps >= 0 && value.maxRouteFeeBps <= 500, "INVALID_DEX_ROUTE_FEE", "DEX route fee cap must be between 0 and 500 basis points");
+  const maxFeeLamports = parseUnsigned(value.maxFeeLamports, 64, "dexTrading.maxFeeLamports");
+  assertQos(maxFeeLamports >= 5_000n && maxFeeLamports <= 10_000_000n, "INVALID_DEX_NETWORK_FEE", "DEX network and rent fee cap must be between 5000 and 10000000 lamports");
+  assertQos(Number.isInteger(value.minIntervalSeconds) && value.minIntervalSeconds >= 5 && value.minIntervalSeconds <= 86_400, "INVALID_DEX_INTERVAL", "DEX minimum interval must be between 5 seconds and one day");
+  assertQos(Number.isInteger(value.maxSwapsPerDay) && value.maxSwapsPerDay >= 1 && value.maxSwapsPerDay <= 1_000, "INVALID_DEX_DAILY_COUNT", "DEX daily swap count must be between 1 and 1000");
+  return Object.freeze({ ...value, allowedPairs: Object.freeze(pairs) });
+}
 
 export function parseUnsigned(text, bits, field) {
   assertQos(typeof text === "string" && /^(0|[1-9][0-9]*)$/.test(text), "INVALID_INTEGER", `${field} must be a canonical unsigned decimal string`);
@@ -182,8 +233,9 @@ export function parseRpcSlot(value, field = "currentSlot") {
 }
 
 export function validatePolicy(policy) {
+  if (policy?.version === 2 && hasExactKeys(policy, LEGACY_POLICY_KEYS)) policy = { ...policy, version: 3, dexTrading: null };
   assertQos(hasExactKeys(policy, POLICY_KEYS), "INVALID_POLICY_SHAPE", "Policy has missing or unknown fields");
-  assertQos(policy.version === 2, "UNSUPPORTED_POLICY", "Only policy version 2 is supported");
+  assertQos(policy.version === 3, "UNSUPPORTED_POLICY", "Only policy version 3 is supported");
   const genesisByCluster = { devnet: DEVNET_GENESIS_HASH, "mainnet-beta": MAINNET_GENESIS_HASH };
   assertQos(Object.hasOwn(genesisByCluster, policy.cluster), "UNSUPPORTED_CLUSTER", "Policy cluster must be devnet or mainnet-beta");
   assertQos(policy.clusterGenesis === genesisByCluster[policy.cluster], "WRONG_CLUSTER_POLICY", "Policy genesis hash does not match its Solana cluster");
@@ -210,6 +262,7 @@ export function validatePolicy(policy) {
       "The pinned qOS mint must use only metadata-pointer and token-metadata extensions",
     );
   }
+  policy.dexTrading = validateDexTradingPolicy(policy.dexTrading);
   validateRpcUrl(policy.rpcUrl);
   assertQos(Array.isArray(policy.allowedDestinations) && policy.allowedDestinations.length > 0, "EMPTY_DESTINATION_ALLOWLIST", "Policy must allow at least one destination");
   assertQos(policy.allowedDestinations.length <= 64, "DESTINATION_ALLOWLIST_TOO_LARGE", "Policy may allow at most 64 destinations");
@@ -236,6 +289,7 @@ export function validatePolicy(policy) {
     Object.freeze(policy.tokenTransfer.allowedMintExtensions);
     Object.freeze(policy.tokenTransfer);
   }
+  if (policy.dexTrading !== null) Object.freeze(policy.dexTrading);
   return Object.freeze(policy);
 }
 

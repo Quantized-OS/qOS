@@ -432,15 +432,17 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ## Implemented operation boundary
 
-This source constructs one System Program SOL transfer and one pinned qOS
-Token-2022 `TransferChecked` instruction. It contains no reviewed DEX swap,
-order-book, liquidity, or perpetuals template. `trade` and `tr` fail with
-`DEX_TEMPLATE_NOT_INSTALLED` before intent preparation or network access.
+This source constructs one System Program SOL transfer, one pinned qOS
+Token-2022 `TransferChecked` instruction, the Cloud settlement/withdrawal
+templates, and one BYOK Jupiter Ultra Swap path. DEX trading is disabled until
+`trade configure` pins a mint pair and advanced limits. `trade swap` requires
+`--confirm-live`; agents also require `--enable-dex` and a live listener.
 
-Adding trading requires a separately reviewed venue adapter that pins the
-program ID, instruction discriminant, complete account list and writability,
-mints, direction, slippage, exposure, fees, expiry, and output checks in both
-the host parser and firmware. A transfer is not relabeled as a trade.
+The swap path is manual ExactIn only. It rejects unapproved pairs, JupiterZ,
+gasless or additional signer paths, excessive input/slippage/route/network
+fees, cooldown and daily-limit violations, malformed transaction encoding, and
+ambiguous provider output. There is no arbitrary-signature, order-book, or
+perpetuals endpoint. See `DEX_TRADING.md` for the full boundary and commands.
 
 The tested setup matrix is Ubuntu 20.04, 22.04, and 24.04 on x86-64 or ARM64.
 Other distributions are outside this beta matrix; Windows and macOS require a

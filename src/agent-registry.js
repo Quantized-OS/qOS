@@ -11,6 +11,7 @@ import {
 import { join, resolve } from "node:path";
 
 import { hasExactKeys } from "./canonical.js";
+import { validateDexAction } from "./dex.js";
 import { assertQos, QosError } from "./errors.js";
 import { loadPolicy, parseUnsigned } from "./policy.js";
 import { readPrivateJson, writePrivateJsonAtomic } from "./private-json.js";
@@ -18,7 +19,7 @@ import { loadRuntimeProfile } from "./runtime-profile.js";
 import { assertPrivateDirectory, readSecureFile } from "./secure-file.js";
 
 const REGISTRY_KEYS = ["version", "agents"];
-const AGENT_KEYS = [
+const AGENT_V1_KEYS = [
   "version",
   "id",
   "name",
@@ -30,7 +31,8 @@ const AGENT_KEYS = [
   "strategyId",
   "tokenSha256",
 ];
-const SKILL_FILES = ["SKILL.md", "capabilities.md", "transfer.md", "mcp.md", "approval.md", "manifest.json"];
+const AGENT_KEYS = [...AGENT_V1_KEYS, "dexTrading"];
+const SKILL_FILES = ["SKILL.md", "capabilities.md", "transfer.md", "swap.md", "mcp.md", "approval.md", "manifest.json"];
 const AGENT_ID = /^[a-z][a-z0-9-]{0,31}$/;
 
 export function agentPaths(home, id = undefined) {
@@ -60,8 +62,10 @@ function ensureAgentsDirectory(home) {
 }
 
 function validateAgentRecord(record) {
-  assertQos(record && typeof record === "object" && !Array.isArray(record) && hasExactKeys(record, AGENT_KEYS), "INVALID_AGENT_REGISTRY", "Agent record has missing or unknown fields");
-  assertQos(record.version === 1, "INVALID_AGENT_REGISTRY", "Agent record version is unsupported");
+  assertQos(record && typeof record === "object" && !Array.isArray(record), "INVALID_AGENT_REGISTRY", "Agent record has missing or unknown fields");
+  if (record.version === 1 && hasExactKeys(record, AGENT_V1_KEYS)) record = { ...record, version: 2, dexTrading: false };
+  assertQos(hasExactKeys(record, AGENT_KEYS), "INVALID_AGENT_REGISTRY", "Agent record has missing or unknown fields");
+  assertQos(record.version === 2, "INVALID_AGENT_REGISTRY", "Agent record version is unsupported");
   assertQos(typeof record.id === "string" && AGENT_ID.test(record.id), "INVALID_AGENT_ID", "Agent ID must start with a lowercase letter and contain only lowercase letters, digits, or hyphens");
   assertQos(typeof record.name === "string" && record.name.length >= 1 && record.name.length <= 80 && !/[\x00-\x1f\x7f]/u.test(record.name), "INVALID_AGENT_NAME", "Agent name must contain 1 to 80 printable characters");
   assertQos(record.enabled === true, "INVALID_AGENT_REGISTRY", "Stored agents must be enabled");
@@ -71,6 +75,7 @@ function validateAgentRecord(record) {
   assertQos(typeof record.destination === "string", "INVALID_AGENT_DESTINATION", "Agent destination is invalid");
   assertQos(Number.isInteger(record.strategyId) && record.strategyId >= 0 && record.strategyId <= 0xffffffff, "INVALID_STRATEGY_ID", "Agent strategy ID must fit in u32");
   assertQos(typeof record.tokenSha256 === "string" && /^[0-9a-f]{64}$/.test(record.tokenSha256), "INVALID_AGENT_REGISTRY", "Agent credential hash is invalid");
+  assertQos(typeof record.dexTrading === "boolean", "INVALID_AGENT_REGISTRY", "Agent DEX capability flag is invalid");
   return Object.freeze({ ...record });
 }
 
@@ -144,11 +149,16 @@ function ensureScope(policy, { asset, maxAmount, destination, strategyId }) {
 
 function skillText(record, paths, policy) {
   const action = record.asset === "sol" ? "transfer_sol" : "transfer_qos";
+  const dex = record.dexTrading ? policy.dexTrading : null;
+  const pairText = dex === null ? "" : dex.allowedPairs.map((pair) => `- ${pair.inputMint} → ${pair.outputMint}: max ${pair.maxInputAmount} gross base units per swap; ${pair.dailyInputLimit} per UTC day`).join("\n");
   return {
-    "SKILL.md": `# qOS policy transfer skill\n\nThe local qOS MCP service starts automatically when this agent is onboarded. This credential may request only \`${action}\`. It cannot request arbitrary signatures, programs, mints, destinations, strategies, or shell commands.\n\nRead \`capabilities.md\`, \`mcp.md\`, \`transfer.md\`, and \`approval.md\` before requesting an action. The bearer credential is stored in \`${paths.token}\`; read it only at request time and never place its contents in a prompt, log, source file, or command history.\n`,
-    "capabilities.md": `# Capabilities\n\n- Agent: ${record.name} (${record.id})\n- Network: ${policy.cluster}\n- Asset: ${record.asset}\n- Maximum per request: ${record.maxAmount} base units\n- Destination: ${record.destination}\n- Strategy ID: ${record.strategyId}\n- Approval mode: ${record.approvalMode}\n- MCP: http://127.0.0.1:8790/mcp\n- REST compatibility API: http://127.0.0.1:8790/v1/actions\n- DEX swaps: unavailable; this release contains transfer templates only\n`,
+    "SKILL.md": `# qOS policy action skill\n\nThe local qOS MCP service starts automatically when this agent is onboarded. This credential may request the fixed transfer \`${action}\`${record.dexTrading ? " and bounded `swap` actions" : ""}. It cannot request arbitrary signatures, programs, mints, destinations, strategies, endpoints, or shell commands.\n\nRead \`capabilities.md\`, \`mcp.md\`, \`transfer.md\`${record.dexTrading ? ", `swap.md`" : ""}, and \`approval.md\` before requesting an action. The bearer credential is stored in \`${paths.token}\`; read it only at request time and never place its contents in a prompt, log, source file, or command history.\n`,
+    "capabilities.md": `# Capabilities\n\n- Agent: ${record.name} (${record.id})\n- Network: ${policy.cluster}\n- Asset: ${record.asset}\n- Maximum transfer: ${record.maxAmount} base units\n- Transfer destination: ${record.destination}\n- Strategy ID: ${record.strategyId}\n- Approval mode: ${record.approvalMode}\n- MCP: http://127.0.0.1:8790/mcp\n- REST compatibility API: http://127.0.0.1:8790/v1/actions\n- DEX swaps: ${record.dexTrading ? "enabled through the pinned Jupiter HTTPS endpoint" : "disabled"}${dex === null ? "" : `\n- Swap output receiver: ${dex.receiver ?? "firmware signer"}\n- Maximum slippage: ${dex.maxSlippageBps} bps\n- Maximum route fee: ${dex.maxRouteFeeBps} bps\n- Cooldown: ${dex.minIntervalSeconds} seconds\n- Maximum swaps per UTC day: ${dex.maxSwapsPerDay}\n\nAllowed pairs:\n${pairText}`}\n`,
     "transfer.md": `# Request a transfer\n\nPrefer the MCP tool \`qos_request_transfer\` with exactly one argument: \`{"amount":"BASE_UNITS"}\`. qOS fills in the pinned action \`${action}\`, destination \`${record.destination}\`, and strategy ID ${record.strategyId}.\n\nThe REST compatibility route is \`http://127.0.0.1:8790/v1/actions\` and accepts exactly:\n\n\`\`\`json\n{"version":1,"action":"${action}","amount":"BASE_UNITS","destination":"${record.destination}","strategyId":${record.strategyId}}\n\`\`\`\n\nUse a canonical positive integer no greater than ${record.maxAmount}. qOS rechecks the live policy, cluster, accounts, fee, simulation, signer response, and confirmation.\n`,
-    "mcp.md": `# MCP connection\n\nEndpoint: \`http://127.0.0.1:8790/mcp\`\nTransport: Streamable HTTP POST\nProtocol: \`2026-07-28\` (\`2025-06-18\` compatibility is also accepted)\nAuthentication: Bearer token read from \`${paths.token}\`\n\nFor protocol 2026-07-28, send \`MCP-Protocol-Version: 2026-07-28\`, \`Mcp-Method\` equal to the JSON-RPC method, and matching \`params._meta["io.modelcontextprotocol/protocolVersion"]\`. For \`tools/call\`, also send \`Mcp-Name\` equal to the tool name. Accept both \`application/json\` and \`text/event-stream\`.\n\nStart with \`qos_capabilities\`. Request a transfer with \`qos_request_transfer\` and only an \`amount\` string. Never send the token to a remote model or non-loopback endpoint.\n`,
+    "swap.md": record.dexTrading
+      ? `# Request a DEX swap\n\nUse MCP tool \`qos_request_swap\` with exactly \`inputMint\`, \`outputMint\`, and \`amount\`. qOS accepts only the pair and base-unit amount listed in \`capabilities.md\`. It obtains a manual ExactIn Jupiter order, rejects JupiterZ and gasless/co-signer paths, checks route/slippage/network-fee limits, signs only a one-signer v0 transaction, and reserves the authorized gross input against persistent daily limits before delivery. A confirmed response narrows the reservation to the wallet debit; an ambiguous delivery keeps the conservative reservation.\n\nDo not interpret a quote as guaranteed output or profit. Never ask qOS to sign provider-supplied bytes through any other route.\n`
+      : "# DEX swaps\n\nDEX swaps are disabled for this agent.\n",
+    "mcp.md": `# MCP connection\n\nEndpoint: \`http://127.0.0.1:8790/mcp\`\nTransport: Streamable HTTP POST\nProtocol: \`2026-07-28\` (\`2025-06-18\` compatibility is also accepted)\nAuthentication: Bearer token read from \`${paths.token}\`\n\nFor protocol 2026-07-28, send \`MCP-Protocol-Version: 2026-07-28\`, \`Mcp-Method\` equal to the JSON-RPC method, and matching \`params._meta["io.modelcontextprotocol/protocolVersion"]\`. For \`tools/call\`, also send \`Mcp-Name\` equal to the tool name. Accept both \`application/json\` and \`text/event-stream\`.\n\nStart with \`qos_capabilities\`. Request a transfer with \`qos_request_transfer\` and only an \`amount\` string.${record.dexTrading ? " Request an allowlisted DEX swap with `qos_request_swap`." : ""} Never send the token or either BYOK credential to a remote model or non-loopback endpoint.\n`,
     "approval.md": record.approvalMode === "ask"
       ? "# Approval\n\nEach valid request is held only in listener memory. Wait for the operator to approve or reject the request in qOS. Do not retry a pending request unless the operator says it expired.\n"
       : "# Approval\n\nValid requests may execute automatically while the operator runs the listener in live mode. Mainnet still requires the operator to start the listener with `--confirm-live`.\n",
@@ -166,13 +176,14 @@ function writeSkillPack(record, paths, policy) {
     chmodSync(join(paths.skills, name), 0o600);
   }
   const manifest = {
-    version: 2,
+    version: 3,
     agentId: record.id,
     mcpEndpoint: "http://127.0.0.1:8790/mcp",
     restEndpoint: "http://127.0.0.1:8790/v1/actions",
     mcpProtocolVersion: "2026-07-28",
     tokenFile: paths.token,
     action: record.asset === "sol" ? "transfer_sol" : "transfer_qos",
+    dexAction: record.dexTrading ? "swap" : null,
     amountEncoding: "canonical-base-unit-integer",
     approvalMode: record.approvalMode,
   };
@@ -198,6 +209,7 @@ export function onboardAgent(home, {
   destination,
   strategyId,
   acceptAuto = false,
+  enableDexTrading = false,
 } = {}) {
   const resolvedHome = resolve(home);
   const runtime = loadRuntimeProfile(resolvedHome);
@@ -206,6 +218,8 @@ export function onboardAgent(home, {
   assertQos(typeof name === "string" && name.length >= 1 && name.length <= 80 && !/[\x00-\x1f\x7f]/u.test(name), "INVALID_AGENT_NAME", "Agent name must contain 1 to 80 printable characters");
   assertQos(approvalMode === "ask" || approvalMode === "auto", "INVALID_APPROVAL_MODE", "Approval mode must be ask or auto");
   assertQos(approvalMode !== "auto" || acceptAuto === true, "AUTO_APPROVAL_ACKNOWLEDGEMENT_REQUIRED", "Automatic execution requires explicit acknowledgement with --accept-auto");
+  assertQos(typeof enableDexTrading === "boolean", "INVALID_DEX_AGENT_SCOPE", "Agent DEX capability must be a boolean");
+  assertQos(!enableDexTrading || policy.dexTrading !== null, "DEX_TRADING_DISABLED", "Configure a DEX policy before enabling agent trading");
   const selectedAsset = asset ?? (runtime.profile === "devnet" ? "sol" : "qos-token");
   const selectedDestination = destination ?? policy.allowedDestinations[0];
   const selectedStrategy = strategyId ?? policy.allowedStrategyIds[0];
@@ -224,7 +238,7 @@ export function onboardAgent(home, {
   assertQos(!existsSync(paths.agent), "AGENT_PATH_CONFLICT", "Agent directory already exists; inspect it before retrying");
   const token = Buffer.from(`${randomBytes(48).toString("base64url")}\n`, "ascii");
   const record = validateAgentRecord({
-    version: 1,
+    version: 2,
     id,
     name,
     enabled: true,
@@ -234,6 +248,7 @@ export function onboardAgent(home, {
     destination: selectedDestination,
     strategyId: selectedStrategy,
     tokenSha256: createHash("sha256").update(token.subarray(0, token.length - 1)).digest("hex"),
+    dexTrading: enableDexTrading,
   });
   try {
     writeSkillPack(record, paths, policy);
@@ -298,6 +313,10 @@ export function authenticateAgent(home, bearer) {
 
 export function validateAgentAction(home, record, action) {
   const policy = loadPolicy(join(resolve(home), "policy.json"));
+  if (action?.version === 2 || action?.action === "swap") {
+    assertQos(record.dexTrading === true, "AGENT_ACTION_FORBIDDEN", "Agent is not allowed to request DEX swaps");
+    return validateDexAction(policy, action).action;
+  }
   assertQos(action && typeof action === "object" && !Array.isArray(action) && hasExactKeys(action, ["version", "action", "amount", "destination", "strategyId"]), "INVALID_AGENT_ACTION", "Agent action has missing or unknown fields");
   assertQos(action.version === 1, "INVALID_AGENT_ACTION", "Agent action version is unsupported");
   const expectedAction = record.asset === "sol" ? "transfer_sol" : "transfer_qos";

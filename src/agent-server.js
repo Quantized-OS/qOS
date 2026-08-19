@@ -267,6 +267,7 @@ export function startAgentServer(service, {
     if (service.policy.cluster === "mainnet-beta") {
       assertQos(enableMainnetBroadcast, "LIVE_CONFIRMATION_REQUIRED", "Start the agent listener with --confirm-live before a mainnet action can execute");
     }
+    if (action.action === "swap") return service.executeDexSwap(action);
     const intent = currentRecord.asset === "sol"
       ? await service.prepareIntent({ destination: action.destination, lamports: action.amount, strategyId: action.strategyId })
       : await service.prepareTokenIntent({ destination: action.destination, amount: action.amount, strategyId: action.strategyId });
@@ -289,7 +290,7 @@ export function startAgentServer(service, {
 
   function mcpTools(agent) {
     const action = agent.asset === "sol" ? "transfer_sol" : "transfer_qos";
-    return [
+    const tools = [
       {
         name: "qos_capabilities",
         title: "Show qOS agent capabilities",
@@ -312,6 +313,23 @@ export function startAgentServer(service, {
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       },
     ];
+    if (agent.dexTrading) tools.push({
+      name: "qos_request_swap",
+      title: "Request bounded Jupiter DEX swap",
+      description: "Request one ExactIn swap for an allowlisted mint pair. qOS enforces gross input, UTC daily spend/count, cooldown, slippage, route-fee, network-fee, signer-set, and fixed-endpoint policies before signing.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputMint: { type: "string", description: "Allowlisted Solana input mint address." },
+          outputMint: { type: "string", description: "Allowlisted Solana output mint address." },
+          amount: { type: "string", pattern: "^[1-9][0-9]*$", description: "Canonical input-token base-unit integer. For wrapped SOL, base units are lamports." },
+        },
+        required: ["inputMint", "outputMint", "amount"],
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    });
+    return tools;
   }
 
   function listenerOrigin() {
@@ -342,8 +360,8 @@ export function startAgentServer(service, {
           result: {
             protocolVersion,
             capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: "qOS", version: "0.11.3" },
-            instructions: "Use qos_capabilities first. qos_request_transfer accepts only an amount; qOS pins every other security-relevant field.",
+            serverInfo: { name: "qOS", version: "0.12.0" },
+            instructions: `Use qos_capabilities first. qos_request_transfer accepts only an amount; qOS pins every other security-relevant field.${agent.dexTrading ? " qos_request_swap accepts only an allowlisted pair and bounded base-unit amount." : ""}`,
           },
         });
         return;
@@ -367,20 +385,20 @@ export function startAgentServer(service, {
             action: agent.asset === "sol" ? "transfer_sol" : "transfer_qos",
             restEndpoint: `${listenerOrigin()}/v1/actions`,
             mcpEndpoint: `${listenerOrigin()}/mcp`,
-            dexTrading: false,
+            dexTrading: agent.dexTrading ? service.policy.dexTrading : null,
           };
           sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: mcpToolResult(value) });
           return;
         }
-        assertQos(params.name === "qos_request_transfer", "MCP_TOOL_NOT_FOUND", "Unknown qOS MCP tool");
-        assertQos(hasExactKeys(params.arguments, ["amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_transfer requires exactly one amount string");
-        const action = {
-          version: 1,
-          action: agent.asset === "sol" ? "transfer_sol" : "transfer_qos",
-          amount: params.arguments.amount,
-          destination: agent.destination,
-          strategyId: agent.strategyId,
-        };
+        assertQos(params.name === "qos_request_transfer" || (params.name === "qos_request_swap" && agent.dexTrading), "MCP_TOOL_NOT_FOUND", "Unknown qOS MCP tool");
+        let action;
+        if (params.name === "qos_request_swap") {
+          assertQos(hasExactKeys(params.arguments, ["inputMint", "outputMint", "amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_swap requires exactly inputMint, outputMint, and amount");
+          action = { version: 2, action: "swap", inputMint: params.arguments.inputMint, outputMint: params.arguments.outputMint, amount: params.arguments.amount, strategyId: agent.strategyId };
+        } else {
+          assertQos(hasExactKeys(params.arguments, ["amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_transfer requires exactly one amount string");
+          action = { version: 1, action: agent.asset === "sol" ? "transfer_sol" : "transfer_qos", amount: params.arguments.amount, destination: agent.destination, strategyId: agent.strategyId };
+        }
         let toolResult;
         try {
           toolResult = mcpToolResult((await acceptAction(agent, action)).value);
@@ -429,7 +447,9 @@ export function startAgentServer(service, {
               agentName: item.agent.name,
               action: item.action.action,
               amount: item.action.amount,
-              destination: item.action.destination,
+              destination: item.action.destination ?? null,
+              inputMint: item.action.inputMint ?? null,
+              outputMint: item.action.outputMint ?? null,
               strategyId: item.action.strategyId,
               expiresAt: new Date(item.expiresAt).toISOString(),
             })),
@@ -492,8 +512,8 @@ export function startAgentServer(service, {
           agent: publicRecord(agent),
           endpoint: "/v1/actions",
           mcpEndpoint: "/mcp",
-          supportedAction: agent.asset === "sol" ? "transfer_sol" : "transfer_qos",
-          dexTrading: false,
+          supportedActions: [agent.asset === "sol" ? "transfer_sol" : "transfer_qos", ...(agent.dexTrading ? ["swap"] : [])],
+          dexTrading: agent.dexTrading ? service.policy.dexTrading : null,
         });
         return;
       }

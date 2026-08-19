@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ test("qOS Shell help is available before profile creation", () => {
   assert.match(result.stdout, /privacy \| priv/);
   assert.match(result.stdout, /serve core/);
   assert.match(result.stdout, /only installed command/);
-  assert.match(result.stdout, /current source implements transfers, not DEX swaps/);
+  assert.match(result.stdout, /pinned Jupiter Ultra Swap endpoint/);
 });
 
 test("qOS accepts a direct shorthand command and reports exact capabilities", (t) => {
@@ -169,11 +169,50 @@ test("qOS Shell insecure mainnet profile keeps mainnet capabilities and reports 
   assert.equal(capabilities.operations.includes("native-sol-transfer"), false);
 });
 
-test("qOS Shell refuses a DEX trade when no reviewed venue template exists", (t) => {
+test("qOS Shell reports DEX trading as disabled until the profile is configured", (t) => {
   const home = devnetProfile(t);
   const result = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "tr"], { encoding: "utf8" });
-  assert.equal(result.status, 1);
-  assert.equal(JSON.parse(result.stderr).error.code, "DEX_TEMPLATE_NOT_INSTALLED");
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { status: "disabled", configuration: null });
+});
+
+test("qOS Shell configures an advanced BYOK Jupiter policy without exposing the key", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "qos-shell-dex-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "mainnet-insecure");
+  const apiKeyFile = join(root, "jupiter.key");
+  writeFileSync(apiKeyFile, "jup-shell-test-secret\n", { mode: 0o600 });
+  chmodSync(apiKeyFile, 0o600);
+  initializeSandbox(home, encodeBase58(Buffer.alloc(32, 94)), { cluster: "mainnet-beta" });
+  ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+  const inputMint = "So11111111111111111111111111111111111111112";
+  const outputMint = "5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump";
+  const receiver = "2fwKS5Xj3c91cH7KZLbntMgrfGGbHiJcwt4g925x9pSy";
+  const configured = spawnSync(process.execPath, [
+    SHELL, "--home", home, "--json", "tr", "cfg",
+    "--api-key-file", apiKeyFile,
+    "--input-mint", inputMint,
+    "--output-mint", outputMint,
+    "--max-input-amount", "25000000",
+    "--daily-input-limit", "250000000",
+    "--receiver", receiver,
+    "--max-slippage-bps", "75",
+    "--max-route-fee-bps", "50",
+    "--max-fee-lamports", "3000000",
+    "--min-interval-seconds", "30",
+    "--max-swaps-per-day", "40",
+  ], { encoding: "utf8", cwd: root });
+  assert.equal(configured.status, 0, configured.stderr);
+  const value = JSON.parse(configured.stdout);
+  assert.equal(value.provider, "jupiter");
+  assert.equal(value.allowedPairs[0].maxInputAmount, "25000000");
+  assert.equal(value.receiver, receiver);
+  assert.equal(value.maxSwapsPerDay, 40);
+  assert.doesNotMatch(configured.stdout, /jup-shell-test-secret/);
+  const capabilities = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "capa"], { encoding: "utf8" });
+  assert.equal(capabilities.status, 0, capabilities.stderr);
+  assert.equal(JSON.parse(capabilities.stdout).dexTrading, true);
+  assert.ok(JSON.parse(capabilities.stdout).operations.includes("jupiter-dex-swap"));
 });
 
 test("qOS Shell requires an explicit broadcast confirmation before network access", (t) => {

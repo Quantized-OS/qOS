@@ -7,6 +7,7 @@ export const QOS_PLATFORM_SDK_VERSION = 1;
 export { getAgent, onboardAgent } from "./agent-registry.js";
 export { decodeBase58 } from "./base58.js";
 export { QOS_TOKEN_MINT } from "./constants.js";
+export { configureDexTrading, JUPITER_SWAP_ENDPOINT, publicDexTrading } from "./dex.js";
 export { assertQos, publicError, QosError } from "./errors.js";
 export { publicKeyAddress, publicKeyObjectFromRaw } from "./key-store.js";
 export { modelProviderCatalog } from "./model-provider.js";
