@@ -8,12 +8,16 @@ Most trading systems rely on a broad and fragile trust base: a general-purpose o
 
 The design has three goals: **keep strategies and keys private, make the machine verifiable, and give crypto applications hardware-enforced control over what may be signed.**
 
-Version 0.11.3 adds signed-submission outcome metadata and a bounded transaction
-status review method for the separate qOS Cloud project. It distinguishes safe
-pre-broadcast rejection from a genuinely ambiguous broadcast without retaining
-transaction bodies or private signing material. The 0.11.2 managed inventory,
-withdrawal, and MCP integration remains available, and self-hosted setup and the
-restricted qOS shell remain unchanged.
+Version 0.12.0 adds BYOK Jupiter Ultra Swap support for bounded automated
+trading. Each profile pins one or more mint pairs plus per-swap input, daily
+input, slippage, route-fee, network/rent-fee, cooldown, and daily-count limits.
+Self-hosted profiles may additionally pin a distinct swap-output receiver;
+managed Cloud profiles use that field to route proceeds into the account's
+server billing wallet.
+Agents receive a separate `qos_request_swap` MCP tool only when explicitly
+enabled; qOS still owns validation, signing, confirmation, and persistent spend
+accounting. The signed-submission review, managed inventory, withdrawal, and
+model-provider boundaries from 0.11 remain available.
 
 Solana is the first test environment because it combines high-throughput execution, latency-sensitive trading, composable programs, and a clear need for safer automated signing.
 
@@ -133,6 +137,7 @@ qos> capa
 qos> stat
 qos> wal status
 qos> mod on
+qos> tr cfg --api-key-file /owner-only/jupiter.key --input-mint So11111111111111111111111111111111111111112 --output-mint 5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump --max-input-amount 10000000 --daily-input-limit 100000000
 qos> ag on
 qos> ag st
 qos> pol show
@@ -145,9 +150,9 @@ the loopback agent REST/MCP service, readable output, long and shorthand command
 behavior, and both mainnet custody setup paths. Agent lifecycle and execution
 modes are in [`docs/AGENT_ONBOARDING.md`](docs/AGENT_ONBOARDING.md); wallet and
 policy operations are in
-[`docs/WALLET_AND_POLICY.md`](docs/WALLET_AND_POLICY.md). The current source implements
-policy-gated transfers, not DEX swaps; `trade` fails closed until a reviewed
-venue template exists.
+[`docs/WALLET_AND_POLICY.md`](docs/WALLET_AND_POLICY.md). BYOK trading setup,
+policy fields, and live execution are in
+[`docs/DEX_TRADING.md`](docs/DEX_TRADING.md).
 
 ## Separate qOS Cloud project
 
@@ -272,7 +277,7 @@ signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.11.3 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.12.0 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
@@ -373,7 +378,7 @@ with production-grade firmware or non-exportable custody.
 ## Build the research release media
 
 After the host checks pass, `make release-media` creates a deterministic source
-archive, checksums, and `release-artifacts/qos-0.11.3-research-media.iso`. The
+archive, checksums, and versioned `release-artifacts/qos-VERSION-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
 production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.
@@ -480,9 +485,9 @@ one-run override.
 
 See [`docs/MODEL_PROVIDERS.md`](docs/MODEL_PROVIDERS.md) for BYOK configuration
 and [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for the explicit
-`--broadcast --confirm-live` mainnet gates. This is an agent-directed
-Token-2022 transfer, not a DEX swap; the reviewed DEX instruction adapter is
-still a roadmap item.
+`--broadcast --confirm-live` mainnet gates. The synthetic demo remains a
+Token-2022 transfer example. Managed agents can separately request a configured
+Jupiter swap through `qos_request_swap`; see [`docs/DEX_TRADING.md`](docs/DEX_TRADING.md).
 
 ## Synthetic agent security analysis
 

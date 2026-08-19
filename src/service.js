@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeBase58 } from "./base58.js";
 import { QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./constants.js";
+import { dexPaths, executeDexSwap as executePolicyDexSwap } from "./dex.js";
 import { assertQos, QosError } from "./errors.js";
 import {
   publicKeyAddress,
@@ -259,7 +260,7 @@ function parseCloudWithdrawalOptions(options, policy, session) {
 }
 
 export class QosService {
-  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate(), runtimeProfile = null }) {
+  constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate(), runtimeProfile = null, dexFetch = globalThis.fetch }) {
     this.paths = paths;
     this.policy = policy;
     this.signer = signer;
@@ -268,6 +269,8 @@ export class QosService {
     this.rpc = rpc;
     this.proofGate = proofGate;
     this.runtimeProfile = runtimeProfile;
+    this.dexFetch = dexFetch;
+    this.dexBusy = false;
   }
 
   static open(home, { rpcUrl = process.env.SOLANA_RPC_URL } = {}) {
@@ -299,6 +302,25 @@ export class QosService {
       received: genesis,
     });
     return genesis;
+  }
+
+  async executeDexSwap(action) {
+    assertQos(!this.dexBusy, "DEX_SWAP_BUSY", "Another DEX swap is already being processed by this firmware instance");
+    this.dexBusy = true;
+    try {
+      await this.assertCluster();
+      return await executePolicyDexSwap({
+        home: this.paths.home,
+        policy: this.policy,
+        signer: this.signer,
+        runtimeProfile: this.runtimeProfile,
+        proofGate: this.proofGate,
+        action,
+        fetchImpl: this.dexFetch,
+      });
+    } finally {
+      this.dexBusy = false;
+    }
   }
 
   async health() {
@@ -891,6 +913,7 @@ export class QosService {
   }
 
   privacyStatus() {
+    const trading = dexPaths(this.paths.home);
     return {
       ...this.session.status(),
       transactionFiles: [],
@@ -904,9 +927,13 @@ export class QosService {
         join(this.paths.home, "runtime.json"),
         join(this.paths.home, "api-token"),
         join(this.paths.home, "agents", "registry.json"),
+        trading.provider,
+        trading.apiKey,
+        trading.tradingState,
       ].filter(existsSync),
       persistentCredentialDirectories: [
         join(this.paths.home, "agents"),
+        trading.dex,
       ].filter(existsSync),
       keyCustody: this.signer.status(),
       privacyProof: this.proofGate.status(),

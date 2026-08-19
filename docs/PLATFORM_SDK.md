@@ -8,12 +8,23 @@ import {
   QOS_PLATFORM_SDK_VERSION,
   QosService,
   changePolicyDestination,
+  configureDexTrading,
   configureModelProvider,
   ensureRuntimeProfile,
   initializeSandbox,
   onboardAgent,
 } from "qos-solana-sandbox/platform-sdk";
 ```
+
+`configureDexTrading(home, options)` imports an owner-only Jupiter API key,
+pins the built-in HTTPS endpoint, writes the reviewed DEX policy, and creates a
+separate persistent runtime-state file. Hosts may pin a distinct `receiver`
+public key; otherwise swap output returns to the firmware signer.
+`QosService.executeDexSwap(action)`
+enforces that policy, signs only the one-signer versioned transaction returned
+for the matching manual ExactIn order, and returns the confirmed signature and
+Solscan URL. Hosted services must mount only `runtime-state/` writable; model,
+DEX credential, signer, and policy files remain read-only inside the runtime.
 
 `changePolicyDestination(home, "add" | "remove", publicKey)` is the validated,
 atomic SDK surface for services that need more than one reviewed token

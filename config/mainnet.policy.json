@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "cluster": "mainnet-beta",
   "clusterGenesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   "rpcUrl": "https://api.mainnet-beta.solana.com",
@@ -14,6 +14,7 @@
     "maxTransferAmount": "1000000000",
     "allowedMintExtensions": [18, 19]
   },
+  "dexTrading": null,
   "allowedDestinations": [],
   "allowedStrategyIds": [1],
   "maxTransferLamports": "0",

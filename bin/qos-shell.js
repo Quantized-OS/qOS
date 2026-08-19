@@ -72,6 +72,7 @@ const MODEL_ACTION_ALIASES = new Map([
   ["cfg", "configure"], ["def", "default"], ["set", "use"],
   ["rot", "rotate"], ["rm", "remove"],
 ]);
+const DEX_ACTION_ALIASES = new Map([["st", "status"], ["cfg", "configure"], ["s", "swap"]]);
 const ASSET_ALIASES = new Map([["s", "sol"], ["tok", "token"], ["t", "token"]]);
 
 function usage() {
@@ -117,14 +118,19 @@ Commands (long | shorthand):
   agent | ag demo broadcast|cast AMOUNT --confirm-live [demo options]
   serve [agent|api|mcp] [PORT] | api [PORT]
   serve core [PORT]                           security-audit | audit
-  trade | tr
+  trade | tr status|st
+  trade | tr configure|cfg --api-key-file FILE --input-mint PUBKEY
+            --output-mint PUBKEY --max-input-amount N --daily-input-limit N
+            [advanced policy options]
+  trade | tr swap|s AMOUNT --input-mint PUBKEY --output-mint PUBKEY
+            --confirm-live [--strategy-id N]
   help | h | ?           exit | x | q
 
 The shell never executes arbitrary shell text. Broadcast commands require the
 listed confirmation option and remain constrained by the qOS policy signer.
 qos is the only installed command; every operator feature is grouped here.
-The current source implements transfers, not DEX swaps; trade reports the
-missing reviewed venue template instead of submitting anything.
+DEX trading uses the pinned Jupiter Ultra Swap endpoint and rejects arbitrary
+transactions, co-signed routes, unapproved mint pairs, and out-of-policy spend.
 `;
 }
 
@@ -192,6 +198,8 @@ function expandAliases(tokens) {
     }
   } else if (expanded[0] === "model" && expanded[1] !== undefined) {
     expanded[1] = MODEL_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
+  } else if (expanded[0] === "trade" && expanded[1] !== undefined) {
+    expanded[1] = DEX_ACTION_ALIASES.get(expanded[1]) ?? expanded[1];
   }
   return expanded;
 }
@@ -262,10 +270,13 @@ function capabilitiesFor(context) {
       "loopback-agent-api-mcp",
       "loopback-core-api",
       "byok-model-providers",
+      ...(context.policy.dexTrading === null ? [] : ["jupiter-dex-swap", "agent-directed-jupiter-dex-swap"]),
     ],
     mainnetAutomaticExecutionRequiresLiveStart: context.policy.cluster === "mainnet-beta",
-    dexTrading: false,
-    dexReason: "No reviewed DEX program/instruction template is present in this source release.",
+    dexTrading: context.policy.dexTrading !== null,
+    dexReason: context.policy.dexTrading === null
+      ? "DEX trading is available but not configured for this profile."
+      : "Jupiter swaps are constrained by the configured mint pair and advanced policy limits.",
   };
 }
 
@@ -326,7 +337,56 @@ function dispatch(tokens, context) {
     return { status: 0, exit: false };
   }
   if (command === "trade") {
-    throw new QosError("DEX_TEMPLATE_NOT_INSTALLED", "This build contains no reviewed DEX instruction template; no transaction was prepared or submitted");
+    const [action = "status", ...args] = rest;
+    if (action === "status") {
+      if (args.length) throw new QosError("INVALID_ARGUMENT", "trade status accepts no arguments");
+      return { status: qos(["dex-status"], context), exit: false };
+    }
+    if (action === "configure") {
+      const allowed = new Set(["--api-key-file", "--input-mint", "--output-mint", "--max-input-amount", "--daily-input-limit", "--receiver", "--max-slippage-bps", "--max-route-fee-bps", "--max-fee-lamports", "--min-interval-seconds", "--max-swaps-per-day"]);
+      const required = new Set(["--api-key-file", "--input-mint", "--output-mint", "--max-input-amount", "--daily-input-limit"]);
+      const seen = new Set();
+      const forwarded = [];
+      for (let index = 0; index < args.length; index += 1) {
+        const option = args[index];
+        if (!allowed.has(option)) throw new QosError("INVALID_ARGUMENT", `Unknown trade configure option: ${option}`);
+        if (seen.has(option)) throw new QosError("DUPLICATE_ARGUMENT", `Duplicate ${option}`);
+        seen.add(option);
+        const value = args[++index];
+        if (!value || value.startsWith("--")) throw new QosError("MISSING_ARGUMENT", `${option} requires a value`);
+        forwarded.push(option, option === "--api-key-file" ? resolve(context.cwd, value) : value);
+      }
+      for (const option of required) if (!seen.has(option)) throw new QosError("MISSING_ARGUMENT", `${option} is required`);
+      const status = qos(["dex-configure", ...forwarded], context);
+      if (status === 0) context.policy = loadPolicy(join(context.runtime.home, "policy.json"));
+      return { status, exit: false };
+    }
+    if (action === "swap") {
+      const amount = canonicalAmount(args[0], "DEX input amount");
+      const allowed = new Set(["--input-mint", "--output-mint", "--strategy-id"]);
+      const required = new Set(["--input-mint", "--output-mint"]);
+      const seen = new Set();
+      const forwarded = [];
+      let confirmed = false;
+      for (let index = 1; index < args.length; index += 1) {
+        const option = args[index];
+        if (option === "--confirm-live") {
+          if (confirmed) throw new QosError("DUPLICATE_ARGUMENT", "Duplicate --confirm-live");
+          confirmed = true;
+          continue;
+        }
+        if (!allowed.has(option)) throw new QosError("INVALID_ARGUMENT", `Unknown trade swap option: ${option}`);
+        if (seen.has(option)) throw new QosError("DUPLICATE_ARGUMENT", `Duplicate ${option}`);
+        seen.add(option);
+        const value = args[++index];
+        if (!value || value.startsWith("--")) throw new QosError("MISSING_ARGUMENT", `${option} requires a value`);
+        forwarded.push(option, value);
+      }
+      for (const option of required) if (!seen.has(option)) throw new QosError("MISSING_ARGUMENT", `${option} is required`);
+      if (!confirmed) throw new QosError("LIVE_CONFIRMATION_REQUIRED", "trade swap requires --confirm-live");
+      return { status: qos(["dex-swap", "--amount", amount, ...forwarded], context, { QOS_ENABLE_MAINNET_BROADCAST: "I_UNDERSTAND" }), exit: false };
+    }
+    throw new QosError("INVALID_ARGUMENT", "Use trade status, trade configure, or trade swap");
   }
   if (command === "status") {
     if (rest.length) throw new QosError("INVALID_ARGUMENT", "status accepts no arguments");

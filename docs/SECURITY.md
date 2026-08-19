@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.11.3 adds strong
+qOS is a research firmware and policy-signer project. Version 0.12.0 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
@@ -133,8 +133,9 @@ malicious external verifier invalidates the authorization guarantee.
 - No bundled production SNARK circuit, proving key, ceremony, or verifier.
 - QEMU is a functional demonstration, not a hardware isolation boundary, and
   the runner refuses mainnet broadcast.
-- The listener implements policy-gated transfers only. It is not a general
-  autonomous DEX trading engine.
+- The listener implements policy-gated transfers and an opt-in bounded Jupiter
+  swap action. It is not a general transaction signer or multi-venue trading
+  engine. Jupiter transaction construction remains an external trust boundary.
 
 See `reports/PRODUCTION_SECURITY_REVIEW.md` for the production release decision,
 verification evidence, and acceptance criteria.

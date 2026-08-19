@@ -5,6 +5,7 @@ import { publicError, QosError } from "../src/errors.js";
 import { initializeSandbox, QosService } from "../src/service.js";
 import { startServer } from "../src/server.js";
 import { readSecureFile } from "../src/secure-file.js";
+import { configureDexTrading, publicDexTrading } from "../src/dex.js";
 
 const MAX_CLI_JSON_BYTES = 256 * 1024;
 
@@ -27,6 +28,12 @@ Usage:
   qos token-prepare [--home PATH] [--destination PUBKEY] [--amount N]
                     [--nonce N] [--max-fee-lamports N] [--strategy-id N]
   qos token-transfer [--home PATH] [--destination PUBKEY] [--amount N]
+  qos dex-status [--home PATH]
+  qos dex-configure --home PATH --api-key-file PATH --input-mint PUBKEY
+                    --output-mint PUBKEY --max-input-amount N
+                    --daily-input-limit N [--receiver PUBKEY] [policy limit options]
+  qos dex-swap --home PATH --input-mint PUBKEY --output-mint PUBKEY
+               --amount N [--strategy-id N]
   qos privacy-status [--home PATH]
   qos serve [--home PATH] [--host HOST] [--port PORT]
 
@@ -207,6 +214,49 @@ async function main() {
         ...(options.amount === undefined ? {} : { amount: options.amount }),
       });
       print(await service.submitIntent(intent));
+      return;
+    }
+    case "dex-status": {
+      only(options, ["home"]);
+      const configuration = publicDexTrading(service.paths.home);
+      print({ status: configuration === null ? "disabled" : "enabled", configuration });
+      return;
+    }
+    case "dex-configure": {
+      only(options, ["home", "api-key-file", "input-mint", "output-mint", "max-input-amount", "daily-input-limit", "receiver", "max-slippage-bps", "max-route-fee-bps", "max-fee-lamports", "min-interval-seconds", "max-swaps-per-day"]);
+      for (const required of ["api-key-file", "input-mint", "output-mint", "max-input-amount", "daily-input-limit"]) {
+        if (options[required] === undefined) throw new QosError("MISSING_ARGUMENT", `--${required} is required`);
+      }
+      print(configureDexTrading(service.paths.home, {
+        apiKeyFile: resolve(options["api-key-file"]),
+        allowedPairs: [{
+          inputMint: options["input-mint"],
+          outputMint: options["output-mint"],
+          maxInputAmount: options["max-input-amount"],
+          dailyInputLimit: options["daily-input-limit"],
+        }],
+        ...(options.receiver === undefined ? {} : { receiver: options.receiver }),
+        ...(options["max-slippage-bps"] === undefined ? {} : { maxSlippageBps: Number(options["max-slippage-bps"]) }),
+        ...(options["max-route-fee-bps"] === undefined ? {} : { maxRouteFeeBps: Number(options["max-route-fee-bps"]) }),
+        ...(options["max-fee-lamports"] === undefined ? {} : { maxFeeLamports: options["max-fee-lamports"] }),
+        ...(options["min-interval-seconds"] === undefined ? {} : { minIntervalSeconds: Number(options["min-interval-seconds"]) }),
+        ...(options["max-swaps-per-day"] === undefined ? {} : { maxSwapsPerDay: Number(options["max-swaps-per-day"]) }),
+      }));
+      return;
+    }
+    case "dex-swap": {
+      only(options, ["home", "input-mint", "output-mint", "amount", "strategy-id"]);
+      for (const required of ["input-mint", "output-mint", "amount"]) {
+        if (options[required] === undefined) throw new QosError("MISSING_ARGUMENT", `--${required} is required`);
+      }
+      print(await service.executeDexSwap({
+        version: 2,
+        action: "swap",
+        inputMint: options["input-mint"],
+        outputMint: options["output-mint"],
+        amount: options.amount,
+        strategyId: Number(options["strategy-id"] ?? "1"),
+      }));
       return;
     }
     case "privacy-status": {
