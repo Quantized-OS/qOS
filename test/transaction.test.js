@@ -5,10 +5,12 @@ import { encodeBase58 } from "../src/base58.js";
 import { publicKeyObjectFromRaw, rawPublicKey } from "../src/key-store.js";
 import {
   buildCloudSettlementMessage,
+  buildCloudWithdrawalMessage,
   buildNativeTransferMessage,
   buildTokenTransferCheckedMessage,
   encodeShortVec,
   parseCloudSettlementMessage,
+  parseCloudWithdrawalMessage,
   parseNativeTransferMessage,
   parseTokenTransferCheckedMessage,
   signMessage,
@@ -171,4 +173,65 @@ test("qOS Cloud settlement supports a deferred sub-base-unit burn remainder", ()
   const parsed = parseCloudSettlementMessage(message);
   assert.equal(parsed.treasuryAmount, 99n);
   assert.equal(parsed.burnAmount, 0n);
+});
+
+test("qOS Cloud native withdrawal atomically sends the net amount and 0.25-percent fee", () => {
+  const payer = encodeBase58(Buffer.alloc(32, 41));
+  const destination = encodeBase58(Buffer.alloc(32, 42));
+  const treasury = encodeBase58(Buffer.alloc(32, 43));
+  const recentBlockhash = encodeBase58(Buffer.alloc(32, 44));
+  const parsed = parseCloudWithdrawalMessage(buildCloudWithdrawalMessage({
+    payer,
+    assetKind: "sol",
+    grossAmount: "1000000",
+    destinationAmount: "997500",
+    feeAmount: "2500",
+    destination,
+    treasury,
+    recentBlockhash,
+  }));
+
+  assert.equal(parsed.assetKind, "sol");
+  assert.equal(parsed.payer, payer);
+  assert.equal(parsed.recentBlockhash, recentBlockhash);
+  assert.deepEqual(parsed.transfers, [
+    { destination, amount: 997_500n },
+    { destination: treasury, amount: 2_500n },
+  ]);
+});
+
+test("qOS Cloud token withdrawal can create both ATAs and transfer net plus fee", () => {
+  const payer = encodeBase58(Buffer.alloc(32, 45));
+  const destination = encodeBase58(Buffer.alloc(32, 46));
+  const treasury = encodeBase58(Buffer.alloc(32, 47));
+  const sourceTokenAccount = encodeBase58(Buffer.alloc(32, 48));
+  const destinationTokenAccount = encodeBase58(Buffer.alloc(32, 49));
+  const treasuryTokenAccount = encodeBase58(Buffer.alloc(32, 50));
+  const recentBlockhash = encodeBase58(Buffer.alloc(32, 51));
+  const parsed = parseCloudWithdrawalMessage(buildCloudWithdrawalMessage({
+    payer,
+    assetKind: "token",
+    grossAmount: "2000000",
+    destinationAmount: "1995000",
+    feeAmount: "5000",
+    destination,
+    treasury,
+    mint: QOS_TOKEN_MINT,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    sourceTokenAccount,
+    destinationTokenAccount,
+    treasuryTokenAccount,
+    decimals: 6,
+    createDestinationTokenAccount: true,
+    createTreasuryTokenAccount: true,
+    recentBlockhash,
+  }));
+
+  assert.equal(parsed.assetKind, "token");
+  assert.equal(parsed.tokenProgram, TOKEN_2022_PROGRAM_ID);
+  assert.equal(parsed.createInstructions.length, 2);
+  assert.deepEqual(parsed.transfers, [
+    { sourceTokenAccount, mint: QOS_TOKEN_MINT, destinationTokenAccount, amount: 1_995_000n, decimals: 6 },
+    { sourceTokenAccount, mint: QOS_TOKEN_MINT, destinationTokenAccount: treasuryTokenAccount, amount: 5_000n, decimals: 6 },
+  ]);
 });

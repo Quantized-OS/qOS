@@ -109,6 +109,42 @@ function cloudSettlementIntent(overrides = {}) {
   };
 }
 
+function cloudWithdrawalIntent(overrides = {}) {
+  return {
+    version: 4,
+    requestNonce: "1",
+    clusterGenesis: MAINNET_GENESIS_HASH,
+    venueId: VENUE_ID,
+    marketId: MARKET_ID,
+    side: "WITHDRAW",
+    assetKind: "sol",
+    mint: null,
+    tokenProgram: null,
+    sourceTokenAccount: null,
+    destinationTokenAccount: null,
+    treasuryTokenAccount: null,
+    decimals: null,
+    createDestinationTokenAccount: false,
+    createTreasuryTokenAccount: false,
+    grossAmount: "1000000",
+    destinationAmount: "997500",
+    feeAmount: "2500",
+    feeBasisPoints: 25,
+    feeRemainderBefore: "0",
+    feeRemainderAfter: "0",
+    maxFeeLamports: "100000",
+    maxCuPrice: "0",
+    maxRelayTip: "0",
+    destination,
+    treasury: encodeBase58(Buffer.alloc(32, 27)),
+    recentBlockhash: blockhash,
+    expiresAtSlot: "200",
+    strategyId: 1,
+    operatorApproval: null,
+    ...overrides,
+  };
+}
+
 test("mainnet policy pins the complete Solana mainnet genesis hash", () => {
   assert.equal(MAINNET_GENESIS_HASH, "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d");
 });
@@ -182,4 +218,18 @@ test("cloud settlement policy enforces the cumulative one-percent burn", () => {
   assert.equal(values.burnAmount, 10_000n);
   assert.throws(() => validateIntent(cloudSettlementIntent({ burnAmount: "9999", treasuryAmount: "990001" }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
   assert.throws(() => validateIntent(cloudSettlementIntent({ burnBasisPoints: 99 }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
+});
+
+test("cloud withdrawal policy enforces one atomic 0.25-percent fee split", () => {
+  const configuredValue = JSON.parse(readFileSync(new URL("../config/mainnet.policy.json", import.meta.url), "utf8"));
+  const withdrawal = cloudWithdrawalIntent();
+  configuredValue.allowedDestinations = [destination, withdrawal.treasury].sort();
+  const configured = validatePolicy(configuredValue);
+  const values = validateIntent(withdrawal, configured, 100);
+  assert.equal(values.kind, "cloud-withdrawal");
+  assert.equal(values.grossAmount, 1_000_000n);
+  assert.equal(values.destinationAmount, 997_500n);
+  assert.equal(values.feeAmount, 2_500n);
+  assert.throws(() => validateIntent(cloudWithdrawalIntent({ feeBasisPoints: 24 }), configured, 100), { code: "CLOUD_WITHDRAWAL_FEE_CHANGED" });
+  assert.throws(() => validateIntent(cloudWithdrawalIntent({ feeAmount: "2499", destinationAmount: "997501" }), configured, 100), { code: "CLOUD_WITHDRAWAL_FEE_CHANGED" });
 });

@@ -8,6 +8,7 @@ import {
   QOS_TOKEN_DECIMALS,
   QOS_TOKEN_MINT,
   QOS_TOKEN_MINT_EXTENSIONS,
+  TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   VENUE_ID,
   WRAPPED_SOL_MINT,
@@ -81,6 +82,39 @@ export const CLOUD_SETTLEMENT_INTENT_KEYS = [
   "destinationTokenAccount",
   "tokenProgram",
   "decimals",
+  "recentBlockhash",
+  "expiresAtSlot",
+  "strategyId",
+  "operatorApproval",
+];
+
+export const CLOUD_WITHDRAWAL_INTENT_KEYS = [
+  "version",
+  "requestNonce",
+  "clusterGenesis",
+  "venueId",
+  "marketId",
+  "side",
+  "assetKind",
+  "mint",
+  "tokenProgram",
+  "sourceTokenAccount",
+  "destinationTokenAccount",
+  "treasuryTokenAccount",
+  "decimals",
+  "grossAmount",
+  "destinationAmount",
+  "feeAmount",
+  "feeBasisPoints",
+  "feeRemainderBefore",
+  "feeRemainderAfter",
+  "createDestinationTokenAccount",
+  "createTreasuryTokenAccount",
+  "maxFeeLamports",
+  "maxCuPrice",
+  "maxRelayTip",
+  "destination",
+  "treasury",
   "recentBlockhash",
   "expiresAtSlot",
   "strategyId",
@@ -226,7 +260,8 @@ export function validateIntent(intent, policy, currentSlot) {
   if (intent.version === 1) return validateNativeIntent(intent, policy, currentSlot);
   if (intent.version === 2) return validateTokenIntent(intent, policy, currentSlot);
   if (intent.version === 3) return validateCloudSettlementIntent(intent, policy, currentSlot);
-  assertQos(false, "UNSUPPORTED_INTENT", "Only native, token-transfer, and qOS Cloud settlement intents are supported");
+  if (intent.version === 4) return validateCloudWithdrawalIntent(intent, policy, currentSlot);
+  assertQos(false, "UNSUPPORTED_INTENT", "Only native, token-transfer, qOS Cloud settlement, and qOS Cloud withdrawal intents are supported");
 }
 
 function validateCommonIntent(intent, policy, currentSlot, expectedSide = "SEND") {
@@ -303,4 +338,51 @@ function validateCloudSettlementIntent(intent, policy, currentSlot) {
   assertQos(burnAmount === burnNumerator / 100n && remainderAfter === burnNumerator % 100n, "CLOUD_BURN_POLICY_CHANGED", "Cloud burn amount does not equal the cumulative one-percent policy");
   assertQos(treasuryAmount + burnAmount === grossAmount, "CLOUD_SETTLEMENT_SPLIT_INVALID", "Cloud treasury and burn amounts must equal the gross charge");
   return { ...common, kind: "cloud-settlement", amount: grossAmount, grossAmount, treasuryAmount, burnAmount, remainderBefore, remainderAfter };
+}
+
+function validateCloudWithdrawalIntent(intent, policy, currentSlot) {
+  assertQos(hasExactKeys(intent, CLOUD_WITHDRAWAL_INTENT_KEYS), "INVALID_INTENT_SHAPE", "Cloud withdrawal intent has missing or unknown fields");
+  const common = validateCommonIntent(intent, policy, currentSlot, "WITHDRAW");
+  decodeBase58(intent.treasury, 32);
+  assertQos(policy.allowedDestinations.includes(intent.treasury), "DESTINATION_NOT_ALLOWED", "Withdrawal fee treasury is not allowlisted");
+  assertQos(intent.destination !== intent.treasury || intent.destinationAmount !== "0", "ZERO_AMOUNT", "Withdrawal destination amount must be positive");
+  const grossAmount = parseUnsigned(intent.grossAmount, 64, "grossAmount");
+  const destinationAmount = parseUnsigned(intent.destinationAmount, 64, "destinationAmount");
+  const feeAmount = parseUnsigned(intent.feeAmount, 64, "feeAmount");
+  const remainderBefore = parseUnsigned(intent.feeRemainderBefore, 14, "feeRemainderBefore");
+  const remainderAfter = parseUnsigned(intent.feeRemainderAfter, 14, "feeRemainderAfter");
+  assertQos(grossAmount > 0n, "ZERO_AMOUNT", "Cloud withdrawal amount must be greater than zero");
+  assertQos(intent.feeBasisPoints === 25, "CLOUD_WITHDRAWAL_FEE_CHANGED", "Cloud withdrawal fee must be exactly 0.25 percent cumulatively");
+  assertQos(remainderBefore < 10_000n && remainderAfter < 10_000n, "CLOUD_WITHDRAWAL_FEE_REMAINDER_INVALID", "Cloud withdrawal fee remainder must be below ten thousand");
+  const feeNumerator = remainderBefore + grossAmount * 25n;
+  assertQos(feeAmount === feeNumerator / 10_000n && remainderAfter === feeNumerator % 10_000n, "CLOUD_WITHDRAWAL_FEE_CHANGED", "Cloud withdrawal fee does not match the cumulative 0.25-percent policy");
+  assertQos(destinationAmount + feeAmount === grossAmount, "CLOUD_WITHDRAWAL_SPLIT_INVALID", "Withdrawal destination and fee amounts must equal the gross amount");
+
+  assertQos(intent.assetKind === "sol" || intent.assetKind === "token", "CLOUD_WITHDRAWAL_ASSET_INVALID", "Cloud withdrawal asset kind is invalid");
+  if (intent.assetKind === "sol") {
+    assertQos(intent.mint === null && intent.tokenProgram === null && intent.sourceTokenAccount === null
+      && intent.destinationTokenAccount === null && intent.treasuryTokenAccount === null && intent.decimals === null,
+    "CLOUD_WITHDRAWAL_ASSET_INVALID", "Native SOL withdrawal must not include token fields");
+    assertQos(intent.createDestinationTokenAccount === false && intent.createTreasuryTokenAccount === false, "CLOUD_WITHDRAWAL_ASSET_INVALID", "Native SOL withdrawal cannot create token accounts");
+  } else {
+    decodeBase58(intent.mint, 32);
+    decodeBase58(intent.tokenProgram, 32);
+    decodeBase58(intent.sourceTokenAccount, 32);
+    decodeBase58(intent.destinationTokenAccount, 32);
+    decodeBase58(intent.treasuryTokenAccount, 32);
+    assertQos(intent.tokenProgram === TOKEN_PROGRAM_ID || intent.tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "Cloud withdrawal supports only Token and Token-2022 assets");
+    assertQos(Number.isInteger(intent.decimals) && intent.decimals >= 0 && intent.decimals <= 255, "INVALID_TOKEN_DECIMALS", "Withdrawal token decimals must fit in u8");
+    assertQos(intent.sourceTokenAccount !== intent.destinationTokenAccount && intent.sourceTokenAccount !== intent.treasuryTokenAccount, "DUPLICATE_TOKEN_ACCOUNT", "Withdrawal source token account must differ from its destinations");
+    assertQos(typeof intent.createDestinationTokenAccount === "boolean" && typeof intent.createTreasuryTokenAccount === "boolean", "CLOUD_WITHDRAWAL_ASSET_INVALID", "Withdrawal token-account creation flags are invalid");
+  }
+  return {
+    ...common,
+    kind: "cloud-withdrawal",
+    amount: grossAmount,
+    grossAmount,
+    destinationAmount,
+    feeAmount,
+    remainderBefore,
+    remainderAfter,
+  };
 }

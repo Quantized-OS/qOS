@@ -8,6 +8,12 @@ Most trading systems rely on a broad and fragile trust base: a general-purpose o
 
 The design has three goals: **keep strategies and keys private, make the machine verifiable, and give crypto applications hardware-enforced control over what may be signed.**
 
+Version 0.11.2 adds the bounded host integration used by the separate qOS Cloud
+project: validated SOL/SPL/Token-2022 wallet inventory, typed multi-asset
+withdrawals with an exact cumulative 0.25% fee split, and an explicitly gated
+managed MCP proxy mode. Self-hosted setup and the restricted qOS shell remain
+unchanged.
+
 Solana is the first test environment because it combines high-throughput execution, latency-sensitive trading, composable programs, and a clear need for safer automated signing.
 
 > qOS is an early-stage research and engineering project. The concept is being discussed with AMD as a possible approach to bringing firmware assurance onchain while preserving privacy. This repository does not announce an AMD partnership, endorsement, product commitment, or planned integration.
@@ -265,7 +271,7 @@ signing.
 
 ## Ephemeral transaction privacy
 
-qOS v0.11.1 does not create transaction audit logs. Intent, blockhash, serialized
+qOS v0.11.2 does not create transaction audit logs. Intent, blockhash, serialized
 message, signature, and firmware mailbox data exist only while a request is
 active. Host buffers are overwritten where the runtime permits it, firmware
 mailboxes and stack buffers are wiped with volatile writes, and QEMU receives
@@ -366,7 +372,7 @@ with production-grade firmware or non-exportable custody.
 ## Build the research release media
 
 After the host checks pass, `make release-media` creates a deterministic source
-archive, checksums, and `release-artifacts/qos-0.11.1-research-media.iso`. The
+archive, checksums, and `release-artifacts/qos-0.11.2-research-media.iso`. The
 ISO is valid ISO-9660 data media for offline review; it is not a bootable
 production firmware installer. Read [`RELEASE_READINESS.md`](docs/reports/RELEASE_READINESS.md)
 before treating any qOS image as more than a research demonstration.

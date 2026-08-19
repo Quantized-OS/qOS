@@ -610,17 +610,20 @@ def main() -> None:
             "Quantized-OS/qOS",
         ),
     )
-    require(
-        ".github/workflows/release.yml",
-        (
-            "make check",
-            "build-github-release.py",
-            "gh release create",
-            "qos-source.tar.gz",
-            "SHA256SUMS.txt",
-            "--verify-tag",
-        ),
-    )
+    # Source/release archives intentionally omit GitHub repository metadata.
+    # Validate the workflow only in a checkout that actually contains it.
+    if (ROOT / ".github/workflows/release.yml").is_file():
+        require(
+            ".github/workflows/release.yml",
+            (
+                "make check",
+                "build-github-release.py",
+                "gh release create",
+                "qos-source.tar.gz",
+                "SHA256SUMS.txt",
+                "--verify-tag",
+            ),
+        )
     require(
         "docs/SIGNER_ADAPTER_SETUP.md",
         (

@@ -20,6 +20,24 @@ atomic SDK surface for services that need more than one reviewed token
 destination. It preserves the policy's non-empty allowlist and all locked
 transaction-template fields.
 
+`QosService.walletAssets(owner)` returns native SOL plus nonzero SPL Token and
+Token-2022 accounts owned by the supplied wallet. It validates token accounts,
+loads mint decimals in bounded batches, and marks an asset withdrawable only
+when the mint and token program pass the reviewed parsers.
+
+`QosService.prepareCloudWithdrawalIntent(options)` builds a version-4 typed
+withdrawal intent for one selected inventory asset. It supports native SOL and
+SPL/Token-2022 `TransferChecked`, creates missing destination associated token
+accounts idempotently, and binds the connected-wallet destination, allowlisted
+treasury, gross amount, and cumulative-exact 25-basis-point fee. The normal
+simulate, sign, submit, confirm, and forget path remains authoritative.
+
+Managed hosts may start an agent listener with `--managed-proxy` only when
+`QOS_ENABLE_MANAGED_PROXY=I_UNDERSTAND` is also set. This permits `0.0.0.0`
+inside an isolated runtime while rejecting public client addresses; the host
+must publish the port on loopback and provide its own external authentication.
+The ordinary self-hosted listener remains loopback-only.
+
 The package export maps `qos-solana-sandbox/platform-sdk` to
 `src/platform-sdk.js`. Consumers must not import other `src/*` paths or assume a
 qOS checkout is inside their own repository.

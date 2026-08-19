@@ -30,7 +30,7 @@ const VALUE_OPTIONS = new Set([
   "--destination", "--strategy-id", "--host", "--port", "--url",
   "--instance",
 ]);
-const FLAG_OPTIONS = new Set(["--json", "--accept-auto", "--yes", "--confirm-live", "--daemon-child"]);
+const FLAG_OPTIONS = new Set(["--json", "--accept-auto", "--yes", "--confirm-live", "--daemon-child", "--managed-proxy"]);
 const OPTION_ALIASES = new Map([
   ["-H", "--home"], ["-j", "--json"], ["-I", "--id"], ["-N", "--name"],
   ["-A", "--approval"], ["-a", "--asset"], ["-M", "--max-amount"],
@@ -324,6 +324,7 @@ async function listen(options) {
   if (!Number.isInteger(port) || port > 65535) throw new QosError("INVALID_PORT", "--port must be between 1 and 65535");
   const live = options.flags.has("--confirm-live");
   const daemonChild = options.flags.has("--daemon-child");
+  const managedProxy = options.flags.has("--managed-proxy");
   const instanceId = options.values.get("--instance");
   if (daemonChild) {
     if (typeof instanceId !== "string" || !/^[0-9a-f]{64}$/.test(instanceId)) throw new QosError("INVALID_AGENT_LISTENER_INSTANCE", "Managed listener child requires a valid instance ID");
@@ -338,6 +339,7 @@ async function listen(options) {
     apiTokenFile: runtime.apiTokenFile,
     enableMainnetBroadcast: live,
     managedInstanceId: daemonChild ? instanceId : null,
+    managedProxy,
   });
   await new Promise((resolveReady, reject) => {
     server.once("listening", resolveReady);
@@ -431,7 +433,7 @@ async function main() {
     if (rest.length) throw new QosError("INVALID_ARGUMENT", "agent stop accepts no arguments");
     result = await stopAgentDaemon(options.home);
   } else if (command === "listen") {
-    assertOptionSurface(options, ["--host", "--port", "--instance"], ["--confirm-live", "--daemon-child"]);
+    assertOptionSurface(options, ["--host", "--port", "--instance"], ["--confirm-live", "--daemon-child", "--managed-proxy"]);
     if (rest.length) throw new QosError("INVALID_ARGUMENT", "agent listen accepts options, not positional values");
     await listen(options);
     return;

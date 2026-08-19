@@ -1,6 +1,7 @@
 import { sign, verify } from "node:crypto";
 import { decodeBase58, encodeBase58 } from "./base58.js";
 import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   MAX_TRANSACTION_BYTES,
   SYSTEM_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -153,6 +154,115 @@ export function buildCloudSettlementMessage({
   ]);
 }
 
+function compileLegacyMessage({ payer, recentBlockhash, instructions }) {
+  const metadata = new Map();
+  const order = [];
+  function include(pubkey, { signer = false, writable = false } = {}) {
+    decodeBase58(pubkey, 32);
+    const current = metadata.get(pubkey);
+    if (current) {
+      current.signer ||= signer;
+      current.writable ||= writable;
+      return;
+    }
+    metadata.set(pubkey, { pubkey, signer, writable });
+    order.push(pubkey);
+  }
+  include(payer, { signer: true, writable: true });
+  for (const instruction of instructions) {
+    for (const key of instruction.keys) include(key.pubkey, { signer: key.signer === true, writable: key.writable === true });
+    include(instruction.programId);
+  }
+  const entries = order.map((pubkey) => metadata.get(pubkey));
+  const signedWritable = entries.filter((item) => item.signer && item.writable);
+  const signedReadonly = entries.filter((item) => item.signer && !item.writable);
+  const unsignedWritable = entries.filter((item) => !item.signer && item.writable);
+  const unsignedReadonly = entries.filter((item) => !item.signer && !item.writable);
+  const accounts = [...signedWritable, ...signedReadonly, ...unsignedWritable, ...unsignedReadonly];
+  assertQos(signedWritable.length === 1 && signedWritable[0].pubkey === payer && signedReadonly.length === 0, "UNEXPECTED_SIGNERS", "Cloud withdrawal requires exactly one writable signer");
+  const indexes = new Map(accounts.map((item, index) => [item.pubkey, index]));
+  const encodedInstructions = instructions.map((instruction) => Buffer.concat([
+    Buffer.from([indexes.get(instruction.programId)]),
+    encodeShortVec(instruction.keys.length),
+    Buffer.from(instruction.keys.map((key) => indexes.get(key.pubkey))),
+    encodeShortVec(instruction.data.length),
+    instruction.data,
+  ]));
+  return Buffer.concat([
+    Buffer.from([1, 0, unsignedReadonly.length]),
+    encodeShortVec(accounts.length),
+    ...accounts.map((item) => decodeBase58(item.pubkey, 32)),
+    decodeBase58(recentBlockhash, 32),
+    encodeShortVec(encodedInstructions.length),
+    ...encodedInstructions,
+  ]);
+}
+
+function systemTransferInstruction(payer, destination, amount) {
+  return {
+    programId: SYSTEM_PROGRAM_ID,
+    keys: [
+      { pubkey: payer, signer: true, writable: true },
+      { pubkey: destination, writable: true },
+    ],
+    data: Buffer.concat([Buffer.from([2, 0, 0, 0]), u64le(amount)]),
+  };
+}
+
+function createAssociatedInstruction(payer, tokenAccount, owner, mint, tokenProgram) {
+  return {
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: payer, signer: true, writable: true },
+      { pubkey: tokenAccount, writable: true },
+      { pubkey: owner },
+      { pubkey: mint },
+      { pubkey: SYSTEM_PROGRAM_ID },
+      { pubkey: tokenProgram },
+    ],
+    data: Buffer.from([1]),
+  };
+}
+
+function transferCheckedInstruction(payer, source, destination, mint, tokenProgram, amount, decimals) {
+  return {
+    programId: tokenProgram,
+    keys: [
+      { pubkey: source, writable: true },
+      { pubkey: mint },
+      { pubkey: destination, writable: true },
+      { pubkey: payer, signer: true },
+    ],
+    data: Buffer.concat([Buffer.from([12]), u64le(amount), Buffer.from([decimals])]),
+  };
+}
+
+export function buildCloudWithdrawalMessage(intent) {
+  const gross = BigInt(intent.grossAmount);
+  const destinationAmount = BigInt(intent.destinationAmount);
+  const feeAmount = BigInt(intent.feeAmount);
+  assertQos(gross > 0n && destinationAmount + feeAmount === gross, "CLOUD_WITHDRAWAL_SPLIT_INVALID", "Withdrawal split is invalid");
+  const instructions = [];
+  if (intent.assetKind === "sol") {
+    instructions.push(systemTransferInstruction(intent.payer, intent.destination, destinationAmount));
+    if (feeAmount > 0n) instructions.push(systemTransferInstruction(intent.payer, intent.treasury, feeAmount));
+  } else {
+    assertQos(intent.tokenProgram === TOKEN_PROGRAM_ID || intent.tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "Cloud withdrawal supports only Token and Token-2022 assets");
+    assertQos(Number.isInteger(intent.decimals) && intent.decimals >= 0 && intent.decimals <= 255, "INVALID_TOKEN_DECIMALS", "Withdrawal decimals must fit in u8");
+    if (intent.createDestinationTokenAccount) {
+      instructions.push(createAssociatedInstruction(intent.payer, intent.destinationTokenAccount, intent.destination, intent.mint, intent.tokenProgram));
+    }
+    if (intent.createTreasuryTokenAccount) {
+      instructions.push(createAssociatedInstruction(intent.payer, intent.treasuryTokenAccount, intent.treasury, intent.mint, intent.tokenProgram));
+    }
+    instructions.push(transferCheckedInstruction(intent.payer, intent.sourceTokenAccount, intent.destinationTokenAccount, intent.mint, intent.tokenProgram, destinationAmount, intent.decimals));
+    if (feeAmount > 0n) {
+      instructions.push(transferCheckedInstruction(intent.payer, intent.sourceTokenAccount, intent.treasuryTokenAccount, intent.mint, intent.tokenProgram, feeAmount, intent.decimals));
+    }
+  }
+  return compileLegacyMessage({ payer: intent.payer, recentBlockhash: intent.recentBlockhash, instructions });
+}
+
 export function signMessage(message, privateKey) {
   const publicKeyBytes = rawPublicKey(privateKey);
   let signature;
@@ -219,6 +329,74 @@ class Reader {
     }
     assertQos(false, "INVALID_SHORTVEC", "shortvec is too long");
   }
+}
+
+function parseCompiledLegacyMessage(message) {
+  const reader = new Reader(message);
+  const header = [reader.byte(), reader.byte(), reader.byte()];
+  assertQos(header[0] === 1 && header[1] === 0, "UNEXPECTED_MESSAGE_HEADER", "Cloud withdrawal requires one writable signer");
+  const accountCount = reader.shortVec();
+  assertQos(accountCount >= 3 && accountCount <= 12, "UNEXPECTED_ACCOUNTS", "Cloud withdrawal account count is outside its template");
+  const accounts = Array.from({ length: accountCount }, () => encodeBase58(reader.bytes(32)));
+  assertQos(new Set(accounts).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Cloud withdrawal message contains duplicate account entries");
+  const recentBlockhash = encodeBase58(reader.bytes(32));
+  const instructionCount = reader.shortVec();
+  assertQos(instructionCount >= 1 && instructionCount <= 4, "UNEXPECTED_INSTRUCTIONS", "Cloud withdrawal instruction count is outside its template");
+  const instructions = [];
+  for (let index = 0; index < instructionCount; index += 1) {
+    const programIndex = reader.byte();
+    assertQos(programIndex < accounts.length, "WRONG_PROGRAM", "Cloud withdrawal program index is invalid");
+    const accountIndexCount = reader.shortVec();
+    const accountIndexes = [...reader.bytes(accountIndexCount)];
+    assertQos(accountIndexes.every((value) => value < accounts.length), "WRONG_ACCOUNTS", "Cloud withdrawal account index is invalid");
+    const dataLength = reader.shortVec();
+    instructions.push({
+      programId: accounts[programIndex],
+      accounts: accountIndexes.map((value) => accounts[value]),
+      data: Buffer.from(reader.bytes(dataLength)),
+    });
+  }
+  assertQos(reader.offset === reader.buffer.length, "TRAILING_TRANSACTION_DATA", "Cloud withdrawal contains trailing bytes");
+  return { header, accounts, payer: accounts[0], recentBlockhash, instructions };
+}
+
+export function parseCloudWithdrawalMessage(message) {
+  const parsed = parseCompiledLegacyMessage(message);
+  const transferInstructions = parsed.instructions.filter((item) => item.programId !== ASSOCIATED_TOKEN_PROGRAM_ID);
+  const createInstructions = parsed.instructions.filter((item) => item.programId === ASSOCIATED_TOKEN_PROGRAM_ID);
+  if (transferInstructions.every((item) => item.programId === SYSTEM_PROGRAM_ID)) {
+    assertQos(createInstructions.length === 0 && transferInstructions.length <= 2, "WRONG_INSTRUCTION", "Native withdrawal permits only one or two System Program transfers");
+    const transfers = transferInstructions.map((item) => {
+      assertQos(item.accounts.length === 2 && item.accounts[0] === parsed.payer, "WRONG_ACCOUNTS", "Native withdrawal transfer accounts changed");
+      assertQos(item.data.length === 12 && item.data.readUInt32LE(0) === 2, "WRONG_INSTRUCTION", "Native withdrawal permits only SystemProgram.transfer");
+      return { destination: item.accounts[1], amount: item.data.readBigUInt64LE(4) };
+    });
+    return { ...parsed, assetKind: "sol", transfers };
+  }
+  assertQos(transferInstructions.length >= 1 && transferInstructions.length <= 2, "WRONG_INSTRUCTION", "Token withdrawal permits one or two TransferChecked instructions");
+  const tokenProgram = transferInstructions[0].programId;
+  assertQos(tokenProgram === TOKEN_PROGRAM_ID || tokenProgram === TOKEN_2022_PROGRAM_ID, "WRONG_PROGRAM", "Token withdrawal program is not supported");
+  for (const instruction of createInstructions) {
+    assertQos(instruction.data.length === 1 && instruction.data[0] === 1, "WRONG_INSTRUCTION", "Token withdrawal permits only CreateIdempotent associated-account instructions");
+    assertQos(instruction.accounts.length === 6 && instruction.accounts[0] === parsed.payer
+      && instruction.accounts[4] === SYSTEM_PROGRAM_ID && instruction.accounts[5] === tokenProgram,
+    "WRONG_ACCOUNTS", "Associated token account creation template changed");
+  }
+  const transfers = transferInstructions.map((item) => {
+    assertQos(item.programId === tokenProgram && item.accounts.length === 4 && item.accounts[3] === parsed.payer, "WRONG_ACCOUNTS", "Token withdrawal TransferChecked accounts changed");
+    assertQos(item.data.length === 10 && item.data[0] === 12, "WRONG_INSTRUCTION", "Token withdrawal permits only TransferChecked");
+    return {
+      sourceTokenAccount: item.accounts[0],
+      mint: item.accounts[1],
+      destinationTokenAccount: item.accounts[2],
+      amount: item.data.readBigUInt64LE(1),
+      decimals: item.data[9],
+    };
+  });
+  assertQos(transfers.every((item) => item.sourceTokenAccount === transfers[0].sourceTokenAccount
+    && item.mint === transfers[0].mint && item.decimals === transfers[0].decimals),
+  "WRONG_ACCOUNTS", "Token withdrawal transfers disagree on source, mint, or decimals");
+  return { ...parsed, assetKind: "token", tokenProgram, createInstructions, transfers };
 }
 
 export function parseNativeTransferMessage(message) {
