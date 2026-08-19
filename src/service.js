@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeBase58 } from "./base58.js";
 import { QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./constants.js";
-import { assertQos } from "./errors.js";
+import { assertQos, QosError } from "./errors.js";
 import {
   publicKeyAddress,
   writeNewEncryptedEd25519Key,
@@ -46,6 +46,41 @@ import { assertPrivateDirectory } from "./secure-file.js";
 import { loadRuntimeProfile } from "./runtime-profile.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+function submissionFailure(error, { stage, signature, recentBlockhash }) {
+  if (stage === "pre-broadcast" && signature === null) return error;
+  if (!(error instanceof QosError)) {
+    if (stage === "broadcast-requested" || stage === "confirmation") {
+      return new QosError("SUBMISSION_STATUS_UNKNOWN", "The transaction may have been broadcast but its status could not be determined", {
+        submissionStage: stage,
+        transactionOutcome: "unknown",
+        transactionSignature: signature,
+        recentBlockhash,
+      });
+    }
+    return error;
+  }
+  let transactionOutcome = "not-broadcast";
+  if (stage === "broadcast-requested") {
+    transactionOutcome = error.code === "RPC_ERROR" ? "rejected" : "unknown";
+  } else if (stage === "confirmation") {
+    transactionOutcome = error.code === "TRANSACTION_FAILED"
+      ? "failed"
+      : error.code === "BLOCKHASH_EXPIRED"
+        ? "expired"
+        : "unknown";
+  }
+  const priorDetails = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details
+    : {};
+  return new QosError(error.code, error.message, {
+    ...priorDetails,
+    submissionStage: stage,
+    transactionOutcome,
+    ...(signature === null ? {} : { transactionSignature: signature }),
+    recentBlockhash,
+  });
+}
 
 export function sandboxPaths(home) {
   return {
@@ -625,6 +660,8 @@ export class QosService {
     const releaseAuthorization = this.session.begin(intent.requestNonce, this.policy.maxRequestsPerMinute);
     let message;
     let signature;
+    let transactionSignature = null;
+    let submissionStage = "pre-broadcast";
     try {
     const proofResult = await this.proofGate.verify(intent, privacyProof, {
       policy: this.policy,
@@ -742,10 +779,13 @@ export class QosService {
       privacyProofVerified: proofResult.verified,
     });
     const signed = assembleSignedTransaction(message, decodeBase58(this.publicKey, 32), signature);
+    transactionSignature = signed.signature;
     const simulation = await this.rpc.simulateTransaction(signed.transactionBase64);
     assertQos(simulation && simulation.err === null, "SIMULATION_FAILED", "Solana preflight simulation rejected the transaction");
+    submissionStage = "broadcast-requested";
     const rpcSignature = await this.rpc.sendTransaction(signed.transactionBase64);
     assertQos(rpcSignature === signed.signature, "SIGNATURE_MISMATCH", "RPC returned a different transaction signature");
+    submissionStage = "confirmation";
     const status = await this.rpc.confirmSignature(signed.signature, {
       timeoutMs: this.policy.confirmationTimeoutMs,
       recentBlockhash: intent.recentBlockhash,
@@ -797,11 +837,46 @@ export class QosService {
         ? `https://explorer.solana.com/tx/${signed.signature}?cluster=devnet`
         : `https://explorer.solana.com/tx/${signed.signature}`,
     };
+    } catch (error) {
+      throw submissionFailure(error, {
+        stage: submissionStage,
+        signature: transactionSignature,
+        recentBlockhash: intent?.recentBlockhash ?? null,
+      });
     } finally {
       if (Buffer.isBuffer(message)) message.fill(0);
       if (Buffer.isBuffer(signature)) signature.fill(0);
       releaseAuthorization();
     }
+  }
+
+  async reviewTransaction({ signature, recentBlockhash }) {
+    assertQos(typeof signature === "string", "INVALID_SIGNATURE", "Transaction signature is required for settlement review");
+    decodeBase58(signature, 64);
+    assertQos(typeof recentBlockhash === "string", "INVALID_BLOCKHASH", "Recent blockhash is required for settlement review");
+    decodeBase58(recentBlockhash, 32);
+    const status = await this.rpc.signatureStatus(signature);
+    if (status !== null && status !== undefined) {
+      assertQos(status && typeof status === "object" && !Array.isArray(status), "RPC_INVALID_STATUS", "Solana RPC returned an invalid signature status");
+      assertQos(Object.hasOwn(status, "err"), "RPC_INVALID_STATUS", "Solana RPC signature status omitted the transaction result");
+      assertQos(Number.isSafeInteger(status.slot) && status.slot >= 0, "RPC_INVALID_STATUS", "Solana RPC signature status returned an invalid slot");
+      assertQos([null, "processed", "confirmed", "finalized"].includes(status.confirmationStatus), "RPC_INVALID_STATUS", "Solana RPC returned an invalid confirmation status");
+      if (status.err !== null) {
+        return { signature, outcome: "failed", slot: status.slot, confirmationStatus: status.confirmationStatus };
+      }
+      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
+        return { signature, outcome: "confirmed", slot: status.slot, confirmationStatus: status.confirmationStatus };
+      }
+      return { signature, outcome: "pending", slot: status.slot, confirmationStatus: status.confirmationStatus };
+    }
+    const blockhashValid = await this.rpc.isBlockhashValid(recentBlockhash);
+    assertQos(typeof blockhashValid === "boolean", "RPC_INVALID_BLOCKHASH_STATUS", "Solana RPC returned an invalid blockhash status");
+    return {
+      signature,
+      outcome: blockhashValid ? "pending" : "expired",
+      slot: null,
+      confirmationStatus: null,
+    };
   }
 
   publicPolicy() {

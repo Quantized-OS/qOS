@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH, QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
+import { QosError } from "../src/errors.js";
 import { initializeSandbox, QosService } from "../src/service.js";
 import { ensureRuntimeProfile } from "../src/runtime-profile.js";
 import { parseCloudSettlementMessage } from "../src/transaction.js";
@@ -27,6 +28,7 @@ class MockRpc {
     return encodeBase58(Buffer.from(transactionBase64, "base64").subarray(1, 65));
   }
   async confirmSignature() { return { slot: 101, confirmationStatus: "confirmed", err: null }; }
+  async signatureStatus() { return null; }
   async getBalance() { return { value: 200000000 }; }
   async getAccountInfo(address) { return this.accountInfos.get(address) ?? null; }
 }
@@ -105,8 +107,54 @@ test("service refuses failed preflight and releases volatile authorization state
   const { service } = serviceWithMock();
   service.rpc.simulateTransaction = async () => ({ err: { InstructionError: [0, "Custom"] }, logs: ["failed"] });
   const intent = await service.prepareIntent();
-  await assert.rejects(() => service.submitIntent(intent), { code: "SIMULATION_FAILED" });
+  await assert.rejects(() => service.submitIntent(intent), (error) => {
+    assert.equal(error.code, "SIMULATION_FAILED");
+    assert.equal(error.details.submissionStage, "pre-broadcast");
+    assert.equal(error.details.transactionOutcome, "not-broadcast");
+    return true;
+  });
   assert.equal(service.session.status().activeAuthorizations, 0);
+});
+
+test("submission metadata distinguishes a rejected send from an ambiguous broadcast", async () => {
+  const rejected = serviceWithMock().service;
+  const rejectedIntent = await rejected.prepareIntent();
+  rejected.rpc.sendTransaction = async () => { throw new QosError("RPC_ERROR", "RPC rejected the transaction"); };
+  await assert.rejects(() => rejected.submitIntent(rejectedIntent), (error) => {
+    assert.equal(error.code, "RPC_ERROR");
+    assert.equal(error.details.submissionStage, "broadcast-requested");
+    assert.equal(error.details.transactionOutcome, "rejected");
+    assert.equal(typeof error.details.transactionSignature, "string");
+    return true;
+  });
+
+  const ambiguous = serviceWithMock().service;
+  const ambiguousIntent = await ambiguous.prepareIntent();
+  ambiguous.rpc.sendTransaction = async () => { throw new QosError("RPC_UNAVAILABLE", "RPC response was lost"); };
+  await assert.rejects(() => ambiguous.submitIntent(ambiguousIntent), (error) => {
+    assert.equal(error.code, "RPC_UNAVAILABLE");
+    assert.equal(error.details.submissionStage, "broadcast-requested");
+    assert.equal(error.details.transactionOutcome, "unknown");
+    assert.equal(typeof error.details.transactionSignature, "string");
+    assert.equal(error.details.recentBlockhash, ambiguousIntent.recentBlockhash);
+    return true;
+  });
+});
+
+test("settlement review checks the stored signature without accepting a replacement", async () => {
+  const { service } = serviceWithMock();
+  const signature = encodeBase58(Buffer.alloc(64, 12));
+  service.rpc.signatureStatus = async () => ({ slot: 202, confirmationStatus: "finalized", err: null });
+  assert.deepEqual(await service.reviewTransaction({ signature, recentBlockhash: service.rpc.blockhash }), {
+    signature,
+    outcome: "confirmed",
+    slot: 202,
+    confirmationStatus: "finalized",
+  });
+
+  service.rpc.signatureStatus = async () => null;
+  service.rpc.isBlockhashValid = async () => false;
+  assert.equal((await service.reviewTransaction({ signature, recentBlockhash: service.rpc.blockhash })).outcome, "expired");
 });
 
 test("service reports the exact SOL funding deficit before signing", async () => {
