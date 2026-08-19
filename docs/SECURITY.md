@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.11.2 adds strong
+qOS is a research firmware and policy-signer project. Version 0.11.3 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.

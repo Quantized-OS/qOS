@@ -1,6 +1,6 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.11.2 gives every automated agent a separate, revocable credential and a
+qOS 0.11.3 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
