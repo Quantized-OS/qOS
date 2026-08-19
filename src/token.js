@@ -93,6 +93,44 @@ function rpcAccountBytes(value, expectedProgram, field) {
   return bytes;
 }
 
+export function parseGenericMintAccount(value, tokenProgram) {
+  assertQos(SUPPORTED_TOKEN_PROGRAMS.has(tokenProgram), "UNSUPPORTED_TOKEN_PROGRAM", "Wallet assets require the Token or Token-2022 program");
+  const bytes = rpcAccountBytes(value, tokenProgram, "mint");
+  assertQos(bytes.length >= 82, "INVALID_MINT_ACCOUNT", "Mint account is shorter than the SPL mint layout");
+  assertQos(bytes[45] === 1, "UNINITIALIZED_MINT", "Mint account is not initialized");
+  return {
+    decimals: bytes[44],
+    supply: bytes.readBigUInt64LE(36),
+    extensions: tokenProgram === TOKEN_2022_PROGRAM_ID && bytes.length > 82
+      ? token2022ExtensionTypes(bytes, 82, 1)
+      : [],
+  };
+}
+
+export function parseOwnedTokenAccount(value, { tokenProgram, owner, field = "tokenAccount" }) {
+  assertQos(SUPPORTED_TOKEN_PROGRAMS.has(tokenProgram), "UNSUPPORTED_TOKEN_PROGRAM", "Wallet assets require the Token or Token-2022 program");
+  const accountValue = value?.account ?? value;
+  const bytes = rpcAccountBytes(accountValue, tokenProgram, field);
+  assertQos(bytes.length >= 165, "INVALID_TOKEN_ACCOUNT", `${field} is shorter than the SPL token-account layout`);
+  const mint = encodeBase58(bytes.subarray(0, 32));
+  assertQos(encodeBase58(bytes.subarray(32, 64)) === owner, "TOKEN_ACCOUNT_OWNER_MISMATCH", `${field} has an unexpected authority`);
+  assertQos(bytes[108] === 1, "TOKEN_ACCOUNT_NOT_TRANSFERABLE", `${field} is uninitialized or frozen`);
+  assertNoneOption(bytes, 109, 8, "TOKEN_ACCOUNT_NATIVE_STATE", `${field} must not be a wrapped-native account`);
+  return {
+    tokenAccount: value?.pubkey,
+    mint,
+    owner,
+    tokenProgram,
+    amount: bytes.readBigUInt64LE(64),
+  };
+}
+
+export function parseGenericDestinationAccount(value, { tokenProgram, mint, owner, field }) {
+  const parsed = parseOwnedTokenAccount(value, { tokenProgram, owner, field });
+  assertQos(parsed.mint === mint, "TOKEN_ACCOUNT_MINT_MISMATCH", `${field} is for a different mint`);
+  return parsed;
+}
+
 function assertNoneOption(bytes, offset, valueLength, code, message) {
   assertQos(bytes.readUInt32LE(offset) === 0, code, message);
   assertQos(bytes.subarray(offset + 4, offset + 4 + valueLength).every((byte) => byte === 0), code, message);

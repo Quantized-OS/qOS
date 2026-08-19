@@ -51,6 +51,35 @@ async function mcpRequest(origin, token, body, { method = body.method, name = bo
   return { status: response.status, value: await response.json() };
 }
 
+test("managed Docker proxy bind requires both the option and environment acknowledgement", async (t) => {
+  const { home, runtime } = profile(t);
+  const service = { policy: loadPolicy(join(home, "policy.json")) };
+  assert.throws(() => startAgentServer(service, {
+    home,
+    host: "0.0.0.0",
+    port: 0,
+    apiTokenFile: runtime.apiTokenFile,
+    managedProxy: true,
+  }), { code: "LOOPBACK_REQUIRED" });
+
+  const previous = process.env.QOS_ENABLE_MANAGED_PROXY;
+  process.env.QOS_ENABLE_MANAGED_PROXY = "I_UNDERSTAND";
+  t.after(() => {
+    if (previous === undefined) delete process.env.QOS_ENABLE_MANAGED_PROXY;
+    else process.env.QOS_ENABLE_MANAGED_PROXY = previous;
+  });
+  const server = startAgentServer(service, {
+    home,
+    host: "0.0.0.0",
+    port: 0,
+    apiTokenFile: runtime.apiTokenFile,
+    managedProxy: true,
+  });
+  t.after(() => server.close());
+  if (!server.listening) await once(server, "listening");
+  assert.equal(typeof server.address().port, "number");
+});
+
 test("agent listener separates agent credentials from memory-only operator approvals", async (t) => {
   const { home, runtime } = profile(t);
   const policy = loadPolicy(join(home, "policy.json"));

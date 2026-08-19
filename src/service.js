@@ -10,6 +10,7 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeBase58 } from "./base58.js";
+import { QOS_TOKEN_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./constants.js";
 import { assertQos } from "./errors.js";
 import {
   publicKeyAddress,
@@ -22,16 +23,21 @@ import { EphemeralSession } from "./session.js";
 import {
   assembleSignedTransaction,
   buildCloudSettlementMessage,
+  buildCloudWithdrawalMessage,
   buildNativeTransferMessage,
   buildTokenTransferCheckedMessage,
   parseCloudSettlementMessage,
+  parseCloudWithdrawalMessage,
   parseNativeTransferMessage,
   parseTokenTransferCheckedMessage,
 } from "./transaction.js";
 import { openSigner, signerDescriptor } from "./signer.js";
 import {
   associatedTokenAddress,
+  parseGenericDestinationAccount,
+  parseGenericMintAccount,
   parseMintAccount,
+  parseOwnedTokenAccount,
   parseTokenAccount,
   verifyTokenTransferAccounts,
 } from "./token.js";
@@ -182,6 +188,41 @@ function parseCloudSettlementOptions(options, policy, session) {
   return { destination, grossAmount, burnRemainderBefore, maxFeeLamports, strategyId, requestNonce, gross, remainder };
 }
 
+function parseWalletAssetId(assetId) {
+  assertQos(typeof assetId === "string" && assetId.length <= 192, "CLOUD_WITHDRAWAL_ASSET_INVALID", "Wallet asset ID is invalid");
+  if (assetId === "sol") return { assetId, kind: "sol" };
+  const match = /^token:([^:]+):([^:]+):([^:]+)$/.exec(assetId);
+  assertQos(match !== null, "CLOUD_WITHDRAWAL_ASSET_INVALID", "Wallet asset ID is invalid");
+  const [, tokenProgram, mint, tokenAccount] = match;
+  assertQos(tokenProgram === TOKEN_PROGRAM_ID || tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "Wallet asset uses an unsupported token program");
+  decodeBase58(mint, 32);
+  decodeBase58(tokenAccount, 32);
+  return { assetId, kind: "token", tokenProgram, mint, tokenAccount };
+}
+
+function parseCloudWithdrawalOptions(options, policy, session) {
+  assertQos(options && typeof options === "object" && !Array.isArray(options), "INVALID_PREPARE_REQUEST", "Cloud withdrawal request must be an object");
+  const allowed = new Set(["requestNonce", "assetId", "destination", "treasury", "grossAmount", "feeRemainderBefore", "maxFeeLamports", "strategyId"]);
+  assertQos(Object.keys(options).every((key) => allowed.has(key)), "INVALID_PREPARE_REQUEST", "Cloud withdrawal request contains unknown fields");
+  const asset = parseWalletAssetId(options.assetId);
+  const destination = options.destination;
+  const treasury = options.treasury;
+  decodeBase58(destination, 32);
+  decodeBase58(treasury, 32);
+  assertQos(destination !== undefined && treasury !== undefined, "DESTINATION_REQUIRED", "Cloud withdrawal requires its owner destination and fee treasury");
+  const gross = parseUnsigned(options.grossAmount, 64, "grossAmount");
+  const remainder = parseUnsigned(options.feeRemainderBefore ?? "0", 14, "feeRemainderBefore");
+  assertQos(gross > 0n, "ZERO_AMOUNT", "Cloud withdrawal amount must be greater than zero");
+  assertQos(remainder < 10_000n, "CLOUD_WITHDRAWAL_FEE_REMAINDER_INVALID", "Cloud withdrawal fee remainder must be below ten thousand");
+  const maxFeeLamports = options.maxFeeLamports ?? policy.maxFeeLamports;
+  const strategyId = options.strategyId ?? policy.allowedStrategyIds[0];
+  const requestNonce = options.requestNonce ?? session.nextNonce();
+  parseUnsigned(maxFeeLamports, 64, "maxFeeLamports");
+  parseUnsigned(requestNonce, 128, "requestNonce");
+  assertQos(Number.isInteger(strategyId), "INVALID_STRATEGY_ID", "strategyId must be an integer");
+  return { asset, destination, treasury, gross, remainder, maxFeeLamports, strategyId, requestNonce };
+}
+
 export class QosService {
   constructor({ paths, policy, signer, session, rpc, proofGate = new SnarkProofGate(), runtimeProfile = null }) {
     this.paths = paths;
@@ -329,6 +370,148 @@ export class QosService {
     return { ...address, amount: account.amount.toString(), decimals: this.policy.tokenTransfer.decimals };
   }
 
+  async walletAssets(owner = this.publicKey) {
+    decodeBase58(owner, 32);
+    await this.assertCluster();
+    const [lamports, classicAccounts, extensionAccounts] = await Promise.all([
+      this.balance(owner),
+      this.rpc.getTokenAccountsByOwner(owner, TOKEN_PROGRAM_ID),
+      this.rpc.getTokenAccountsByOwner(owner, TOKEN_2022_PROGRAM_ID),
+    ]);
+    const parsedAccounts = [];
+    for (const [tokenProgram, entries] of [[TOKEN_PROGRAM_ID, classicAccounts], [TOKEN_2022_PROGRAM_ID, extensionAccounts]]) {
+      for (const entry of entries) {
+        try {
+          const parsed = parseOwnedTokenAccount(entry, { tokenProgram, owner, field: "walletTokenAccount" });
+          if (parsed.amount > 0n) parsedAccounts.push(parsed);
+        } catch (error) {
+          if (error?.code !== "TOKEN_ACCOUNT_NATIVE_STATE") throw error;
+        }
+      }
+    }
+    const mintKeys = [...new Set(parsedAccounts.map((item) => item.mint))];
+    const mintValues = [];
+    for (let offset = 0; offset < mintKeys.length; offset += 100) {
+      mintValues.push(...await this.rpc.getMultipleAccounts(mintKeys.slice(offset, offset + 100)));
+    }
+    const mintByAddress = new Map(mintKeys.map((mint, index) => [mint, mintValues[index]]));
+    const assets = [{
+      assetId: "sol",
+      kind: "sol",
+      symbol: "SOL",
+      mint: null,
+      tokenProgram: null,
+      tokenAccount: null,
+      amount: lamports.toString(),
+      decimals: 9,
+      withdrawSupported: true,
+      errorCode: null,
+    }];
+    for (const account of parsedAccounts) {
+      let mint;
+      let errorCode = null;
+      try { mint = parseGenericMintAccount(mintByAddress.get(account.mint), account.tokenProgram); }
+      catch (error) { errorCode = error?.code ?? "INVALID_MINT_ACCOUNT"; }
+      assets.push({
+        assetId: `token:${account.tokenProgram}:${account.mint}:${account.tokenAccount}`,
+        kind: "token",
+        symbol: account.mint === QOS_TOKEN_MINT ? "qOS" : null,
+        mint: account.mint,
+        tokenProgram: account.tokenProgram,
+        tokenAccount: account.tokenAccount,
+        amount: account.amount.toString(),
+        decimals: mint?.decimals ?? null,
+        withdrawSupported: mint !== undefined,
+        errorCode,
+      });
+    }
+    assets.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "sol" ? -1 : 1;
+      if (left.symbol === "qOS" && right.symbol !== "qOS") return -1;
+      if (right.symbol === "qOS" && left.symbol !== "qOS") return 1;
+      return String(left.mint).localeCompare(String(right.mint));
+    });
+    return { version: 1, owner, assets };
+  }
+
+  async prepareCloudWithdrawalIntent(options = {}) {
+    const parsed = parseCloudWithdrawalOptions(options, this.policy, this.session);
+    assertQos(parsed.destination !== this.publicKey && parsed.treasury !== this.publicKey, "SELF_TRANSFER_NOT_ALLOWED", "Cloud withdrawal destinations must differ from the billing signer");
+    const [genesis, blockhashResult, currentSlot] = await Promise.all([
+      this.assertCluster(),
+      this.rpc.getLatestBlockhash(),
+      this.rpc.getSlot(),
+    ]);
+    assertQos(typeof blockhashResult?.value?.blockhash === "string", "RPC_INVALID_BLOCKHASH", "RPC returned an invalid latest blockhash");
+    const slot = parseRpcSlot(currentSlot);
+    const feeNumerator = parsed.remainder + parsed.gross * 25n;
+    const feeAmount = feeNumerator / 10_000n;
+    const destinationAmount = parsed.gross - feeAmount;
+    const tokenFields = {
+      mint: null,
+      tokenProgram: null,
+      sourceTokenAccount: null,
+      destinationTokenAccount: null,
+      treasuryTokenAccount: null,
+      decimals: null,
+      createDestinationTokenAccount: false,
+      createTreasuryTokenAccount: false,
+    };
+    if (parsed.asset.kind === "token") {
+      const destinationTokenAccount = associatedTokenAddress({ owner: parsed.destination, mint: parsed.asset.mint, tokenProgram: parsed.asset.tokenProgram });
+      const treasuryTokenAccount = associatedTokenAddress({ owner: parsed.treasury, mint: parsed.asset.mint, tokenProgram: parsed.asset.tokenProgram });
+      const [sourceInfo, mintInfo, destinationInfo, treasuryInfo] = await Promise.all([
+        this.rpc.getAccountInfo(parsed.asset.tokenAccount),
+        this.rpc.getAccountInfo(parsed.asset.mint),
+        this.rpc.getAccountInfo(destinationTokenAccount),
+        destinationTokenAccount === treasuryTokenAccount ? Promise.resolve(null) : this.rpc.getAccountInfo(treasuryTokenAccount),
+      ]);
+      const source = parseOwnedTokenAccount(sourceInfo, { tokenProgram: parsed.asset.tokenProgram, owner: this.publicKey, field: "withdrawalSourceTokenAccount" });
+      assertQos(source.mint === parsed.asset.mint, "TOKEN_ACCOUNT_MINT_MISMATCH", "Withdrawal source token account is for a different mint");
+      assertQos(source.amount >= parsed.gross, "INSUFFICIENT_TOKEN_BALANCE", "Wallet token balance is below the requested withdrawal amount");
+      const mint = parseGenericMintAccount(mintInfo, parsed.asset.tokenProgram);
+      if (destinationInfo !== null) parseGenericDestinationAccount(destinationInfo, { tokenProgram: parsed.asset.tokenProgram, mint: parsed.asset.mint, owner: parsed.destination, field: "withdrawalDestinationTokenAccount" });
+      if (treasuryTokenAccount !== destinationTokenAccount && treasuryInfo !== null) parseGenericDestinationAccount(treasuryInfo, { tokenProgram: parsed.asset.tokenProgram, mint: parsed.asset.mint, owner: parsed.treasury, field: "withdrawalTreasuryTokenAccount" });
+      Object.assign(tokenFields, {
+        mint: parsed.asset.mint,
+        tokenProgram: parsed.asset.tokenProgram,
+        sourceTokenAccount: parsed.asset.tokenAccount,
+        destinationTokenAccount,
+        treasuryTokenAccount,
+        decimals: mint.decimals,
+        createDestinationTokenAccount: destinationInfo === null,
+        createTreasuryTokenAccount: feeAmount > 0n && treasuryTokenAccount !== destinationTokenAccount && treasuryInfo === null,
+      });
+    }
+    const intent = {
+      version: 4,
+      requestNonce: parsed.requestNonce,
+      clusterGenesis: genesis,
+      venueId: this.policy.venueId,
+      marketId: this.policy.marketId,
+      side: "WITHDRAW",
+      assetKind: parsed.asset.kind,
+      ...tokenFields,
+      grossAmount: parsed.gross.toString(),
+      destinationAmount: destinationAmount.toString(),
+      feeAmount: feeAmount.toString(),
+      feeBasisPoints: 25,
+      feeRemainderBefore: parsed.remainder.toString(),
+      feeRemainderAfter: (feeNumerator % 10_000n).toString(),
+      maxFeeLamports: parsed.maxFeeLamports,
+      maxCuPrice: "0",
+      maxRelayTip: "0",
+      destination: parsed.destination,
+      treasury: parsed.treasury,
+      recentBlockhash: blockhashResult.value.blockhash,
+      expiresAtSlot: (slot + BigInt(this.policy.maxIntentTtlSlots)).toString(),
+      strategyId: parsed.strategyId,
+      operatorApproval: null,
+    };
+    validateIntent(intent, this.policy, currentSlot);
+    return intent;
+  }
+
   async prepareTokenIntent(options = {}) {
     const parsed = parseTokenPrepareOptions(options, this.policy, this.session);
     const source = this.tokenAddresses(this.publicKey).tokenAccount;
@@ -461,6 +644,34 @@ export class QosService {
       });
       const parsedMessage = parseNativeTransferMessage(message);
       assertQos(parsedMessage.payer === this.publicKey && parsedMessage.destination === intent.destination && parsedMessage.lamports === values.amount, "TEMPLATE_SELF_CHECK_FAILED", "Constructed native message did not match the authorized intent");
+    } else if (values.kind === "cloud-withdrawal") {
+      if (intent.assetKind === "token") {
+        const expectedDestination = associatedTokenAddress({ owner: intent.destination, mint: intent.mint, tokenProgram: intent.tokenProgram });
+        const expectedTreasury = associatedTokenAddress({ owner: intent.treasury, mint: intent.mint, tokenProgram: intent.tokenProgram });
+        assertQos(intent.destinationTokenAccount === expectedDestination && intent.treasuryTokenAccount === expectedTreasury, "TEMPLATE_SELF_CHECK_FAILED", "Withdrawal associated token accounts changed");
+        const [sourceInfo, mintInfo] = await Promise.all([
+          this.rpc.getAccountInfo(intent.sourceTokenAccount),
+          this.rpc.getAccountInfo(intent.mint),
+        ]);
+        const source = parseOwnedTokenAccount(sourceInfo, { tokenProgram: intent.tokenProgram, owner: this.publicKey, field: "withdrawalSourceTokenAccount" });
+        assertQos(source.mint === intent.mint && source.amount >= values.grossAmount, "INSUFFICIENT_TOKEN_BALANCE", "Withdrawal source token balance or mint changed");
+        const mint = parseGenericMintAccount(mintInfo, intent.tokenProgram);
+        assertQos(mint.decimals === intent.decimals, "MINT_DECIMALS_MISMATCH", "Withdrawal token decimals changed");
+      }
+      message = buildCloudWithdrawalMessage({ ...intent, payer: this.publicKey });
+      const parsedMessage = parseCloudWithdrawalMessage(message);
+      assertQos(parsedMessage.payer === this.publicKey && parsedMessage.recentBlockhash === intent.recentBlockhash && parsedMessage.assetKind === intent.assetKind, "TEMPLATE_SELF_CHECK_FAILED", "Constructed cloud withdrawal did not match the authorized intent");
+      assertQos(parsedMessage.transfers.length === (values.feeAmount > 0n ? 2 : 1), "TEMPLATE_SELF_CHECK_FAILED", "Constructed cloud withdrawal transfer count changed");
+      if (intent.assetKind === "sol") {
+        assertQos(parsedMessage.transfers[0].destination === intent.destination && parsedMessage.transfers[0].amount === values.destinationAmount, "TEMPLATE_SELF_CHECK_FAILED", "Constructed SOL withdrawal destination changed");
+        if (values.feeAmount > 0n) assertQos(parsedMessage.transfers[1].destination === intent.treasury && parsedMessage.transfers[1].amount === values.feeAmount, "TEMPLATE_SELF_CHECK_FAILED", "Constructed SOL withdrawal fee changed");
+      } else {
+        assertQos(parsedMessage.tokenProgram === intent.tokenProgram && parsedMessage.transfers[0].sourceTokenAccount === intent.sourceTokenAccount
+          && parsedMessage.transfers[0].mint === intent.mint && parsedMessage.transfers[0].destinationTokenAccount === intent.destinationTokenAccount
+          && parsedMessage.transfers[0].amount === values.destinationAmount && parsedMessage.transfers[0].decimals === intent.decimals,
+        "TEMPLATE_SELF_CHECK_FAILED", "Constructed token withdrawal destination changed");
+        if (values.feeAmount > 0n) assertQos(parsedMessage.transfers[1].destinationTokenAccount === intent.treasuryTokenAccount && parsedMessage.transfers[1].amount === values.feeAmount, "TEMPLATE_SELF_CHECK_FAILED", "Constructed token withdrawal fee changed");
+      }
     } else {
       await verifyTokenTransferAccounts({
         rpc: this.rpc,
@@ -507,7 +718,7 @@ export class QosService {
     assertQos(feeLamports <= values.maxFee, "ACTUAL_FEE_LIMIT_EXCEEDED", "Calculated transaction fee exceeds intent limit");
     assertQos(feeLamports <= BigInt(this.policy.maxFeeLamports), "POLICY_FEE_LIMIT_EXCEEDED", "Calculated transaction fee exceeds policy limit");
     const availableLamports = await this.balance();
-    const requiredLamports = feeLamports + (values.kind === "native" ? values.amount : 0n);
+    const requiredLamports = feeLamports + (values.kind === "native" || (values.kind === "cloud-withdrawal" && intent.assetKind === "sol") ? values.amount : 0n);
     assertQos(availableLamports >= requiredLamports, "INSUFFICIENT_SOL_BALANCE", "Signer needs more SOL for the transfer and network fee", {
       signer: this.publicKey,
       availableLamports: availableLamports.toString(),
@@ -544,7 +755,21 @@ export class QosService {
       signer: signed.publicKey,
       destination: intent.destination,
       asset: values.kind,
-      ...(values.kind === "native" ? { lamports: intent.inputAmount } : values.kind === "cloud-settlement" ? {
+      ...(values.kind === "native" ? { lamports: intent.inputAmount } : values.kind === "cloud-withdrawal" ? {
+        assetKind: intent.assetKind,
+        mint: intent.mint,
+        tokenProgram: intent.tokenProgram,
+        sourceTokenAccount: intent.sourceTokenAccount,
+        destinationTokenAccount: intent.destinationTokenAccount,
+        treasuryTokenAccount: intent.treasuryTokenAccount,
+        grossAmount: intent.grossAmount,
+        destinationAmount: intent.destinationAmount,
+        feeAmount: intent.feeAmount,
+        feeBasisPoints: intent.feeBasisPoints,
+        feeRemainderAfter: intent.feeRemainderAfter,
+        decimals: intent.decimals,
+        treasury: intent.treasury,
+      } : values.kind === "cloud-settlement" ? {
         mint: intent.mint,
         grossAmount: intent.grossAmount,
         treasuryAmount: intent.treasuryAmount,

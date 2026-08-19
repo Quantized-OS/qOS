@@ -1,6 +1,6 @@
 # Security policy and deployment warning
 
-qOS is a research firmware and policy-signer project. Version 0.11.1 adds strong
+qOS is a research firmware and policy-signer project. Version 0.11.2 adds strong
 defensive primitives, but it is not independently audited or certified and
 must not be described as production custody firmware without platform-specific
 integration, review, and validation.
@@ -64,6 +64,14 @@ validator, approval queue, and executor. Ask-mode requests exist only in process
 memory and disappear on rejection, expiry, shutdown, or offboarding. Auto mode
 intentionally removes the per-action human decision, but mainnet execution
 still requires an explicit `ag re --confirm-live` restart gate.
+
+The additive Cloud integration mode is deliberately separate from ordinary
+self-hosting. `--managed-proxy` requires the matching environment
+acknowledgement, may bind to all interfaces only inside a managed runtime, and
+accepts clients only from loopback, private, link-local, or IPv6 ULA ranges.
+The external Cloud control plane must keep the published host port on loopback,
+authenticate a separate per-box credential, and never expose the internal agent
+credential. Without both managed-mode gates, non-loopback bind remains refused.
 
 Commercial model BYOK credentials are a separate trust domain. Each imported
 API key is copied into an owner-only, single-link regular file; only its SHA-256

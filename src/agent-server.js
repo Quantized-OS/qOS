@@ -126,6 +126,20 @@ function remoteIsLoopback(address) {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
+function remoteIsPrivate(address) {
+  const text = typeof address === "string" && address.startsWith("::ffff:") ? address.slice(7) : address;
+  if (typeof text !== "string") return false;
+  const octets = text.split(".").map(Number);
+  if (octets.length === 4 && octets.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
+    return octets[0] === 10
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 169 && octets[1] === 254);
+  }
+  const normalized = text.toLowerCase();
+  return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb");
+}
+
 function bearer(request) {
   const headers = request.headersDistinct?.authorization;
   assertQos(Array.isArray(headers) && headers.length === 1, "UNAUTHORIZED", "Exactly one Bearer credential is required");
@@ -212,10 +226,12 @@ export function startAgentServer(service, {
   apiTokenFile,
   enableMainnetBroadcast = false,
   managedInstanceId = null,
+  managedProxy = false,
 } = {}) {
   const resolvedHome = resolve(home);
   assertQos(Number.isInteger(port) && port >= 0 && port <= 65535, "INVALID_PORT", "Port must be between 0 and 65535");
-  assertQos(loopback(host), "LOOPBACK_REQUIRED", "The agent listener is plaintext and may bind only to loopback");
+  const managedProxyEnabled = managedProxy === true && process.env.QOS_ENABLE_MANAGED_PROXY === "I_UNDERSTAND";
+  assertQos(loopback(host) || (managedProxyEnabled && host === "0.0.0.0"), "LOOPBACK_REQUIRED", "The agent listener may leave loopback only behind the explicitly acknowledged managed Docker proxy");
   assertQos(typeof apiTokenFile === "string", "API_TOKEN_REQUIRED", "The agent listener requires the owner-only runtime API token file");
   const operatorToken = readTokenFile(apiTokenFile);
   const initialPolicyCommitment = policyCommitment(service.policy);
@@ -326,7 +342,7 @@ export function startAgentServer(service, {
           result: {
             protocolVersion,
             capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: "qOS", version: "0.11.1" },
+            serverInfo: { name: "qOS", version: "0.11.2" },
             instructions: "Use qos_capabilities first. qos_request_transfer accepts only an amount; qOS pins every other security-relevant field.",
           },
         });
@@ -384,7 +400,7 @@ export function startAgentServer(service, {
 
   const server = createServer({ maxHeaderSize: MAX_HEADER_BYTES, requireHostHeader: true }, async (request, response) => {
     try {
-      assertQos(remoteIsLoopback(request.socket.remoteAddress), "REMOTE_CLIENT_FORBIDDEN", "The agent listener accepts loopback clients only");
+      assertQos(remoteIsLoopback(request.socket.remoteAddress) || (managedProxyEnabled && remoteIsPrivate(request.socket.remoteAddress)), "REMOTE_CLIENT_FORBIDDEN", "The agent listener accepts only loopback or its acknowledged private managed proxy");
       const hostHeaders = request.headersDistinct?.host;
       assertQos(Array.isArray(hostHeaders) && hostHeaders.length === 1 && hostHeaders[0].length >= 1 && hostHeaders[0].length <= 255, "INVALID_HOST_HEADER", "Exactly one bounded Host header is required");
       assertQos(request.headers["transfer-encoding"] === undefined, "TRANSFER_ENCODING_FORBIDDEN", "Transfer-Encoding is not accepted");

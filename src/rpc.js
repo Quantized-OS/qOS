@@ -118,6 +118,31 @@ export class SolanaRpc {
     return result.value;
   }
 
+  async getMultipleAccounts(addresses) {
+    assertQos(Array.isArray(addresses) && addresses.length >= 1 && addresses.length <= 100, "RPC_ACCOUNT_BATCH_INVALID", "getMultipleAccounts requires between one and one hundred addresses");
+    const result = await this.call("getMultipleAccounts", [addresses, {
+      commitment: this.commitment,
+      encoding: "base64",
+    }]);
+    assertQos(result && Array.isArray(result.value) && result.value.length === addresses.length, "RPC_INVALID_ACCOUNT_BATCH", "Solana RPC returned an invalid account batch");
+    return result.value;
+  }
+
+  async getTokenAccountsByOwner(owner, programId) {
+    const result = await this.call("getTokenAccountsByOwner", [owner, { programId }, {
+      commitment: this.commitment,
+      encoding: "base64",
+    }]);
+    assertQos(result && Array.isArray(result.value) && result.value.length <= 256, "RPC_INVALID_TOKEN_ACCOUNTS", "Solana RPC returned an invalid or excessive token-account list");
+    return result.value;
+  }
+
+  async signatureStatus(signature) {
+    const statuses = await this.call("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
+    assertQos(statuses && typeof statuses === "object" && Array.isArray(statuses.value) && statuses.value.length === 1, "RPC_INVALID_STATUS", "Solana RPC returned an invalid signature-status envelope");
+    return statuses.value[0];
+  }
+
   getSlot() {
     return this.call("getSlot", [{ commitment: this.commitment }]);
   }
