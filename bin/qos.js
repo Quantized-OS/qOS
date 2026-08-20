@@ -29,8 +29,7 @@ Usage:
                     [--nonce N] [--max-fee-lamports N] [--strategy-id N]
   qos token-transfer [--home PATH] [--destination PUBKEY] [--amount N]
   qos dex-status [--home PATH]
-  qos dex-configure --home PATH --api-key-file PATH --input-mint PUBKEY
-                    --output-mint PUBKEY --max-input-amount N
+  qos dex-configure --home PATH --api-key-file PATH --max-input-amount N
                     --daily-input-limit N [--receiver PUBKEY] [policy limit options]
   qos dex-swap --home PATH --input-mint PUBKEY --output-mint PUBKEY
                --amount N [--strategy-id N]
@@ -223,18 +222,14 @@ async function main() {
       return;
     }
     case "dex-configure": {
-      only(options, ["home", "api-key-file", "input-mint", "output-mint", "max-input-amount", "daily-input-limit", "receiver", "max-slippage-bps", "max-route-fee-bps", "max-fee-lamports", "min-interval-seconds", "max-swaps-per-day"]);
-      for (const required of ["api-key-file", "input-mint", "output-mint", "max-input-amount", "daily-input-limit"]) {
+      only(options, ["home", "api-key-file", "max-input-amount", "daily-input-limit", "receiver", "max-slippage-bps", "max-route-fee-bps", "max-fee-lamports", "min-interval-seconds", "max-swaps-per-day"]);
+      for (const required of ["api-key-file", "max-input-amount", "daily-input-limit"]) {
         if (options[required] === undefined) throw new QosError("MISSING_ARGUMENT", `--${required} is required`);
       }
       print(configureDexTrading(service.paths.home, {
         apiKeyFile: resolve(options["api-key-file"]),
-        allowedPairs: [{
-          inputMint: options["input-mint"],
-          outputMint: options["output-mint"],
-          maxInputAmount: options["max-input-amount"],
-          dailyInputLimit: options["daily-input-limit"],
-        }],
+        maxInputAmount: options["max-input-amount"],
+        dailyInputLimit: options["daily-input-limit"],
         ...(options.receiver === undefined ? {} : { receiver: options.receiver }),
         ...(options["max-slippage-bps"] === undefined ? {} : { maxSlippageBps: Number(options["max-slippage-bps"]) }),
         ...(options["max-route-fee-bps"] === undefined ? {} : { maxRouteFeeBps: Number(options["max-route-fee-bps"]) }),

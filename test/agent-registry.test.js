@@ -59,7 +59,9 @@ test("agent onboarding creates a private revocable credential and scoped skill p
   assert.match(readFileSync(join(paths.skills, "SKILL.md"), "utf8"), /cannot request arbitrary signatures/);
   assert.match(readFileSync(join(paths.skills, "transfer.md"), "utf8"), /transfer_sol/);
   assert.match(readFileSync(join(paths.skills, "mcp.md"), "utf8"), /qos_request_transfer/);
-  assert.equal(JSON.parse(readFileSync(join(paths.skills, "manifest.json"), "utf8")).mcpEndpoint, "http://127.0.0.1:8790/mcp");
+  const manifest = JSON.parse(readFileSync(join(paths.skills, "manifest.json"), "utf8"));
+  assert.equal(manifest.mcpEndpoint, "http://127.0.0.1:8790/mcp");
+  assert.equal(Object.hasOwn(manifest, "tokenFile"), false);
   assert.doesNotMatch(readFileSync(join(paths.skills, "manifest.json"), "utf8"), new RegExp(tokenAt(paths.token)));
   assert.equal(authenticateAgent(home, tokenAt(paths.token)).id, "market-bot");
   assert.equal(getAgent(home, "market-bot").approvalMode, "ask");

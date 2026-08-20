@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { TextDecoder } from "node:util";
 
 import { hasExactKeys } from "./canonical.js";
 import { validateDexAction } from "./dex.js";
@@ -32,7 +33,7 @@ const AGENT_V1_KEYS = [
   "tokenSha256",
 ];
 const AGENT_KEYS = [...AGENT_V1_KEYS, "dexTrading"];
-const SKILL_FILES = ["SKILL.md", "capabilities.md", "transfer.md", "swap.md", "mcp.md", "approval.md", "manifest.json"];
+export const AGENT_SKILL_FILES = ["SKILL.md", "capabilities.md", "trading.md", "risk-controls.md", "transfer.md", "mcp.md", "approval.md", "connection.json", "manifest.json"];
 const AGENT_ID = /^[a-z][a-z0-9-]{0,31}$/;
 
 export function agentPaths(home, id = undefined) {
@@ -70,8 +71,9 @@ function validateAgentRecord(record) {
   assertQos(typeof record.name === "string" && record.name.length >= 1 && record.name.length <= 80 && !/[\x00-\x1f\x7f]/u.test(record.name), "INVALID_AGENT_NAME", "Agent name must contain 1 to 80 printable characters");
   assertQos(record.enabled === true, "INVALID_AGENT_REGISTRY", "Stored agents must be enabled");
   assertQos(record.approvalMode === "ask" || record.approvalMode === "auto", "INVALID_APPROVAL_MODE", "Approval mode must be ask or auto");
-  assertQos(record.asset === "sol" || record.asset === "qos-token", "INVALID_AGENT_ASSET", "Agent asset must be sol or qos-token");
-  assertQos(parseUnsigned(record.maxAmount, 64, "agent.maxAmount") > 0n, "INVALID_AGENT_AMOUNT", "Agent max amount must be greater than zero");
+  assertQos(record.asset === "sol" || record.asset === "qos-token" || record.asset === "trading-only", "INVALID_AGENT_ASSET", "Agent asset must be sol, qos-token, or trading-only");
+  const maxAmount = parseUnsigned(record.maxAmount, 64, "agent.maxAmount");
+  assertQos(record.asset === "trading-only" ? maxAmount === 0n : maxAmount > 0n, "INVALID_AGENT_AMOUNT", "Trading-only agents use a zero transfer amount; transfer agents require a positive limit");
   assertQos(typeof record.destination === "string", "INVALID_AGENT_DESTINATION", "Agent destination is invalid");
   assertQos(Number.isInteger(record.strategyId) && record.strategyId >= 0 && record.strategyId <= 0xffffffff, "INVALID_STRATEGY_ID", "Agent strategy ID must fit in u32");
   assertQos(typeof record.tokenSha256 === "string" && /^[0-9a-f]{64}$/.test(record.tokenSha256), "INVALID_AGENT_REGISTRY", "Agent credential hash is invalid");
@@ -137,6 +139,10 @@ function ensureScope(policy, { asset, maxAmount, destination, strategyId }) {
   assertQos(policy.allowedDestinations.includes(destination), "AGENT_DESTINATION_FORBIDDEN", "Agent destination must already be allowlisted by the qOS policy");
   assertQos(policy.allowedStrategyIds.includes(strategyId), "AGENT_STRATEGY_FORBIDDEN", "Agent strategy ID must already be allowlisted by the qOS policy");
   const amount = parseUnsigned(maxAmount, 64, "agent.maxAmount");
+  if (asset === "trading-only") {
+    assertQos(amount === 0n, "AGENT_ASSET_DISABLED", "Trading-only scope must not include a transfer allowance");
+    return;
+  }
   assertQos(amount > 0n, "INVALID_AGENT_AMOUNT", "Agent max amount must be greater than zero");
   if (asset === "sol") {
     assertQos(BigInt(policy.maxTransferLamports) > 0n, "AGENT_ASSET_DISABLED", "Native SOL transfers are disabled by this profile");
@@ -147,42 +153,62 @@ function ensureScope(policy, { asset, maxAmount, destination, strategyId }) {
   }
 }
 
-function skillText(record, paths, policy) {
-  const action = record.asset === "sol" ? "transfer_sol" : "transfer_qos";
+function skillText(record, policy, endpoints) {
+  const action = record.asset === "sol" ? "transfer_sol" : record.asset === "qos-token" ? "transfer_qos" : null;
   const dex = record.dexTrading ? policy.dexTrading : null;
-  const pairText = dex === null ? "" : dex.allowedPairs.map((pair) => `- ${pair.inputMint} → ${pair.outputMint}: max ${pair.maxInputAmount} gross base units per swap; ${pair.dailyInputLimit} per UTC day`).join("\n");
-  return {
-    "SKILL.md": `# qOS policy action skill\n\nThe local qOS MCP service starts automatically when this agent is onboarded. This credential may request the fixed transfer \`${action}\`${record.dexTrading ? " and bounded `swap` actions" : ""}. It cannot request arbitrary signatures, programs, mints, destinations, strategies, endpoints, or shell commands.\n\nRead \`capabilities.md\`, \`mcp.md\`, \`transfer.md\`${record.dexTrading ? ", `swap.md`" : ""}, and \`approval.md\` before requesting an action. The bearer credential is stored in \`${paths.token}\`; read it only at request time and never place its contents in a prompt, log, source file, or command history.\n`,
-    "capabilities.md": `# Capabilities\n\n- Agent: ${record.name} (${record.id})\n- Network: ${policy.cluster}\n- Asset: ${record.asset}\n- Maximum transfer: ${record.maxAmount} base units\n- Transfer destination: ${record.destination}\n- Strategy ID: ${record.strategyId}\n- Approval mode: ${record.approvalMode}\n- MCP: http://127.0.0.1:8790/mcp\n- REST compatibility API: http://127.0.0.1:8790/v1/actions\n- DEX swaps: ${record.dexTrading ? "enabled through the pinned Jupiter HTTPS endpoint" : "disabled"}${dex === null ? "" : `\n- Swap output receiver: ${dex.receiver ?? "firmware signer"}\n- Maximum slippage: ${dex.maxSlippageBps} bps\n- Maximum route fee: ${dex.maxRouteFeeBps} bps\n- Cooldown: ${dex.minIntervalSeconds} seconds\n- Maximum swaps per UTC day: ${dex.maxSwapsPerDay}\n\nAllowed pairs:\n${pairText}`}\n`,
-    "transfer.md": `# Request a transfer\n\nPrefer the MCP tool \`qos_request_transfer\` with exactly one argument: \`{"amount":"BASE_UNITS"}\`. qOS fills in the pinned action \`${action}\`, destination \`${record.destination}\`, and strategy ID ${record.strategyId}.\n\nThe REST compatibility route is \`http://127.0.0.1:8790/v1/actions\` and accepts exactly:\n\n\`\`\`json\n{"version":1,"action":"${action}","amount":"BASE_UNITS","destination":"${record.destination}","strategyId":${record.strategyId}}\n\`\`\`\n\nUse a canonical positive integer no greater than ${record.maxAmount}. qOS rechecks the live policy, cluster, accounts, fee, simulation, signer response, and confirmation.\n`,
-    "swap.md": record.dexTrading
-      ? `# Request a DEX swap\n\nUse MCP tool \`qos_request_swap\` with exactly \`inputMint\`, \`outputMint\`, and \`amount\`. qOS accepts only the pair and base-unit amount listed in \`capabilities.md\`. It obtains a manual ExactIn Jupiter order, rejects JupiterZ and gasless/co-signer paths, checks route/slippage/network-fee limits, signs only a one-signer v0 transaction, and reserves the authorized gross input against persistent daily limits before delivery. A confirmed response narrows the reservation to the wallet debit; an ambiguous delivery keeps the conservative reservation.\n\nDo not interpret a quote as guaranteed output or profit. Never ask qOS to sign provider-supplied bytes through any other route.\n`
-      : "# DEX swaps\n\nDEX swaps are disabled for this agent.\n",
-    "mcp.md": `# MCP connection\n\nEndpoint: \`http://127.0.0.1:8790/mcp\`\nTransport: Streamable HTTP POST\nProtocol: \`2026-07-28\` (\`2025-06-18\` compatibility is also accepted)\nAuthentication: Bearer token read from \`${paths.token}\`\n\nFor protocol 2026-07-28, send \`MCP-Protocol-Version: 2026-07-28\`, \`Mcp-Method\` equal to the JSON-RPC method, and matching \`params._meta["io.modelcontextprotocol/protocolVersion"]\`. For \`tools/call\`, also send \`Mcp-Name\` equal to the tool name. Accept both \`application/json\` and \`text/event-stream\`.\n\nStart with \`qos_capabilities\`. Request a transfer with \`qos_request_transfer\` and only an \`amount\` string.${record.dexTrading ? " Request an allowlisted DEX swap with `qos_request_swap`." : ""} Never send the token or either BYOK credential to a remote model or non-loopback endpoint.\n`,
+  const anyToken = dex?.tokenScope === "any-solana-token";
+  const limits = anyToken
+    ? { maxInputAmount: dex.maxInputAmount, dailyInputLimit: dex.dailyInputLimit }
+    : null;
+  const legacyPairs = dex !== null && !anyToken
+    ? dex.allowedPairs.map((pair) => `- ${pair.inputMint} → ${pair.outputMint}: max ${pair.maxInputAmount} input base units per swap; ${pair.dailyInputLimit} per UTC day`).join("\n")
+    : "";
+  const files = {
+    "SKILL.md": `---\nname: qos-solana-trader\ndescription: Trade Solana tokens through this box's policy-enforced qOS MCP server.\n---\n\n# qOS Solana trading skill\n\nUse this skill whenever the user asks to inspect this box, trade or swap a Solana token, automate a bounded trading strategy, or retrieve transaction evidence. This skill is generated for **${record.name}** (\`${record.id}\`) and reflects its live policy at creation time.\n\n## Connect\n\n- MCP endpoint: \`${endpoints.mcpEndpoint}\`\n- Skill document: \`${endpoints.skillEndpoint}\`\n- Downloadable skill pack: \`${endpoints.skillDownloadEndpoint}\`\n- Authentication: \`Authorization: Bearer <box MCP token>\`\n\nInstall by extracting the downloaded ZIP into the agent's skills directory, then configure the MCP endpoint and Bearer token in the agent client. The token is issued separately and is intentionally never embedded in this pack. This skill cannot request arbitrary signatures, arbitrary programs, or shell commands.\n\n## Required workflow\n\n1. Connect with Streamable HTTP and call \`qos_capabilities\`. Do not trade if its policy differs from this pack.\n2. Resolve the intended Solana input and output mint addresses. Never infer a mint from a ticker alone.\n3. Convert the exact input quantity to the input token's smallest unit and call \`qos_request_swap\` once.\n4. If approval mode is \`ask\`, report the pending request ID and wait. If it is \`auto\`, wait for the terminal result.\n5. Treat timeouts after submission as ambiguous. Do not retry until the transaction signature or account state proves the first request did not land.\n6. On success, return the input/output amounts, signature, and Solscan URL.\n\nRead \`capabilities.md\`, \`trading.md\`, \`risk-controls.md\`, \`mcp.md\`, and \`approval.md\` before the first trade. qOS tokens are not a trading restriction: in qOS Cloud they are used only for launch and service settlement charges.\n`,
+    "capabilities.md": `# Box capabilities\n\n- Agent: ${record.name} (\`${record.id}\`)\n- Network: ${policy.cluster}\n- Strategy ID: ${record.strategyId}\n- Approval mode: ${record.approvalMode}\n- Trading: ${record.dexTrading ? "enabled through the policy-pinned Jupiter Ultra Swap endpoint" : "disabled"}\n- Token scope: ${anyToken ? "any initialized Solana Token Program or Token-2022 mint" : dex === null ? "none" : "legacy configured pairs"}\n- Output receiver: ${dex?.receiver ?? "box signer"}\n- MCP endpoint: ${endpoints.mcpEndpoint}\n- Skill endpoint: ${endpoints.skillEndpoint}\n${dex === null ? "" : `- Per-trade input cap: ${limits?.maxInputAmount ?? "pair-specific"} input-token base units\n- UTC daily input cap: ${limits?.dailyInputLimit ?? "pair-specific"} input-token base units per mint pair\n- Maximum slippage: ${dex.maxSlippageBps} bps\n- Maximum route fee: ${dex.maxRouteFeeBps} bps\n- Maximum network and rent fee: ${dex.maxFeeLamports} lamports\n- Minimum interval: ${dex.minIntervalSeconds} seconds\n- Maximum swaps per UTC day: ${dex.maxSwapsPerDay}\n${legacyPairs ? `\nLegacy configured pairs:\n${legacyPairs}\n` : ""}`}\nThe amount field is always a canonical positive decimal integer in the **input token's smallest unit**. Token decimals vary; fetch and verify the mint before converting a human quantity.\n`,
+    "trading.md": dex === null
+      ? "# Trading\n\nDEX trading is disabled for this agent.\n"
+      : `# Trading with qOS\n\nCall \`qos_request_swap\` with exactly:\n\n\`\`\`json\n{"inputMint":"SOLANA_MINT","outputMint":"SOLANA_MINT","amount":"INPUT_BASE_UNITS"}\n\`\`\`\n\n${anyToken ? "Both mint addresses may be any distinct initialized mint on Solana mainnet owned by the classic Token Program or Token-2022 Program. Firmware validates both mint accounts on the policy-pinned cluster before requesting an order." : "Both addresses must match one of the legacy pairs in capabilities.md."}\n\nqOS obtains a manual ExactIn Jupiter order, rejects JupiterZ and gasless/co-signer paths, validates receiver, fee payer, signer set, transaction form, slippage, route fee, network/rent fee, and minimum output, then signs and submits the reviewed transaction. A success result contains a Solana signature and Solscan URL.\n\nNever describe a quote as guaranteed profit. Never ask qOS to sign arbitrary bytes or bypass the MCP tool. Never retry an ambiguous submitted trade without reconciling chain state.\n`,
+    "risk-controls.md": dex === null
+      ? "# Risk controls\n\nTrading is disabled.\n"
+      : `# Enforced risk controls\n\nThese controls are enforced by firmware, not by prompt instructions:\n\n- ExactIn only; positive u64 input amount.\n- ${anyToken ? `Any verified Solana token pair, capped at ${dex.maxInputAmount} input base units per trade and ${dex.dailyInputLimit} per pair per UTC day.` : "Only configured legacy pairs and their pair-specific caps."}\n- ${dex.maxSwapsPerDay} swaps per UTC day across this profile.\n- ${dex.minIntervalSeconds}-second minimum interval between landed or ambiguously delivered swaps.\n- ${dex.maxSlippageBps} bps maximum slippage; ${dex.maxRouteFeeBps} bps maximum route fee.\n- ${dex.maxFeeLamports} lamports maximum aggregate signature, priority, and rent fee.\n- One writable qOS signer in a version-0 Solana transaction; no provider co-signer or gasless path.\n- Persistent conservative reservation before provider execution; ambiguous delivery consumes the authorized budget until reconciled.\n\nDo not split one intended trade into rapid requests to evade controls. Stop and report policy errors instead of adjusting security parameters autonomously.\n`,
+    "mcp.md": `# MCP connection\n\nEndpoint: \`${endpoints.mcpEndpoint}\`\nTransport: Streamable HTTP POST\nProtocols: \`2026-07-28\` and \`2025-06-18\` compatibility\nAuthentication: Bearer token issued for this box\n\nThe server exposes standard \`initialize\`, \`ping\`, \`tools/list\`, \`tools/call\`, \`resources/list\`, and \`resources/read\` methods. Skill resources use \`qos://skill/<filename>\`. Use \`qos_get_trading_skill\` for a tool-based discovery path.\n\nStart with \`qos_capabilities\`, then use \`qos_request_swap\`.${action === null ? "" : " This legacy non-Cloud scope also exposes `qos_request_transfer`."} Never place the Bearer token or the Jupiter BYOK secret in a model prompt, log, URL, source file, or skill bundle.\n`,
     "approval.md": record.approvalMode === "ask"
-      ? "# Approval\n\nEach valid request is held only in listener memory. Wait for the operator to approve or reject the request in qOS. Do not retry a pending request unless the operator says it expired.\n"
-      : "# Approval\n\nValid requests may execute automatically while the operator runs the listener in live mode. Mainnet still requires the operator to start the listener with `--confirm-live`.\n",
+      ? "# Approval\n\nEvery valid trade request is held in listener memory for operator approval. Report the pending request ID and wait. Do not retry unless the request expires or the operator explicitly asks.\n"
+      : "# Approval\n\nValid in-policy trades execute automatically while live mainnet execution is enabled. Automatic approval does not bypass firmware token, amount, frequency, fee, signer, transaction, or confirmation checks.\n",
+    "connection.json": `${JSON.stringify({
+      version: 1,
+      transport: "streamable-http",
+      mcpEndpoint: endpoints.mcpEndpoint,
+      skillEndpoint: endpoints.skillEndpoint,
+      skillDownloadEndpoint: endpoints.skillDownloadEndpoint,
+      authentication: { type: "bearer", secretIncluded: false },
+      protocolVersions: ["2026-07-28", "2025-06-18"],
+    }, null, 2)}\n`,
   };
+  if (action !== null) files["transfer.md"] = `# Legacy transfer scope\n\nThis non-Cloud agent may request \`${action}\` to ${record.destination}, capped at ${record.maxAmount} base units. qOS Cloud trading boxes use trading-only scope and do not expose this tool.\n`;
+  return files;
 }
 
-function writeSkillPack(record, paths, policy) {
+function writeSkillPack(record, paths, policy, endpoints) {
   mkdirSync(paths.agent, { mode: 0o700 });
   chmodSync(paths.agent, 0o700);
   mkdirSync(paths.skills, { mode: 0o700 });
   chmodSync(paths.skills, 0o700);
-  const files = skillText(record, paths, policy);
+  const files = skillText(record, policy, endpoints);
   for (const [name, text] of Object.entries(files)) {
     writeFileSync(join(paths.skills, name), text, { flag: "wx", mode: 0o600 });
     chmodSync(join(paths.skills, name), 0o600);
   }
   const manifest = {
-    version: 3,
+    version: 4,
     agentId: record.id,
-    mcpEndpoint: "http://127.0.0.1:8790/mcp",
-    restEndpoint: "http://127.0.0.1:8790/v1/actions",
+    mcpEndpoint: endpoints.mcpEndpoint,
+    skillEndpoint: endpoints.skillEndpoint,
+    skillDownloadEndpoint: endpoints.skillDownloadEndpoint,
+    restEndpoint: endpoints.restEndpoint,
     mcpProtocolVersion: "2026-07-28",
-    tokenFile: paths.token,
-    action: record.asset === "sol" ? "transfer_sol" : "transfer_qos",
+    action: record.asset === "sol" ? "transfer_sol" : record.asset === "qos-token" ? "transfer_qos" : null,
     dexAction: record.dexTrading ? "swap" : null,
     amountEncoding: "canonical-base-unit-integer",
     approvalMode: record.approvalMode,
@@ -192,7 +218,7 @@ function writeSkillPack(record, paths, policy) {
 }
 
 function removeKnownAgentFiles(paths) {
-  for (const name of SKILL_FILES) {
+  for (const name of AGENT_SKILL_FILES) {
     const path = join(paths.skills, name);
     if (existsSync(path)) unlinkSync(path);
   }
@@ -210,6 +236,9 @@ export function onboardAgent(home, {
   strategyId,
   acceptAuto = false,
   enableDexTrading = false,
+  skillMcpEndpoint = "http://127.0.0.1:8790/mcp",
+  skillEndpoint = "http://127.0.0.1:8790/skill",
+  skillDownloadEndpoint = "http://127.0.0.1:8790/skill/download",
 } = {}) {
   const resolvedHome = resolve(home);
   const runtime = loadRuntimeProfile(resolvedHome);
@@ -220,6 +249,12 @@ export function onboardAgent(home, {
   assertQos(approvalMode !== "auto" || acceptAuto === true, "AUTO_APPROVAL_ACKNOWLEDGEMENT_REQUIRED", "Automatic execution requires explicit acknowledgement with --accept-auto");
   assertQos(typeof enableDexTrading === "boolean", "INVALID_DEX_AGENT_SCOPE", "Agent DEX capability must be a boolean");
   assertQos(!enableDexTrading || policy.dexTrading !== null, "DEX_TRADING_DISABLED", "Configure a DEX policy before enabling agent trading");
+  for (const [label, value] of [["MCP", skillMcpEndpoint], ["skill", skillEndpoint], ["skill download", skillDownloadEndpoint]]) {
+    assertQos(typeof value === "string" && value.length <= 2_048, "INVALID_SKILL_ENDPOINT", `Agent ${label} endpoint is invalid`);
+    let parsed;
+    try { parsed = new URL(value); } catch { assertQos(false, "INVALID_SKILL_ENDPOINT", `Agent ${label} endpoint is invalid`); }
+    assertQos((parsed.protocol === "https:" || (parsed.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]", "::1"].includes(parsed.hostname))) && !parsed.username && !parsed.password && !parsed.hash, "INVALID_SKILL_ENDPOINT", `Agent ${label} endpoint must use HTTPS or loopback HTTP`);
+  }
   const selectedAsset = asset ?? (runtime.profile === "devnet" ? "sol" : "qos-token");
   const selectedDestination = destination ?? policy.allowedDestinations[0];
   const selectedStrategy = strategyId ?? policy.allowedStrategyIds[0];
@@ -251,7 +286,12 @@ export function onboardAgent(home, {
     dexTrading: enableDexTrading,
   });
   try {
-    writeSkillPack(record, paths, policy);
+    writeSkillPack(record, paths, policy, {
+      mcpEndpoint: skillMcpEndpoint,
+      skillEndpoint,
+      skillDownloadEndpoint,
+      restEndpoint: "http://127.0.0.1:8790/v1/actions",
+    });
     writeFileSync(paths.token, token, { flag: "wx", mode: 0o600 });
     chmodSync(paths.token, 0o600);
     const next = { version: 1, agents: [...registry.agents, record].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0) };
@@ -293,6 +333,36 @@ export function getAgentRecord(home, id) {
   return record;
 }
 
+export function readAgentSkillPack(home, id) {
+  const resolvedHome = resolve(home);
+  const record = getAgentRecord(resolvedHome, id);
+  const paths = validateAgentRuntimeFiles(resolvedHome, record);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const files = {};
+  for (const name of AGENT_SKILL_FILES) {
+    const path = join(paths.skills, name);
+    if (!existsSync(path)) continue;
+    const bytes = readSecureFile(path, {
+      privateFile: true,
+      minBytes: 1,
+      maxBytes: 256 * 1024,
+      errorCode: "INSECURE_AGENT_SKILL",
+      label: `Agent ${record.id} skill ${name}`,
+    });
+    try {
+      files[name] = decoder.decode(bytes);
+    } catch {
+      throw new QosError("INVALID_AGENT_SKILL", `Agent ${record.id} skill ${name} is not valid UTF-8`);
+    } finally {
+      bytes.fill(0);
+    }
+  }
+  assertQos(typeof files["SKILL.md"] === "string" && typeof files["manifest.json"] === "string", "INVALID_AGENT_SKILL", `Agent ${record.id} skill pack is incomplete`);
+  let manifest;
+  try { manifest = JSON.parse(files["manifest.json"]); } catch { throw new QosError("INVALID_AGENT_SKILL", `Agent ${record.id} skill manifest is invalid`); }
+  return Object.freeze({ agent: publicAgent(resolvedHome, record), manifest: Object.freeze(manifest), files: Object.freeze(files) });
+}
+
 export function authenticateAgent(home, bearer) {
   assertQos(typeof bearer === "string" && bearer.length >= 32 && bearer.length <= 512 && /^[\x21-\x7e]+$/.test(bearer), "AGENT_UNAUTHORIZED", "Agent bearer credential is missing or invalid");
   const suppliedHash = createHash("sha256").update(bearer, "utf8").digest();
@@ -317,6 +387,7 @@ export function validateAgentAction(home, record, action) {
     assertQos(record.dexTrading === true, "AGENT_ACTION_FORBIDDEN", "Agent is not allowed to request DEX swaps");
     return validateDexAction(policy, action).action;
   }
+  assertQos(record.asset !== "trading-only", "AGENT_ACTION_FORBIDDEN", "Trading-only agents may request only DEX swaps");
   assertQos(action && typeof action === "object" && !Array.isArray(action) && hasExactKeys(action, ["version", "action", "amount", "destination", "strategyId"]), "INVALID_AGENT_ACTION", "Agent action has missing or unknown fields");
   assertQos(action.version === 1, "INVALID_AGENT_ACTION", "Agent action version is unsupported");
   const expectedAction = record.asset === "sol" ? "transfer_sol" : "transfer_qos";

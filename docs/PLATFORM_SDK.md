@@ -7,24 +7,31 @@ independent host services:
 import {
   QOS_PLATFORM_SDK_VERSION,
   QosService,
+  buildSkillZip,
   changePolicyDestination,
   configureDexTrading,
   configureModelProvider,
   ensureRuntimeProfile,
   initializeSandbox,
   onboardAgent,
+  readAgentSkillPack,
 } from "qos-solana-sandbox/platform-sdk";
 ```
 
 `configureDexTrading(home, options)` imports an owner-only Jupiter API key,
-pins the built-in HTTPS endpoint, writes the reviewed DEX policy, and creates a
+pins the built-in HTTPS endpoint, writes an `any-solana-token` DEX policy, and creates a
 separate persistent runtime-state file. Hosts may pin a distinct `receiver`
 public key; otherwise swap output returns to the firmware signer.
 `QosService.executeDexSwap(action)`
-enforces that policy, signs only the one-signer versioned transaction returned
-for the matching manual ExactIn order, and returns the confirmed signature and
+enforces that policy, verifies both runtime-selected Token/Token-2022 mints,
+signs only the one-signer versioned transaction returned for the matching manual ExactIn order, and returns the confirmed signature and
 Solscan URL. Hosted services must mount only `runtime-state/` writable; model,
 DEX credential, signer, and policy files remain read-only inside the runtime.
+
+`readAgentSkillPack(home, id)` returns the generated public skill files without
+the agent Bearer token. `buildSkillZip(files)` creates a deterministic ZIP for
+account-authenticated or MCP-authenticated downloads. Cloud host contract
+version 2 requires both exports.
 
 `changePolicyDestination(home, "add" | "remove", publicKey)` is the validated,
 atomic SDK surface for services that need more than one reviewed token

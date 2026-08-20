@@ -275,9 +275,35 @@ test("authenticated MCP tools reuse agent scope and the memory-only approval que
     params: { _meta: meta },
   });
   assert.equal(listed.status, 200);
-  assert.deepEqual(listed.value.result.tools.map((tool) => tool.name), ["qos_capabilities", "qos_request_transfer"]);
-  assert.equal(listed.value.result.tools[1].inputSchema.required[0], "amount");
+  assert.deepEqual(listed.value.result.tools.map((tool) => tool.name), ["qos_capabilities", "qos_get_trading_skill", "qos_request_transfer"]);
+  assert.equal(listed.value.result.tools[2].inputSchema.required[0], "amount");
   assert.equal(JSON.stringify(listed.value).includes(token), false);
+
+  const resources = await mcpRequest(origin, token, {
+    jsonrpc: "2.0",
+    id: "resources",
+    method: "resources/list",
+    params: { _meta: meta },
+  });
+  assert.equal(resources.status, 200);
+  assert.ok(resources.value.result.resources.some((resource) => resource.uri === "qos://skill/SKILL.md"));
+
+  const skillUri = "qos://skill/SKILL.md";
+  const skillResource = await mcpRequest(origin, token, {
+    jsonrpc: "2.0",
+    id: "skill-resource",
+    method: "resources/read",
+    params: { uri: skillUri, _meta: meta },
+  }, { name: skillUri });
+  assert.match(skillResource.value.result.contents[0].text, /qOS Solana trading skill/);
+
+  const skillResponse = await fetch(`${origin}/skill`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(skillResponse.status, 200);
+  assert.match(await skillResponse.text(), /qOS Solana trading skill/);
+  const skillDownload = await fetch(`${origin}/skill/download`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(skillDownload.status, 200);
+  assert.equal(skillDownload.headers.get("content-type"), "application/zip");
+  assert.equal(Buffer.from(await skillDownload.arrayBuffer()).subarray(0, 4).toString("hex"), "504b0304");
 
   const called = await mcpRequest(origin, token, {
     jsonrpc: "2.0",

@@ -185,14 +185,10 @@ test("qOS Shell configures an advanced BYOK Jupiter policy without exposing the 
   chmodSync(apiKeyFile, 0o600);
   initializeSandbox(home, encodeBase58(Buffer.alloc(32, 94)), { cluster: "mainnet-beta" });
   ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
-  const inputMint = "So11111111111111111111111111111111111111112";
-  const outputMint = "5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump";
   const receiver = "2fwKS5Xj3c91cH7KZLbntMgrfGGbHiJcwt4g925x9pSy";
   const configured = spawnSync(process.execPath, [
     SHELL, "--home", home, "--json", "tr", "cfg",
     "--api-key-file", apiKeyFile,
-    "--input-mint", inputMint,
-    "--output-mint", outputMint,
     "--max-input-amount", "25000000",
     "--daily-input-limit", "250000000",
     "--receiver", receiver,
@@ -205,7 +201,8 @@ test("qOS Shell configures an advanced BYOK Jupiter policy without exposing the 
   assert.equal(configured.status, 0, configured.stderr);
   const value = JSON.parse(configured.stdout);
   assert.equal(value.provider, "jupiter");
-  assert.equal(value.allowedPairs[0].maxInputAmount, "25000000");
+  assert.equal(value.tokenScope, "any-solana-token");
+  assert.equal(value.maxInputAmount, "25000000");
   assert.equal(value.receiver, receiver);
   assert.equal(value.maxSwapsPerDay, 40);
   assert.doesNotMatch(configured.stdout, /jup-shell-test-secret/);

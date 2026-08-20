@@ -155,7 +155,7 @@ const TOKEN_POLICY_KEYS = [
   "allowedMintExtensions",
 ];
 
-const DEX_POLICY_KEYS = [
+const LEGACY_DEX_POLICY_KEYS_WITH_RECEIVER = [
   "provider",
   "endpoint",
   "receiver",
@@ -167,7 +167,21 @@ const DEX_POLICY_KEYS = [
   "maxSwapsPerDay",
 ];
 
-const LEGACY_DEX_POLICY_KEYS = DEX_POLICY_KEYS.filter((key) => key !== "receiver");
+const LEGACY_DEX_POLICY_KEYS = LEGACY_DEX_POLICY_KEYS_WITH_RECEIVER.filter((key) => key !== "receiver");
+
+const ANY_TOKEN_DEX_POLICY_KEYS = [
+  "provider",
+  "endpoint",
+  "receiver",
+  "tokenScope",
+  "maxInputAmount",
+  "dailyInputLimit",
+  "maxSlippageBps",
+  "maxRouteFeeBps",
+  "maxFeeLamports",
+  "minIntervalSeconds",
+  "maxSwapsPerDay",
+];
 
 const DEX_PAIR_KEYS = ["inputMint", "outputMint", "maxInputAmount", "dailyInputLimit"];
 
@@ -176,31 +190,44 @@ export function validateDexTradingPolicy(value) {
   if (value && typeof value === "object" && !Array.isArray(value) && hasExactKeys(value, LEGACY_DEX_POLICY_KEYS)) {
     value = { ...value, receiver: null };
   }
-  assertQos(value && typeof value === "object" && !Array.isArray(value) && hasExactKeys(value, DEX_POLICY_KEYS), "INVALID_DEX_POLICY", "DEX policy has missing or unknown fields");
+  assertQos(value && typeof value === "object" && !Array.isArray(value), "INVALID_DEX_POLICY", "DEX policy has missing or unknown fields");
+  const legacyPairs = hasExactKeys(value, LEGACY_DEX_POLICY_KEYS_WITH_RECEIVER);
+  const anyToken = hasExactKeys(value, ANY_TOKEN_DEX_POLICY_KEYS);
+  assertQos(legacyPairs || anyToken, "INVALID_DEX_POLICY", "DEX policy has missing or unknown fields");
   assertQos(value.provider === "jupiter", "INVALID_DEX_PROVIDER", "Only the reviewed Jupiter provider is supported");
   assertQos(value.endpoint === "https://api.jup.ag/swap/v2", "INVALID_DEX_ENDPOINT", "Jupiter swaps must use the pinned HTTPS endpoint");
   assertQos(value.receiver === null || typeof value.receiver === "string", "INVALID_DEX_RECEIVER", "DEX receiver must be null or a Solana public key");
   if (value.receiver !== null) decodeBase58(value.receiver, 32);
-  assertQos(Array.isArray(value.allowedPairs) && value.allowedPairs.length >= 1 && value.allowedPairs.length <= 16, "INVALID_DEX_PAIR_ALLOWLIST", "DEX policy must allow between one and sixteen mint pairs");
-  const pairs = value.allowedPairs.map((pair) => {
-    assertQos(pair && typeof pair === "object" && !Array.isArray(pair) && hasExactKeys(pair, DEX_PAIR_KEYS), "INVALID_DEX_PAIR", "DEX pair has missing or unknown fields");
-    decodeBase58(pair.inputMint, 32);
-    decodeBase58(pair.outputMint, 32);
-    assertQos(pair.inputMint !== pair.outputMint, "INVALID_DEX_PAIR", "DEX input and output mints must differ");
-    const maxInputAmount = parseUnsigned(pair.maxInputAmount, 64, "dexTrading.allowedPairs.maxInputAmount");
-    const dailyInputLimit = parseUnsigned(pair.dailyInputLimit, 64, "dexTrading.allowedPairs.dailyInputLimit");
+  let normalized;
+  if (legacyPairs) {
+    assertQos(Array.isArray(value.allowedPairs) && value.allowedPairs.length >= 1 && value.allowedPairs.length <= 16, "INVALID_DEX_PAIR_ALLOWLIST", "DEX policy must allow between one and sixteen mint pairs");
+    const pairs = value.allowedPairs.map((pair) => {
+      assertQos(pair && typeof pair === "object" && !Array.isArray(pair) && hasExactKeys(pair, DEX_PAIR_KEYS), "INVALID_DEX_PAIR", "DEX pair has missing or unknown fields");
+      decodeBase58(pair.inputMint, 32);
+      decodeBase58(pair.outputMint, 32);
+      assertQos(pair.inputMint !== pair.outputMint, "INVALID_DEX_PAIR", "DEX input and output mints must differ");
+      const maxInputAmount = parseUnsigned(pair.maxInputAmount, 64, "dexTrading.allowedPairs.maxInputAmount");
+      const dailyInputLimit = parseUnsigned(pair.dailyInputLimit, 64, "dexTrading.allowedPairs.dailyInputLimit");
+      assertQos(maxInputAmount > 0n && dailyInputLimit >= maxInputAmount, "INVALID_DEX_LIMIT", "DEX daily input limit must be at least the maximum input per swap");
+      return Object.freeze({ ...pair });
+    });
+    const pairIds = pairs.map((pair) => `${pair.inputMint}>${pair.outputMint}`);
+    assertQos(new Set(pairIds).size === pairIds.length, "DUPLICATE_DEX_PAIR", "DEX pair allowlist contains duplicates");
+    normalized = { ...value, allowedPairs: Object.freeze(pairs) };
+  } else {
+    assertQos(value.tokenScope === "any-solana-token", "INVALID_DEX_TOKEN_SCOPE", "DEX token scope must allow any verified Solana token mint");
+    const maxInputAmount = parseUnsigned(value.maxInputAmount, 64, "dexTrading.maxInputAmount");
+    const dailyInputLimit = parseUnsigned(value.dailyInputLimit, 64, "dexTrading.dailyInputLimit");
     assertQos(maxInputAmount > 0n && dailyInputLimit >= maxInputAmount, "INVALID_DEX_LIMIT", "DEX daily input limit must be at least the maximum input per swap");
-    return Object.freeze({ ...pair });
-  });
-  const pairIds = pairs.map((pair) => `${pair.inputMint}>${pair.outputMint}`);
-  assertQos(new Set(pairIds).size === pairIds.length, "DUPLICATE_DEX_PAIR", "DEX pair allowlist contains duplicates");
+    normalized = { ...value };
+  }
   assertQos(Number.isInteger(value.maxSlippageBps) && value.maxSlippageBps >= 1 && value.maxSlippageBps <= 1_000, "INVALID_DEX_SLIPPAGE", "DEX slippage cap must be between 1 and 1000 basis points");
   assertQos(Number.isInteger(value.maxRouteFeeBps) && value.maxRouteFeeBps >= 0 && value.maxRouteFeeBps <= 500, "INVALID_DEX_ROUTE_FEE", "DEX route fee cap must be between 0 and 500 basis points");
   const maxFeeLamports = parseUnsigned(value.maxFeeLamports, 64, "dexTrading.maxFeeLamports");
   assertQos(maxFeeLamports >= 5_000n && maxFeeLamports <= 10_000_000n, "INVALID_DEX_NETWORK_FEE", "DEX network and rent fee cap must be between 5000 and 10000000 lamports");
   assertQos(Number.isInteger(value.minIntervalSeconds) && value.minIntervalSeconds >= 5 && value.minIntervalSeconds <= 86_400, "INVALID_DEX_INTERVAL", "DEX minimum interval must be between 5 seconds and one day");
   assertQos(Number.isInteger(value.maxSwapsPerDay) && value.maxSwapsPerDay >= 1 && value.maxSwapsPerDay <= 1_000, "INVALID_DEX_DAILY_COUNT", "DEX daily swap count must be between 1 and 1000");
-  return Object.freeze({ ...value, allowedPairs: Object.freeze(pairs) });
+  return Object.freeze(normalized);
 }
 
 export function parseUnsigned(text, bits, field) {

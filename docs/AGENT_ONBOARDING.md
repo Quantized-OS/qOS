@@ -1,6 +1,6 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.12.0 gives every automated agent a separate, revocable credential and a
+qOS 0.13.0 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
@@ -14,8 +14,8 @@ This release supports three reviewed action surfaces:
 | Mainnet, when configured | `swap` | One manual ExactIn Jupiter order constrained by the profile DEX policy |
 
 DEX access is opt-in per profile and per agent. A swap request cannot select an
-endpoint or an arbitrary transaction; it supplies only the allowlisted input
-mint, output mint, and base-unit amount. qOS checks the configured pair,
+endpoint or an arbitrary transaction; it supplies two Solana mint addresses
+and a base-unit amount. qOS verifies both mint accounts and checks the configured
 per-swap and daily budgets, slippage, route and network fees, cooldown, daily
 count, signer set, router, and confirmation result before updating persistent
 trading state.
@@ -84,9 +84,11 @@ PROFILE/agents/AGENT_ID/
     SKILL.md
     capabilities.md
     transfer.md
-    swap.md
+    trading.md
+    risk-controls.md
     mcp.md
     approval.md
+    connection.json
     manifest.json
 ```
 
@@ -96,10 +98,11 @@ Show the paths with:
 qos> ag skills treasury-bot
 ```
 
-The skill pack states the exact MCP and REST endpoints, action, destination, strategy,
-amount encoding, DEX pair and limits, approval mode, and token-file path. It
-explicitly forbids arbitrary signing. The token is hashed in the registry and never
-stored in a manifest or printed by qOS.
+The skill pack states the exact MCP and skill endpoints, network, any-token
+scope, amount encoding, DEX limits, approval mode, and safe operating workflow.
+It explicitly forbids arbitrary signing. It is discoverable as MCP resources,
+served at `/skill`, and downloadable as a ZIP. The token is hashed in the
+registry and never stored in a manifest or skill file.
 
 File mode `0600` prevents access by other Unix accounts. It does not isolate
 two processes running as the same Unix user. Put each untrusted agent in a
@@ -193,7 +196,7 @@ output; no separate agent executable is installed.
 When DEX is enabled for the agent, call `qos_request_swap` with exactly:
 
 ```json
-{"inputMint":"ALLOWLISTED_INPUT_MINT","outputMint":"ALLOWLISTED_OUTPUT_MINT","amount":"BASE_UNITS"}
+{"inputMint":"SOLANA_INPUT_MINT","outputMint":"SOLANA_OUTPUT_MINT","amount":"BASE_UNITS"}
 ```
 
 `ask` mode holds this request for approval. `auto` mode executes it immediately

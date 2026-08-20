@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { onboardAgent, validateAgentAction } from "../src/agent-registry.js";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../src/constants.js";
 import { configureDexTrading, dexPaths } from "../src/dex.js";
 import { ensureRuntimeProfile } from "../src/runtime-profile.js";
 import { initializeSandbox, QosService } from "../src/service.js";
@@ -14,6 +15,23 @@ import { encodeShortVec } from "../src/transaction.js";
 const INPUT_MINT = "So11111111111111111111111111111111111111112";
 const OUTPUT_MINT = "5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump";
 const RECEIVER = "2fwKS5Xj3c91cH7KZLbntMgrfGGbHiJcwt4g925x9pSy";
+
+function mintAccount(owner, decimals = 6) {
+  const bytes = Buffer.alloc(82);
+  bytes.writeBigUInt64LE(1_000_000_000n, 36);
+  bytes[44] = decimals;
+  bytes[45] = 1;
+  return { owner, data: [bytes.toString("base64"), "base64"] };
+}
+
+function dexRpc(policy) {
+  return {
+    getGenesisHash: async () => policy.clusterGenesis,
+    getAccountInfo: async (address) => address === INPUT_MINT
+      ? mintAccount(TOKEN_PROGRAM_ID, 9)
+      : mintAccount(TOKEN_2022_PROGRAM_ID, 6),
+  };
+}
 
 function versionedTransaction(signer) {
   const accounts = [decodeBase58(signer, 32), Buffer.alloc(32, 7)];
@@ -76,7 +94,8 @@ function configuredProfile(t) {
   configureDexTrading(home, {
     apiKeyFile: keyFile,
     receiver: RECEIVER,
-    allowedPairs: [{ inputMint: INPUT_MINT, outputMint: OUTPUT_MINT, maxInputAmount: "2000", dailyInputLimit: "5000" }],
+    maxInputAmount: "2000",
+    dailyInputLimit: "5000",
     maxSlippageBps: 75,
     maxRouteFeeBps: 100,
     maxFeeLamports: "5000000",
@@ -97,7 +116,7 @@ test("BYOK Jupiter swap signs only a bounded one-signer v0 order and persists li
       ? jsonResponse(order)
       : jsonResponse({ status: "Success", code: 0, signature: encodeBase58(Buffer.alloc(64, 12)), slot: "123", totalInputAmount: "1005", totalOutputAmount: "575" });
   };
-  service.rpc = { getGenesisHash: async () => service.policy.clusterGenesis };
+  service.rpc = dexRpc(service.policy);
   const prior = process.env.QOS_ENABLE_MAINNET_BROADCAST;
   process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
   try {
@@ -132,7 +151,7 @@ test("a signed swap with an ambiguous execute failure conservatively reserves it
     if (calls === 1) return jsonResponse(validOrder(service));
     throw new Error("simulated execute timeout");
   };
-  service.rpc = { getGenesisHash: async () => service.policy.clusterGenesis };
+  service.rpc = dexRpc(service.policy);
   const prior = process.env.QOS_ENABLE_MAINNET_BROADCAST;
   process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
   try {
@@ -148,14 +167,14 @@ test("a signed swap with an ambiguous execute failure conservatively reserves it
   assert.equal(state.inputTotals[`${INPUT_MINT}>${OUTPUT_MINT}`], "1005");
 });
 
-test("agent automatic trading scope remains intersected with firmware pair and lamport limits", (t) => {
+test("agent automatic trading scope accepts any Solana mint pair within firmware amount limits", (t) => {
   const home = configuredProfile(t);
   const policy = JSON.parse(readFileSync(join(home, "policy.json"), "utf8"));
   const agent = onboardAgent(home, {
     id: "trader",
     approvalMode: "auto",
-    asset: "qos-token",
-    maxAmount: "1000",
+    asset: "trading-only",
+    maxAmount: "0",
     destination: policy.allowedDestinations[0],
     strategyId: 1,
     acceptAuto: true,
@@ -165,5 +184,21 @@ test("agent automatic trading scope remains intersected with firmware pair and l
   const valid = { version: 2, action: "swap", inputMint: INPUT_MINT, outputMint: OUTPUT_MINT, amount: "1900", strategyId: 1 };
   assert.equal(validateAgentAction(home, { ...agent, tokenSha256: "0".repeat(64) }, valid).amount, "1900");
   assert.throws(() => validateAgentAction(home, { ...agent, tokenSha256: "0".repeat(64) }, { ...valid, amount: "2001" }), { code: "DEX_INPUT_LIMIT_EXCEEDED" });
-  assert.throws(() => validateAgentAction(home, { ...agent, tokenSha256: "0".repeat(64) }, { ...valid, outputMint: encodeBase58(Buffer.alloc(32, 44)) }), { code: "DEX_PAIR_NOT_ALLOWED" });
+  assert.equal(validateAgentAction(home, { ...agent, tokenSha256: "0".repeat(64) }, { ...valid, outputMint: encodeBase58(Buffer.alloc(32, 44)) }).outputMint, encodeBase58(Buffer.alloc(32, 44)));
+});
+
+test("execution rejects a syntactically valid address that is not a Solana token mint", async (t) => {
+  const home = configuredProfile(t);
+  const service = QosService.open(home);
+  service.rpc = {
+    getGenesisHash: async () => service.policy.clusterGenesis,
+    getAccountInfo: async (address) => address === INPUT_MINT ? { owner: "11111111111111111111111111111111", data: [Buffer.alloc(82).toString("base64"), "base64"] } : mintAccount(TOKEN_2022_PROGRAM_ID),
+  };
+  const prior = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    await assert.rejects(service.executeDexSwap({ version: 2, action: "swap", inputMint: INPUT_MINT, outputMint: OUTPUT_MINT, amount: "1000", strategyId: 1 }), { code: "DEX_MINT_NOT_TOKEN" });
+  } finally {
+    if (prior === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST; else process.env.QOS_ENABLE_MAINNET_BROADCAST = prior;
+  }
 });
