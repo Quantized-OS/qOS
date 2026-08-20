@@ -15,10 +15,11 @@ import { validateIntent, validatePolicy } from "../src/policy.js";
 
 const destination = encodeBase58(Buffer.alloc(32, 21));
 const blockhash = encodeBase58(Buffer.alloc(32, 22));
+const lotteryDestination = encodeBase58(Buffer.alloc(32, 29));
 
 function policy() {
   const value = JSON.parse(readFileSync(new URL("../config/devnet.policy.json", import.meta.url), "utf8"));
-  value.allowedDestinations = [destination];
+  value.allowedDestinations = [destination, lotteryDestination];
   return validatePolicy(value);
 }
 
@@ -48,7 +49,7 @@ function intent(overrides = {}) {
 
 function mainnetPolicy() {
   const value = JSON.parse(readFileSync(new URL("../config/mainnet.policy.json", import.meta.url), "utf8"));
-  value.allowedDestinations = [destination];
+  value.allowedDestinations = [destination, lotteryDestination];
   return validatePolicy(value);
 }
 
@@ -80,7 +81,7 @@ function tokenIntent(overrides = {}) {
 
 function cloudSettlementIntent(overrides = {}) {
   return {
-    version: 3,
+    version: 5,
     requestNonce: "1",
     clusterGenesis: MAINNET_GENESIS_HASH,
     venueId: VENUE_ID,
@@ -88,17 +89,23 @@ function cloudSettlementIntent(overrides = {}) {
     side: "SETTLE",
     mint: QOS_TOKEN_MINT,
     grossAmount: "1000000",
-    treasuryAmount: "990000",
+    treasuryAmount: "490000",
+    lotteryAmount: "500000",
     burnAmount: "10000",
     burnBasisPoints: 100,
     burnRemainderBefore: "0",
     burnRemainderAfter: "0",
+    lotteryBasisPoints: 5000,
+    lotteryRemainderBefore: "0",
+    lotteryRemainderAfter: "0",
     maxFeeLamports: "100000",
     maxCuPrice: "0",
     maxRelayTip: "0",
     destination,
+    lotteryDestination,
     sourceTokenAccount: encodeBase58(Buffer.alloc(32, 25)),
     destinationTokenAccount: encodeBase58(Buffer.alloc(32, 26)),
+    lotteryDestinationTokenAccount: encodeBase58(Buffer.alloc(32, 27)),
     tokenProgram: TOKEN_2022_PROGRAM_ID,
     decimals: 6,
     recentBlockhash: blockhash,
@@ -211,13 +218,15 @@ test("token policy rejects a changed mint, program, decimals, account reuse, or 
   assert.throws(() => validateIntent(tokenIntent({ amount: "1000000001" }), configured, 100), { code: "AMOUNT_LIMIT_EXCEEDED" });
 });
 
-test("cloud settlement policy enforces the cumulative one-percent burn", () => {
+test("cloud settlement policy enforces atomic 49/50/1 treasury, lottery, and burn allocation", () => {
   const values = validateIntent(cloudSettlementIntent(), mainnetPolicy(), 100);
   assert.equal(values.kind, "cloud-settlement");
-  assert.equal(values.treasuryAmount, 990_000n);
+  assert.equal(values.treasuryAmount, 490_000n);
+  assert.equal(values.lotteryAmount, 500_000n);
   assert.equal(values.burnAmount, 10_000n);
-  assert.throws(() => validateIntent(cloudSettlementIntent({ burnAmount: "9999", treasuryAmount: "990001" }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
+  assert.throws(() => validateIntent(cloudSettlementIntent({ burnAmount: "9999", treasuryAmount: "490001" }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
   assert.throws(() => validateIntent(cloudSettlementIntent({ burnBasisPoints: 99 }), mainnetPolicy(), 100), { code: "CLOUD_BURN_POLICY_CHANGED" });
+  assert.throws(() => validateIntent(cloudSettlementIntent({ lotteryAmount: "499999", treasuryAmount: "490001" }), mainnetPolicy(), 100), { code: "CLOUD_LOTTERY_POLICY_CHANGED" });
 });
 
 test("cloud withdrawal policy enforces one atomic 0.25-percent fee split", () => {

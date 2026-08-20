@@ -241,7 +241,7 @@ def main() -> None:
             "BROADCAST_CONFIRMATION_REQUIRED",
             "LIVE_CONFIRMATION_REQUIRED",
             "dex-configure",
-            "jupiter-dex-swap",
+            "reviewed-multivenue-dex-swap",
             "INTERACTIVE_TTY_REQUIRED",
             "shell: false",
             "QOS_API_TOKEN_FILE",

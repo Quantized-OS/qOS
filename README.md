@@ -8,12 +8,17 @@ Most trading systems rely on a broad and fragile trust base: a general-purpose o
 
 The design has three goals: **keep strategies and keys private, make the machine verifiable, and give crypto applications hardware-enforced control over what may be signed.**
 
-Version 0.13.0 lets trading-enabled profiles swap any verified Solana Token or
-Token-2022 mint pair while retaining amount, daily, cooldown, slippage, route,
-network-fee, signer-set, and transaction-form controls. Each agent receives a
-configuration-specific trading skill that is available as MCP resources, at
-the authenticated `/skill` endpoint, and as a downloadable ZIP. Cloud agents
-have no qOS transfer tool: qOS is reserved for Cloud launch and settlement fees.
+Version 0.14.0 adds configurable full-path HTTPS Solana RPC endpoints, an
+atomic Cloud settlement template for 50% lottery / 49% treasury / 1% burn, and
+reviewed multi-venue trading. Trading-enabled profiles can route any verified
+Solana Token or Token-2022 mint pair through Jupiter aggregation or direct
+Raydium routing while retaining amount, daily, cooldown, slippage, route,
+network-fee, signer-set, program, and transaction-form controls. Each agent
+receives a configuration-specific MCP trading skill with DCA, rebalance,
+momentum, mean-reversion, venue-comparison, and risk-off workflows. The skill
+is available as MCP resources, at authenticated `/skill` routes, and as a
+downloadable ZIP. Cloud agents have no qOS transfer tool: qOS is reserved for
+Cloud launch and settlement fees.
 
 Version 0.12.1 added a versioned live-cloud host contract that refuses a
 managed control plane configured to manufacture simulated transaction success.
@@ -78,6 +83,17 @@ For disposable development only, Devnet must be selected explicitly:
 
 ```sh
 ./setup.sh install --devnet
+```
+
+To use a private Solana RPC provider, keep the complete endpoint out of shell
+history and pass an owner-only file. Provider-specific paths and query strings
+are preserved; status output shows only the hostname:
+
+```sh
+install -m 600 /dev/stdin /tmp/qos-rpc-url <<'EOF'
+https://YOUR_SOLANA_RPC_HOST/YOUR_PRIVATE_PROVIDER_PATH
+EOF
+./setup.sh install --rpc-url-file /tmp/qos-rpc-url
 ```
 
 Setup installs verified user-local Node.js and Rust toolchains, Ubuntu/QEMU
@@ -149,7 +165,8 @@ qos> capa
 qos> stat
 qos> wal status
 qos> mod on
-qos> tr cfg --api-key-file /owner-only/jupiter.key --input-mint So11111111111111111111111111111111111111112 --output-mint 5a8DpBYU12vaxruvSFm1NJL9bHkPzvJuek9viNyZpump --max-input-amount 10000000 --daily-input-limit 100000000
+qos> tr cfg --api-key-file /owner-only/jupiter.key --max-input-amount 10000000 --daily-input-limit 100000000
+qos> tr s 1000000 --venue raydium --input-mint INPUT_MINT --output-mint OUTPUT_MINT --confirm-live
 qos> ag on
 qos> ag st
 qos> pol show
@@ -184,9 +201,10 @@ The supported integration contract is documented in
 [`docs/PLATFORM_SDK.md`](docs/PLATFORM_SDK.md).
 
 Self-hosted installation remains unchanged on Linux, macOS, and Windows and has
-no managed runtime charge. The qOS core still enforces the atomic settlement
-template used by Cloud—99% to the pinned treasury and a cumulative 1%
-Token-2022 burn—without owning the Cloud business logic or service.
+no managed runtime charge. The qOS core enforces the atomic settlement template
+used by Cloud—50% to the dedicated lottery account, 49% to the pinned treasury,
+and a cumulative 1% Token-2022 burn—without owning the Cloud scheduler,
+eligibility, customer-account, or service logic.
 
 ## Why qOS
 
@@ -416,7 +434,7 @@ qos wallet fund 200000000
 qos sol send 1000000 --confirm-broadcast
 ```
 
-The transfer command checks the RPC genesis hash, creates a fresh bounded intent, applies policy, calculates the network fee, signs, simulates, broadcasts, polls `getSignatureStatuses`, and returns a Devnet Explorer link only after confirmation. The public Devnet faucet and RPC can rate-limit requests; a dedicated Devnet RPC may be selected with `SOLANA_RPC_URL`, but its genesis hash must match the pinned policy.
+The transfer command checks the RPC genesis hash, creates a fresh bounded intent, applies policy, calculates the network fee, signs, simulates, broadcasts, polls `getSignatureStatuses`, and returns a Devnet Explorer link only after confirmation. The public Devnet faucet and RPC can rate-limit requests; select a dedicated endpoint with `--rpc-url-file`, and qOS still requires its genesis hash to match the pinned policy.
 
 To allow an existing Devnet wallet instead of generating a receiver:
 
@@ -499,7 +517,8 @@ See [`docs/MODEL_PROVIDERS.md`](docs/MODEL_PROVIDERS.md) for BYOK configuration
 and [`docs/AGENT_DEMO.md`](docs/AGENT_DEMO.md) for the explicit
 `--broadcast --confirm-live` mainnet gates. The synthetic demo remains a
 Token-2022 transfer example. Managed agents can separately request a configured
-Jupiter swap through `qos_request_swap`; see [`docs/DEX_TRADING.md`](docs/DEX_TRADING.md).
+Jupiter or Raydium swap through `qos_request_swap`; see
+[`docs/DEX_TRADING.md`](docs/DEX_TRADING.md).
 
 ## Synthetic agent security analysis
 

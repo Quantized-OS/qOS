@@ -36,7 +36,8 @@ test("qOS Shell help is available before profile creation", () => {
   assert.match(result.stdout, /privacy \| priv/);
   assert.match(result.stdout, /serve core/);
   assert.match(result.stdout, /only installed command/);
-  assert.match(result.stdout, /pinned Jupiter Ultra Swap endpoint/);
+  assert.match(result.stdout, /reviewed Jupiter and Raydium adapters/);
+  assert.match(result.stdout, /--venue jupiter\|raydium/);
 });
 
 test("qOS accepts a direct shorthand command and reports exact capabilities", (t) => {
@@ -176,7 +177,7 @@ test("qOS Shell reports DEX trading as disabled until the profile is configured"
   assert.deepEqual(JSON.parse(result.stdout), { status: "disabled", configuration: null });
 });
 
-test("qOS Shell configures an advanced BYOK Jupiter policy without exposing the key", (t) => {
+test("qOS Shell configures advanced BYOK multi-venue trading without exposing the key", (t) => {
   const root = mkdtempSync(join(tmpdir(), "qos-shell-dex-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "mainnet-insecure");
@@ -200,7 +201,8 @@ test("qOS Shell configures an advanced BYOK Jupiter policy without exposing the 
   ], { encoding: "utf8", cwd: root });
   assert.equal(configured.status, 0, configured.stderr);
   const value = JSON.parse(configured.stdout);
-  assert.equal(value.provider, "jupiter");
+  assert.equal(value.provider, "reviewed-multivenue");
+  assert.deepEqual(value.venues, ["jupiter", "raydium"]);
   assert.equal(value.tokenScope, "any-solana-token");
   assert.equal(value.maxInputAmount, "25000000");
   assert.equal(value.receiver, receiver);
@@ -209,7 +211,7 @@ test("qOS Shell configures an advanced BYOK Jupiter policy without exposing the 
   const capabilities = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "capa"], { encoding: "utf8" });
   assert.equal(capabilities.status, 0, capabilities.stderr);
   assert.equal(JSON.parse(capabilities.stdout).dexTrading, true);
-  assert.ok(JSON.parse(capabilities.stdout).operations.includes("jupiter-dex-swap"));
+  assert.ok(JSON.parse(capabilities.stdout).operations.includes("reviewed-multivenue-dex-swap"));
 });
 
 test("qOS Shell requires an explicit broadcast confirmation before network access", (t) => {

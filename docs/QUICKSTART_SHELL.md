@@ -46,6 +46,21 @@ Start the guided mainnet setup with:
 ./setup.sh install
 ```
 
+Private RPC URLs often contain a project credential. Store the entire HTTPS
+endpoint in an owner-only file instead of command history, then add
+`--rpc-url-file` to any install mode:
+
+```sh
+install -m 600 /dev/stdin /tmp/qos-rpc-url <<'EOF'
+https://YOUR_SOLANA_RPC_HOST/YOUR_PRIVATE_PROVIDER_PATH
+EOF
+./setup.sh install --rpc-url-file /tmp/qos-rpc-url
+```
+
+Arbitrary valid paths and queries are retained. qOS rejects URL userinfo,
+fragments, remote plaintext HTTP, wrong cluster genesis, redirects, malformed
+JSON-RPC, and oversized responses; logs and status do not expose the path.
+
 In an interactive terminal, qOS first asks how the source-wallet key should be
 held. Choose an existing key through a reviewed external signer (recommended),
 or ask qOS to generate an accessible software key. The second choice sets the
@@ -434,17 +449,18 @@ export PATH="$HOME/.local/bin:$PATH"
 
 This source constructs one System Program SOL transfer, one pinned qOS
 Token-2022 `TransferChecked` instruction, the Cloud settlement/withdrawal
-templates, and one BYOK Jupiter Ultra Swap path. DEX trading is disabled until
+templates, and reviewed BYOK Jupiter plus direct Raydium swap paths. DEX trading is disabled until
 `trade configure` pins advanced amount, timing, slippage, route-fee, and
 network-fee limits. Input and output mints are selected per request. `trade
 swap` requires `--confirm-live`; agents also require `--enable-dex` and a live
 listener.
 
-The swap path is manual ExactIn only. It accepts any two distinct initialized
-Solana Token Program or Token-2022 mints, then rejects JupiterZ, gasless or
-additional signer paths, excessive input/slippage/route/network fees, cooldown
-and daily-limit violations, malformed transaction encoding, and ambiguous
-provider output. There is no arbitrary-signature, order-book, or perpetuals
+Each swap is ExactIn. It accepts any two distinct initialized Solana Token
+Program or Token-2022 mints through a reviewed Jupiter or Raydium adapter, then
+rejects unreviewed programs, JupiterZ, gasless or additional-signer paths,
+excessive input/slippage/route/network fees, cooldown and daily-limit
+violations, malformed transaction encoding, and ambiguous provider output.
+There is no arbitrary-signature, arbitrary-program, order-book, or perpetuals
 endpoint. See `DEX_TRADING.md` for the full boundary and commands.
 
 The tested setup matrix is Ubuntu 20.04, 22.04, and 24.04 on x86-64 or ARM64.

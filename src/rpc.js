@@ -161,12 +161,14 @@ export class SolanaRpc {
     return result.value;
   }
 
-  async simulateTransaction(transactionBase64) {
+  async simulateTransaction(transactionBase64, { accounts = undefined } = {}) {
+    assertQos(accounts === undefined || (Array.isArray(accounts) && accounts.length >= 1 && accounts.length <= 64), "RPC_ACCOUNT_BATCH_INVALID", "Simulation account inspection requires between one and sixty-four addresses");
     const result = await this.call("simulateTransaction", [transactionBase64, {
       encoding: "base64",
       commitment: this.commitment,
       sigVerify: true,
       replaceRecentBlockhash: false,
+      ...(accounts === undefined ? {} : { accounts: { encoding: "base64", addresses: accounts } }),
     }]);
     return result.value;
   }

@@ -31,8 +31,8 @@ Usage:
   qos dex-status [--home PATH]
   qos dex-configure --home PATH --api-key-file PATH --max-input-amount N
                     --daily-input-limit N [--receiver PUBKEY] [policy limit options]
-  qos dex-swap --home PATH --input-mint PUBKEY --output-mint PUBKEY
-               --amount N [--strategy-id N]
+  qos dex-swap --home PATH [--venue jupiter|raydium] --input-mint PUBKEY
+               --output-mint PUBKEY --amount N [--strategy-id N]
   qos privacy-status [--home PATH]
   qos serve [--home PATH] [--host HOST] [--port PORT]
 
@@ -240,13 +240,14 @@ async function main() {
       return;
     }
     case "dex-swap": {
-      only(options, ["home", "input-mint", "output-mint", "amount", "strategy-id"]);
+      only(options, ["home", "venue", "input-mint", "output-mint", "amount", "strategy-id"]);
       for (const required of ["input-mint", "output-mint", "amount"]) {
         if (options[required] === undefined) throw new QosError("MISSING_ARGUMENT", `--${required} is required`);
       }
       print(await service.executeDexSwap({
-        version: 2,
+        version: 3,
         action: "swap",
+        venue: options.venue ?? "jupiter",
         inputMint: options["input-mint"],
         outputMint: options["output-mint"],
         amount: options.amount,

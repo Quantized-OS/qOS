@@ -122,15 +122,15 @@ Commands (long | shorthand):
   trade | tr configure|cfg --api-key-file FILE --max-input-amount N
             --daily-input-limit N
             [advanced policy options]
-  trade | tr swap|s AMOUNT --input-mint PUBKEY --output-mint PUBKEY
-            --confirm-live [--strategy-id N]
+  trade | tr swap|s AMOUNT [--venue jupiter|raydium] --input-mint PUBKEY
+            --output-mint PUBKEY --confirm-live [--strategy-id N]
   help | h | ?           exit | x | q
 
 The shell never executes arbitrary shell text. Broadcast commands require the
 listed confirmation option and remain constrained by the qOS policy signer.
 qos is the only installed command; every operator feature is grouped here.
-DEX trading uses the pinned Jupiter Ultra Swap endpoint and accepts any verified
-Solana token pair while rejecting arbitrary transactions and out-of-policy spend.
+DEX trading uses reviewed Jupiter and Raydium adapters and accepts any verified
+Solana token pair while rejecting arbitrary programs, transactions, and out-of-policy spend.
 `;
 }
 
@@ -270,13 +270,13 @@ function capabilitiesFor(context) {
       "loopback-agent-api-mcp",
       "loopback-core-api",
       "byok-model-providers",
-      ...(context.policy.dexTrading === null ? [] : ["jupiter-dex-swap", "agent-directed-jupiter-dex-swap"]),
+      ...(context.policy.dexTrading === null ? [] : ["reviewed-multivenue-dex-swap", "agent-directed-solana-token-swap"]),
     ],
     mainnetAutomaticExecutionRequiresLiveStart: context.policy.cluster === "mainnet-beta",
     dexTrading: context.policy.dexTrading !== null,
     dexReason: context.policy.dexTrading === null
       ? "DEX trading is available but not configured for this profile."
-      : "Jupiter swaps are constrained by the configured mint pair and advanced policy limits.",
+      : "Jupiter and Raydium swaps are constrained by the configured token scope and advanced firmware policy limits.",
   };
 }
 
@@ -363,7 +363,7 @@ function dispatch(tokens, context) {
     }
     if (action === "swap") {
       const amount = canonicalAmount(args[0], "DEX input amount");
-      const allowed = new Set(["--input-mint", "--output-mint", "--strategy-id"]);
+      const allowed = new Set(["--venue", "--input-mint", "--output-mint", "--strategy-id"]);
       const required = new Set(["--input-mint", "--output-mint"]);
       const seen = new Set();
       const forwarded = [];

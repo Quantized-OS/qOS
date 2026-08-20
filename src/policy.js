@@ -70,16 +70,22 @@ export const CLOUD_SETTLEMENT_INTENT_KEYS = [
   "mint",
   "grossAmount",
   "treasuryAmount",
+  "lotteryAmount",
   "burnAmount",
   "burnBasisPoints",
   "burnRemainderBefore",
   "burnRemainderAfter",
+  "lotteryBasisPoints",
+  "lotteryRemainderBefore",
+  "lotteryRemainderAfter",
   "maxFeeLamports",
   "maxCuPrice",
   "maxRelayTip",
   "destination",
+  "lotteryDestination",
   "sourceTokenAccount",
   "destinationTokenAccount",
+  "lotteryDestinationTokenAccount",
   "tokenProgram",
   "decimals",
   "recentBlockhash",
@@ -340,9 +346,9 @@ export function validateIntent(intent, policy, currentSlot) {
   assertQos(intent && typeof intent === "object" && !Array.isArray(intent), "INVALID_INTENT_SHAPE", "Intent must be an object");
   if (intent.version === 1) return validateNativeIntent(intent, policy, currentSlot);
   if (intent.version === 2) return validateTokenIntent(intent, policy, currentSlot);
-  if (intent.version === 3) return validateCloudSettlementIntent(intent, policy, currentSlot);
+  if (intent.version === 5) return validateCloudSettlementIntent(intent, policy, currentSlot);
   if (intent.version === 4) return validateCloudWithdrawalIntent(intent, policy, currentSlot);
-  assertQos(false, "UNSUPPORTED_INTENT", "Only native, token-transfer, qOS Cloud settlement, and qOS Cloud withdrawal intents are supported");
+  assertQos(false, "UNSUPPORTED_INTENT", "Only native, token-transfer, qOS Cloud settlement v5, and qOS Cloud withdrawal intents are supported");
 }
 
 function validateCommonIntent(intent, policy, currentSlot, expectedSide = "SEND") {
@@ -403,22 +409,33 @@ function validateCloudSettlementIntent(intent, policy, currentSlot) {
   const token = policy.tokenTransfer;
   assertQos(intent.mint === token.mint && intent.tokenProgram === token.tokenProgram && intent.decimals === token.decimals, "MINT_NOT_ALLOWED", "Settlement mint, program, or decimals do not match policy");
   assertQos(intent.burnBasisPoints === 100, "CLOUD_BURN_POLICY_CHANGED", "Cloud settlement must burn exactly one percent cumulatively");
+  assertQos(intent.lotteryBasisPoints === 5_000, "CLOUD_LOTTERY_POLICY_CHANGED", "Cloud settlement must allocate exactly fifty percent cumulatively to the lottery wallet");
+  decodeBase58(intent.lotteryDestination, 32);
+  assertQos(policy.allowedDestinations.includes(intent.lotteryDestination), "DESTINATION_NOT_ALLOWED", "Cloud lottery destination is not allowlisted");
+  assertQos(intent.destination !== intent.lotteryDestination, "DUPLICATE_DESTINATION", "Cloud treasury and lottery destinations must differ");
   decodeBase58(intent.mint, 32);
   decodeBase58(intent.tokenProgram, 32);
   decodeBase58(intent.sourceTokenAccount, 32);
   decodeBase58(intent.destinationTokenAccount, 32);
-  assertQos(intent.sourceTokenAccount !== intent.destinationTokenAccount, "DUPLICATE_TOKEN_ACCOUNT", "Settlement source and destination token accounts must differ");
+  decodeBase58(intent.lotteryDestinationTokenAccount, 32);
+  assertQos(new Set([intent.sourceTokenAccount, intent.destinationTokenAccount, intent.lotteryDestinationTokenAccount]).size === 3, "DUPLICATE_TOKEN_ACCOUNT", "Settlement source, treasury, and lottery token accounts must differ");
   const grossAmount = parseUnsigned(intent.grossAmount, 64, "grossAmount");
   const treasuryAmount = parseUnsigned(intent.treasuryAmount, 64, "treasuryAmount");
+  const lotteryAmount = parseUnsigned(intent.lotteryAmount, 64, "lotteryAmount");
   const burnAmount = parseUnsigned(intent.burnAmount, 64, "burnAmount");
   const remainderBefore = parseUnsigned(intent.burnRemainderBefore, 7, "burnRemainderBefore");
   const remainderAfter = parseUnsigned(intent.burnRemainderAfter, 7, "burnRemainderAfter");
+  const lotteryRemainderBefore = parseUnsigned(intent.lotteryRemainderBefore, 14, "lotteryRemainderBefore");
+  const lotteryRemainderAfter = parseUnsigned(intent.lotteryRemainderAfter, 14, "lotteryRemainderAfter");
   assertQos(grossAmount > 0n && grossAmount <= parseUnsigned(token.maxTransferAmount, 64, "policy.tokenTransfer.maxTransferAmount"), "AMOUNT_LIMIT_EXCEEDED", "Cloud settlement exceeds the policy amount limit");
   assertQos(remainderBefore < 100n && remainderAfter < 100n, "CLOUD_BURN_REMAINDER_INVALID", "Cloud burn remainder must be between 0 and 99 base units");
   const burnNumerator = remainderBefore + grossAmount;
   assertQos(burnAmount === burnNumerator / 100n && remainderAfter === burnNumerator % 100n, "CLOUD_BURN_POLICY_CHANGED", "Cloud burn amount does not equal the cumulative one-percent policy");
-  assertQos(treasuryAmount + burnAmount === grossAmount, "CLOUD_SETTLEMENT_SPLIT_INVALID", "Cloud treasury and burn amounts must equal the gross charge");
-  return { ...common, kind: "cloud-settlement", amount: grossAmount, grossAmount, treasuryAmount, burnAmount, remainderBefore, remainderAfter };
+  assertQos(lotteryRemainderBefore < 10_000n && lotteryRemainderAfter < 10_000n, "CLOUD_LOTTERY_REMAINDER_INVALID", "Cloud lottery remainder must be below ten thousand");
+  const lotteryNumerator = lotteryRemainderBefore + grossAmount * 5_000n;
+  assertQos(lotteryAmount === lotteryNumerator / 10_000n && lotteryRemainderAfter === lotteryNumerator % 10_000n, "CLOUD_LOTTERY_POLICY_CHANGED", "Cloud lottery amount does not equal the cumulative fifty-percent policy");
+  assertQos(treasuryAmount + lotteryAmount + burnAmount === grossAmount, "CLOUD_SETTLEMENT_SPLIT_INVALID", "Cloud treasury, lottery, and burn amounts must equal the gross charge");
+  return { ...common, kind: "cloud-settlement", amount: grossAmount, grossAmount, treasuryAmount, lotteryAmount, burnAmount, remainderBefore, remainderAfter, lotteryRemainderBefore, lotteryRemainderAfter };
 }
 
 function validateCloudWithdrawalIntent(intent, policy, currentSlot) {
