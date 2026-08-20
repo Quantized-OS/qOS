@@ -1,6 +1,6 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.14.0 gives every automated agent a separate, revocable credential and a
+qOS 0.15.0 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
@@ -85,6 +85,8 @@ PROFILE/agents/AGENT_ID/
     capabilities.md
     transfer.md
     trading.md
+    market-discovery.md
+    strategy-selection.md
     risk-controls.md
     mcp.md
     approval.md

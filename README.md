@@ -8,7 +8,16 @@ Most trading systems rely on a broad and fragile trust base: a general-purpose o
 
 The design has three goals: **keep strategies and keys private, make the machine verifiable, and give crypto applications hardware-enforced control over what may be signed.**
 
-Version 0.14.0 adds configurable full-path HTTPS Solana RPC endpoints, an
+Version 0.15.0 adds optional-key multi-venue trading: Raydium-only profiles no
+longer need a Jupiter credential, while profiles that enable Jupiter still use
+an owner-only BYOK file. Per-trade and daily budgets may use the u64 protocol
+maximum, and the defaults are 300 swaps per UTC day with a 30-second minimum
+interval. Trading agents gain bounded read-only DexScreener and Pump.fun-origin
+market discovery plus generated strategy-selection and asset-verification
+guides. The MCP server advertises only the venues enabled for that box and
+never exposes arbitrary signing.
+
+Version 0.14.0 added configurable full-path HTTPS Solana RPC endpoints, an
 atomic Cloud settlement template for 50% lottery / 49% treasury / 1% burn, and
 reviewed multi-venue trading. Trading-enabled profiles can route any verified
 Solana Token or Token-2022 mint pair through Jupiter aggregation or direct
@@ -286,7 +295,7 @@ Private routing protects the path to the validator, not the finalized ledger. On
 * `tests/static_checks.py` — Fail-closed starter invariants
 * `docs/SECURITY.md` — Threat model, deployment profiles, limitations, and disclosure guidance
 * `docs/reports/HARDENING_REPORT.md` — Implemented controls, fixed defects, verification, and remaining gaps
-* `docs/reports/PRODUCTION_SECURITY_REVIEW.md` — Production-preparation findings, blockers, and acceptance criteria
+* `docs/reports/PRODUCTION_SECURITY_REVIEW_0.15.0.md` — Current production-preparation findings, blockers, and acceptance criteria
 
 The firmware code is intentionally incomplete. It will not produce a deployable
 firmware image until the target platform provides working implementations of

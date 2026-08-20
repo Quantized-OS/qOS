@@ -138,7 +138,7 @@ malicious external verifier invalidates the authorization guarantee.
   arbitrary-program trading engine. Venue transaction construction remains an
   external trust boundary and every returned transaction is revalidated.
 
-See `reports/PRODUCTION_SECURITY_REVIEW.md` for the production release decision,
+See `reports/PRODUCTION_SECURITY_REVIEW_0.15.0.md` for the current production release decision,
 verification evidence, and acceptance criteria.
 
 ## Reporting vulnerabilities

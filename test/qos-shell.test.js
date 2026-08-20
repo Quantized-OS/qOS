@@ -214,6 +214,24 @@ test("qOS Shell configures advanced BYOK multi-venue trading without exposing th
   assert.ok(JSON.parse(capabilities.stdout).operations.includes("reviewed-multivenue-dex-swap"));
 });
 
+test("qOS Shell configures keyless Raydium with protocol-maximum and cadence defaults", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "qos-shell-raydium-default-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "mainnet-insecure");
+  initializeSandbox(home, encodeBase58(Buffer.alloc(32, 95)), { cluster: "mainnet-beta" });
+  ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+
+  const configured = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "tr", "cfg"], { encoding: "utf8", cwd: root });
+  assert.equal(configured.status, 0, configured.stderr);
+  const value = JSON.parse(configured.stdout);
+  assert.deepEqual(value.venues, ["raydium"]);
+  assert.equal(value.jupiterCredentialConfigured, false);
+  assert.equal(value.maxInputAmount, "18446744073709551615");
+  assert.equal(value.dailyInputLimit, "18446744073709551615");
+  assert.equal(value.maxSwapsPerDay, 300);
+  assert.equal(value.minIntervalSeconds, 30);
+});
+
 test("qOS Shell requires an explicit broadcast confirmation before network access", (t) => {
   const home = devnetProfile(t);
   const result = spawnSync(process.execPath, [SHELL, "--home", home, "--json", "s", "snd", "1"], { encoding: "utf8" });

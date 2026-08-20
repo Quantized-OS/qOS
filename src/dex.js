@@ -23,6 +23,7 @@ export const JUPITER_SWAP_ENDPOINT = "https://api.jup.ag/swap/v2";
 export const RAYDIUM_SWAP_ENDPOINT = "https://transaction-v1.raydium.io";
 const PROVIDER_V1_KEYS = ["version", "provider", "endpoint"];
 const PROVIDER_V2_KEYS = ["version", "provider", "endpoint", "venues", "raydiumEndpoint"];
+const PROVIDER_V3_KEYS = ["version", "provider", "endpoint", "venues", "raydiumEndpoint", "jupiterCredentialConfigured"];
 const STATE_KEYS = ["version", "day", "tradeCount", "lastExecutedAt", "inputTotals"];
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TRANSACTION_BYTES = 1_232;
@@ -79,21 +80,24 @@ function writeSecretAtomic(path, bytes) {
 
 export function configureDexTrading(home, {
   apiKeyFile,
-  venues = ["jupiter", "raydium"],
+  venues = undefined,
   allowedPairs = undefined,
-  maxInputAmount = undefined,
-  dailyInputLimit = undefined,
+  maxInputAmount = "18446744073709551615",
+  dailyInputLimit = "18446744073709551615",
   receiver = null,
   maxSlippageBps = 100,
   maxRouteFeeBps = 100,
   maxFeeLamports = "5000000",
-  minIntervalSeconds = 60,
-  maxSwapsPerDay = 100,
+  minIntervalSeconds = 30,
+  maxSwapsPerDay = 300,
 } = {}) {
   const paths = dexPaths(home);
   assertPrivateDirectory(paths.home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS profile home" });
-  assertQos(typeof apiKeyFile === "string" && apiKeyFile.length > 0, "DEX_CREDENTIAL_REQUIRED", "Jupiter trading requires an owner-only API key file");
-  assertQos(Array.isArray(venues) && venues.length >= 1 && venues.length <= 2 && venues.every((venue) => venue === "jupiter" || venue === "raydium") && new Set(venues).size === venues.length, "INVALID_DEX_VENUES", "DEX venues must select Jupiter, Raydium, or both reviewed adapters");
+  const hasJupiterCredential = typeof apiKeyFile === "string" && apiKeyFile.length > 0;
+  const selectedVenues = venues ?? (hasJupiterCredential ? ["jupiter", "raydium"] : ["raydium"]);
+  assertQos(apiKeyFile === undefined || hasJupiterCredential, "DEX_CREDENTIAL_INVALID", "Jupiter API key file path is invalid");
+  assertQos(Array.isArray(selectedVenues) && selectedVenues.length >= 1 && selectedVenues.length <= 2 && selectedVenues.every((venue) => venue === "jupiter" || venue === "raydium") && new Set(selectedVenues).size === selectedVenues.length, "INVALID_DEX_VENUES", "DEX venues must select Jupiter, Raydium, or both reviewed adapters");
+  assertQos(!selectedVenues.includes("jupiter") || hasJupiterCredential, "DEX_CREDENTIAL_REQUIRED", "Enabling Jupiter trading requires an owner-only Jupiter API key file; choose Raydium-only when no Jupiter key is available");
   const policy = loadPolicy(join(paths.home, "policy.json"));
   assertQos(policy.cluster === "mainnet-beta", "DEX_CLUSTER_UNSUPPORTED", "Live DEX trading is supported only on Solana mainnet-beta");
   const riskLimits = allowedPairs === undefined
@@ -110,34 +114,41 @@ export function configureDexTrading(home, {
     minIntervalSeconds,
     maxSwapsPerDay,
   });
-  const source = readSecureFile(apiKeyFile, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" });
+  const source = hasJupiterCredential
+    ? readSecureFile(apiKeyFile, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" })
+    : null;
   let credential;
   try {
-    credential = visibleApiKey(source);
+    if (source !== null) credential = visibleApiKey(source);
     if (!existsSync(paths.dex)) mkdirSync(paths.dex, { mode: 0o700 });
     chmodSync(paths.dex, 0o700);
     if (!existsSync(paths.runtimeState)) mkdirSync(paths.runtimeState, { mode: 0o700 });
     chmodSync(paths.runtimeState, 0o700);
-    const storedCredential = Buffer.alloc(credential.length + 1);
-    try {
-      credential.copy(storedCredential);
-      storedCredential[storedCredential.length - 1] = 0x0a;
-      writeSecretAtomic(paths.apiKey, storedCredential);
-    } finally {
-      storedCredential.fill(0);
+    if (credential !== undefined) {
+      const storedCredential = Buffer.alloc(credential.length + 1);
+      try {
+        credential.copy(storedCredential);
+        storedCredential[storedCredential.length - 1] = 0x0a;
+        writeSecretAtomic(paths.apiKey, storedCredential);
+      } finally {
+        storedCredential.fill(0);
+      }
+    } else if (existsSync(paths.apiKey)) {
+      unlinkSync(paths.apiKey);
     }
     writePrivateJsonAtomic(paths.provider, {
-      version: 2,
+      version: 3,
       provider: "reviewed-multivenue",
       endpoint: JUPITER_SWAP_ENDPOINT,
-      venues,
+      venues: selectedVenues,
       raydiumEndpoint: RAYDIUM_SWAP_ENDPOINT,
+      jupiterCredentialConfigured: hasJupiterCredential,
     }, { errorCode: "DEX_CONFIG_WRITE_FAILED", label: "DEX provider configuration" });
     if (!existsSync(paths.tradingState)) writePrivateJsonAtomic(paths.tradingState, emptyTradingState(), { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
     const nextPolicy = validatePolicy({ ...policy, version: 3, dexTrading });
     writePrivateJsonAtomic(join(paths.home, "policy.json"), nextPolicy, { errorCode: "POLICY_WRITE_FAILED", label: "Policy file" });
   } finally {
-    source.fill(0);
+    source?.fill(0);
     credential?.fill(0);
   }
   return publicDexTrading(paths.home);
@@ -152,12 +163,30 @@ export function publicDexTrading(home) {
     assertQos(provider.version === 1 && provider.provider === "jupiter" && provider.endpoint === JUPITER_SWAP_ENDPOINT, "INVALID_DEX_CONFIG", "DEX provider configuration is invalid");
     provider.venues = ["jupiter"];
     provider.raydiumEndpoint = RAYDIUM_SWAP_ENDPOINT;
-  } else {
+    provider.jupiterCredentialConfigured = true;
+  } else if (hasExactKeys(provider, PROVIDER_V2_KEYS)) {
     assertQos(hasExactKeys(provider, PROVIDER_V2_KEYS) && provider.version === 2 && provider.provider === "reviewed-multivenue" && provider.endpoint === JUPITER_SWAP_ENDPOINT && provider.raydiumEndpoint === RAYDIUM_SWAP_ENDPOINT, "INVALID_DEX_CONFIG", "DEX provider configuration is invalid");
     assertQos(Array.isArray(provider.venues) && provider.venues.length >= 1 && provider.venues.length <= 2 && provider.venues.every((venue) => venue === "jupiter" || venue === "raydium") && new Set(provider.venues).size === provider.venues.length, "INVALID_DEX_CONFIG", "DEX venue configuration is invalid");
+    provider.jupiterCredentialConfigured = true;
+  } else {
+    assertQos(hasExactKeys(provider, PROVIDER_V3_KEYS) && provider.version === 3 && provider.provider === "reviewed-multivenue" && provider.endpoint === JUPITER_SWAP_ENDPOINT && provider.raydiumEndpoint === RAYDIUM_SWAP_ENDPOINT, "INVALID_DEX_CONFIG", "DEX provider configuration is invalid");
+    assertQos(Array.isArray(provider.venues) && provider.venues.length >= 1 && provider.venues.length <= 2 && provider.venues.every((venue) => venue === "jupiter" || venue === "raydium") && new Set(provider.venues).size === provider.venues.length, "INVALID_DEX_CONFIG", "DEX venue configuration is invalid");
+    assertQos(typeof provider.jupiterCredentialConfigured === "boolean" && provider.venues.includes("jupiter") === provider.jupiterCredentialConfigured, "INVALID_DEX_CONFIG", "Jupiter venue and credential configuration do not match");
   }
-  readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" }).fill(0);
-  return { ...policy.dexTrading, provider: provider.provider, venues: [...provider.venues], raydiumEndpoint: provider.raydiumEndpoint, credentialConfigured: true };
+  if (provider.jupiterCredentialConfigured) readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" }).fill(0);
+  else assertQos(!existsSync(paths.apiKey), "INVALID_DEX_CONFIG", "Raydium-only DEX configuration retained an unexpected Jupiter credential");
+  return {
+    ...policy.dexTrading,
+    provider: provider.provider,
+    venues: [...provider.venues],
+    raydiumEndpoint: provider.raydiumEndpoint,
+    credentialConfigured: provider.jupiterCredentialConfigured,
+    jupiterCredentialConfigured: provider.jupiterCredentialConfigured,
+  };
+}
+
+export function defaultDexVenue(home) {
+  return publicDexTrading(home)?.venues?.[0] ?? "jupiter";
 }
 
 function pairFor(policy, action) {
@@ -819,6 +848,7 @@ export async function executeDexSwap({ home, policy, signer, runtimeProfile, pro
   if (venue === "raydium") {
     return executeRaydiumSwap({ paths, provider, pair, amount, policy, signer, rpc, action: { ...action, venue }, fetchImpl, now, mints });
   }
+  assertQos(provider.jupiterCredentialConfigured === true, "DEX_CREDENTIAL_REQUIRED", "Jupiter is not enabled for this profile; use Raydium or configure a Jupiter API key");
   const credentialBytes = readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" });
   let credential;
   try {

@@ -56,7 +56,7 @@ test("agent onboarding creates a private revocable credential and scoped skill p
   assert.equal(lstatSync(paths.token).mode & 0o077, 0);
   assert.equal(lstatSync(paths.token).nlink, 1);
   assert.equal(lstatSync(paths.skills).mode & 0o077, 0);
-  assert.match(readFileSync(join(paths.skills, "SKILL.md"), "utf8"), /cannot request arbitrary signatures/);
+  assert.match(readFileSync(join(paths.skills, "SKILL.md"), "utf8"), /never exposes arbitrary signing/);
   assert.match(readFileSync(join(paths.skills, "transfer.md"), "utf8"), /transfer_sol/);
   assert.match(readFileSync(join(paths.skills, "mcp.md"), "utf8"), /qos_request_transfer/);
   const manifest = JSON.parse(readFileSync(join(paths.skills, "manifest.json"), "utf8"));

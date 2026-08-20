@@ -5,7 +5,7 @@ import { publicError, QosError } from "../src/errors.js";
 import { initializeSandbox, QosService } from "../src/service.js";
 import { startServer } from "../src/server.js";
 import { readSecureFile } from "../src/secure-file.js";
-import { configureDexTrading, publicDexTrading } from "../src/dex.js";
+import { configureDexTrading, defaultDexVenue, publicDexTrading } from "../src/dex.js";
 
 const MAX_CLI_JSON_BYTES = 256 * 1024;
 
@@ -29,8 +29,9 @@ Usage:
                     [--nonce N] [--max-fee-lamports N] [--strategy-id N]
   qos token-transfer [--home PATH] [--destination PUBKEY] [--amount N]
   qos dex-status [--home PATH]
-  qos dex-configure --home PATH --api-key-file PATH --max-input-amount N
-                    --daily-input-limit N [--receiver PUBKEY] [policy limit options]
+  qos dex-configure --home PATH [--api-key-file PATH] [--venues jupiter,raydium]
+                    [--max-input-amount N] [--daily-input-limit N]
+                    [--receiver PUBKEY] [policy limit options]
   qos dex-swap --home PATH [--venue jupiter|raydium] --input-mint PUBKEY
                --output-mint PUBKEY --amount N [--strategy-id N]
   qos privacy-status [--home PATH]
@@ -222,14 +223,12 @@ async function main() {
       return;
     }
     case "dex-configure": {
-      only(options, ["home", "api-key-file", "max-input-amount", "daily-input-limit", "receiver", "max-slippage-bps", "max-route-fee-bps", "max-fee-lamports", "min-interval-seconds", "max-swaps-per-day"]);
-      for (const required of ["api-key-file", "max-input-amount", "daily-input-limit"]) {
-        if (options[required] === undefined) throw new QosError("MISSING_ARGUMENT", `--${required} is required`);
-      }
+      only(options, ["home", "api-key-file", "venues", "max-input-amount", "daily-input-limit", "receiver", "max-slippage-bps", "max-route-fee-bps", "max-fee-lamports", "min-interval-seconds", "max-swaps-per-day"]);
       print(configureDexTrading(service.paths.home, {
-        apiKeyFile: resolve(options["api-key-file"]),
-        maxInputAmount: options["max-input-amount"],
-        dailyInputLimit: options["daily-input-limit"],
+        ...(options["api-key-file"] === undefined ? {} : { apiKeyFile: resolve(options["api-key-file"]) }),
+        ...(options.venues === undefined ? {} : { venues: options.venues.split(",").map((value) => value.trim()) }),
+        ...(options["max-input-amount"] === undefined ? {} : { maxInputAmount: options["max-input-amount"] }),
+        ...(options["daily-input-limit"] === undefined ? {} : { dailyInputLimit: options["daily-input-limit"] }),
         ...(options.receiver === undefined ? {} : { receiver: options.receiver }),
         ...(options["max-slippage-bps"] === undefined ? {} : { maxSlippageBps: Number(options["max-slippage-bps"]) }),
         ...(options["max-route-fee-bps"] === undefined ? {} : { maxRouteFeeBps: Number(options["max-route-fee-bps"]) }),
@@ -247,7 +246,7 @@ async function main() {
       print(await service.executeDexSwap({
         version: 3,
         action: "swap",
-        venue: options.venue ?? "jupiter",
+        venue: options.venue ?? defaultDexVenue(service.paths.home),
         inputMint: options["input-mint"],
         outputMint: options["output-mint"],
         amount: options.amount,
