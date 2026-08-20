@@ -8,7 +8,12 @@ Most trading systems rely on a broad and fragile trust base: a general-purpose o
 
 The design has three goals: **keep strategies and keys private, make the machine verifiable, and give crypto applications hardware-enforced control over what may be signed.**
 
-Version 0.12.0 adds BYOK Jupiter Ultra Swap support for bounded automated
+Version 0.12.1 adds a versioned live-cloud host contract that refuses a
+managed control plane configured to manufacture simulated transaction success.
+The Cloud host must explicitly enable live mainnet transactions before it can
+start against this firmware SDK.
+
+Version 0.12.0 added BYOK Jupiter Ultra Swap support for bounded automated
 trading. Each profile pins one or more mint pairs plus per-swap input, daily
 input, slippage, route-fee, network/rent-fee, cooldown, and daily-count limits.
 Self-hosted profiles may additionally pin a distinct swap-output receiver;

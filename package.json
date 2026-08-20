@@ -1,6 +1,6 @@
 {
   "name": "qos-solana-sandbox",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "private": true,
   "description": "Policy signer for Solana transfers and bounded Jupiter DEX swaps",
   "type": "module",

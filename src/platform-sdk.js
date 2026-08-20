@@ -2,7 +2,19 @@
 // Managed services live in separate repositories and depend on this versioned
 // interface instead of importing qOS internals by filesystem path.
 
+import { assertQos } from "./errors.js";
+
 export const QOS_PLATFORM_SDK_VERSION = 1;
+export const QOS_CLOUD_HOST_CONTRACT_VERSION = 1;
+
+export function assertCloudLiveTransactions(enabled) {
+  assertQos(enabled === true, "CLOUD_LIVE_TRANSACTIONS_DISABLED", "Managed qOS Cloud requires live mainnet transactions and does not support simulated-success execution");
+  return Object.freeze({
+    version: QOS_CLOUD_HOST_CONTRACT_VERSION,
+    liveTransactions: true,
+    simulatedSuccessSupported: false,
+  });
+}
 
 export { getAgent, onboardAgent } from "./agent-registry.js";
 export { decodeBase58 } from "./base58.js";
