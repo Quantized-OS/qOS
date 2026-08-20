@@ -3,11 +3,12 @@ import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 
-import { authenticateAgent, getAgentRecord, validateAgentAction } from "./agent-registry.js";
+import { authenticateAgent, getAgentRecord, readAgentSkillPack, validateAgentAction } from "./agent-registry.js";
 import { hasExactKeys } from "./canonical.js";
 import { assertQos, publicError, QosError } from "./errors.js";
 import { loadPolicy } from "./policy.js";
 import { readSecureFile } from "./secure-file.js";
+import { buildSkillZip } from "./skill-bundle.js";
 import { policyCommitment } from "./zk.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -42,6 +43,22 @@ function sendEmpty(response, status) {
     "x-content-type-options": "nosniff",
   });
   response.end();
+}
+
+function sendBytes(response, status, bytes, contentType, { filename = null } = {}) {
+  const body = Buffer.from(bytes);
+  const headers = {
+    "content-type": contentType,
+    "content-length": body.length,
+    "cache-control": "no-store",
+    "cross-origin-resource-policy": "same-origin",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  };
+  if (filename !== null) headers["content-disposition"] = `attachment; filename="${filename}"`;
+  response.writeHead(status, headers);
+  response.end(body);
 }
 
 function rpcError(id, code, message) {
@@ -101,10 +118,11 @@ function validateMcpEnvelope(request, body) {
     if (body.method !== "initialize") {
       assertQos(plainObject(params._meta) && params._meta["io.modelcontextprotocol/protocolVersion"] === protocolVersion, "MCP_HEADER_MISMATCH", "MCP request metadata does not match the protocol header");
     }
-    if (body.method === "tools/call") {
-      assertQos(singleHeader(request, "mcp-name") === params.name, "MCP_HEADER_MISMATCH", "Mcp-Name does not match the requested tool");
+    if (body.method === "tools/call" || body.method === "resources/read") {
+      const requestedName = body.method === "tools/call" ? params.name : params.uri;
+      assertQos(singleHeader(request, "mcp-name") === requestedName, "MCP_HEADER_MISMATCH", "Mcp-Name does not match the requested capability");
     } else {
-      assertQos(singleHeader(request, "mcp-name", { required: false }) === undefined, "MCP_HEADER_INVALID", "Mcp-Name is valid only for tools/call");
+      assertQos(singleHeader(request, "mcp-name", { required: false }) === undefined, "MCP_HEADER_INVALID", "Mcp-Name is valid only for tools/call or resources/read");
     }
   }
   return { params, protocolVersion };
@@ -289,39 +307,46 @@ export function startAgentServer(service, {
   }
 
   function mcpTools(agent) {
-    const action = agent.asset === "sol" ? "transfer_sol" : "transfer_qos";
     const tools = [
       {
         name: "qos_capabilities",
         title: "Show qOS agent capabilities",
-        description: "Return this authenticated agent's fixed network, asset, destination, strategy, amount limit, and approval mode.",
+        description: "Return this authenticated box's network, trading scope, risk controls, approval mode, and skill endpoints.",
         inputSchema: { type: "object", properties: {}, additionalProperties: false },
         annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       {
+        name: "qos_get_trading_skill",
+        title: "Read the generated qOS trading skill",
+        description: "Return this box's generated SKILL.md and the authenticated skill/download endpoints.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+    ];
+    if (agent.asset !== "trading-only") {
+      const action = agent.asset === "sol" ? "transfer_sol" : "transfer_qos";
+      tools.push({
         name: "qos_request_transfer",
         title: `Request ${action}`,
-        description: "Request one transfer in base units. qOS supplies the pinned action, destination, and strategy and rechecks the live policy before approval or execution.",
+        description: "Request one legacy transfer in base units. Managed qOS Cloud trading boxes do not expose this tool.",
         inputSchema: {
           type: "object",
-          properties: {
-            amount: { type: "string", pattern: "^[1-9][0-9]*$", description: `Canonical base-unit integer no greater than ${agent.maxAmount}.` },
-          },
+          properties: { amount: { type: "string", pattern: "^[1-9][0-9]*$", description: `Canonical base-unit integer no greater than ${agent.maxAmount}.` } },
           required: ["amount"],
           additionalProperties: false,
         },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-      },
-    ];
+      });
+    }
     if (agent.dexTrading) tools.push({
       name: "qos_request_swap",
-      title: "Request bounded Jupiter DEX swap",
-      description: "Request one ExactIn swap for an allowlisted mint pair. qOS enforces gross input, UTC daily spend/count, cooldown, slippage, route-fee, network-fee, signer-set, and fixed-endpoint policies before signing.",
+      title: "Trade Solana tokens through Jupiter",
+      description: "Request one ExactIn swap between any distinct initialized Solana Token or Token-2022 mints. qOS verifies the mints and enforces configured amount, daily, cooldown, slippage, route-fee, network-fee, signer-set, and endpoint controls before signing and submission.",
       inputSchema: {
         type: "object",
         properties: {
-          inputMint: { type: "string", description: "Allowlisted Solana input mint address." },
-          outputMint: { type: "string", description: "Allowlisted Solana output mint address." },
+          inputMint: { type: "string", description: "Solana input mint address. Resolve and verify the mint; never infer it from a ticker alone." },
+          outputMint: { type: "string", description: "Distinct Solana output mint address." },
           amount: { type: "string", pattern: "^[1-9][0-9]*$", description: "Canonical input-token base-unit integer. For wrapped SOL, base units are lamports." },
         },
         required: ["inputMint", "outputMint", "amount"],
@@ -336,6 +361,19 @@ export function startAgentServer(service, {
     const address = server.address();
     const actualPort = typeof address === "object" && address !== null ? address.port : port;
     return `http://${host === "::1" ? "[::1]" : host}:${actualPort}`;
+  }
+
+  function agentSkill(agent) {
+    return readAgentSkillPack(resolvedHome, agent.id);
+  }
+
+  function skillSummary(agent) {
+    const pack = agentSkill(agent);
+    return {
+      endpoint: pack.manifest.skillEndpoint ?? `${listenerOrigin()}/skill`,
+      downloadEndpoint: pack.manifest.skillDownloadEndpoint ?? `${listenerOrigin()}/skill/download`,
+      mcpEndpoint: pack.manifest.mcpEndpoint ?? `${listenerOrigin()}/mcp`,
+    };
   }
 
   async function handleMcp(request, response, agent) {
@@ -359,9 +397,9 @@ export function startAgentServer(service, {
           id: body.id,
           result: {
             protocolVersion,
-            capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: "qOS", version: "0.12.0" },
-            instructions: `Use qos_capabilities first. qos_request_transfer accepts only an amount; qOS pins every other security-relevant field.${agent.dexTrading ? " qos_request_swap accepts only an allowlisted pair and bounded base-unit amount." : ""}`,
+            capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
+            serverInfo: { name: "qOS", version: "0.13.0" },
+            instructions: "Use qos_capabilities and qos_get_trading_skill first. qos_request_swap trades any verified Solana Token or Token-2022 mint pair within this box's firmware-enforced risk controls. qOS tokens are used by Cloud only for launch and settlement fees.",
           },
         });
         return;
@@ -376,21 +414,52 @@ export function startAgentServer(service, {
         sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: { tools: mcpTools(agent) } });
         return;
       }
+      if (body.method === "resources/list") {
+        assertQos(onlyKeys(params, new Set(["cursor", "_meta"])) && (params.cursor === undefined || params.cursor === null), "MCP_PARAMS_INVALID", "resources/list cursor is unsupported");
+        const pack = agentSkill(agent);
+        const resources = Object.keys(pack.files).sort().map((name) => ({
+          uri: `qos://skill/${name}`,
+          name,
+          title: name === "SKILL.md" ? "Generated qOS Solana trading skill" : `qOS trading skill: ${name}`,
+          mimeType: name.endsWith(".json") ? "application/json" : "text/markdown",
+        }));
+        sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: { resources } });
+        return;
+      }
+      if (body.method === "resources/read") {
+        assertQos(onlyKeys(params, new Set(["uri", "_meta"])) && typeof params.uri === "string", "MCP_PARAMS_INVALID", "resources/read params are invalid");
+        const match = /^qos:\/\/skill\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(params.uri);
+        assertQos(match, "MCP_RESOURCE_NOT_FOUND", "Unknown qOS skill resource");
+        const pack = agentSkill(agent);
+        assertQos(Object.hasOwn(pack.files, match[1]), "MCP_RESOURCE_NOT_FOUND", "Unknown qOS skill resource");
+        sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: { contents: [{ uri: params.uri, mimeType: match[1].endsWith(".json") ? "application/json" : "text/markdown", text: pack.files[match[1]] }] } });
+        return;
+      }
       if (body.method === "tools/call") {
         assertQos(onlyKeys(params, new Set(["name", "arguments", "_meta"])) && typeof params.name === "string" && plainObject(params.arguments ?? {}), "MCP_PARAMS_INVALID", "tools/call params are invalid");
         if (params.name === "qos_capabilities") {
           assertQos(hasExactKeys(params.arguments ?? {}, []), "MCP_TOOL_ARGUMENTS_INVALID", "qos_capabilities accepts no arguments");
+          const skill = skillSummary(agent);
           const value = {
             agent: publicRecord(agent),
-            action: agent.asset === "sol" ? "transfer_sol" : "transfer_qos",
+            supportedActions: [...(agent.asset === "trading-only" ? [] : [agent.asset === "sol" ? "transfer_sol" : "transfer_qos"]), ...(agent.dexTrading ? ["swap"] : [])],
             restEndpoint: `${listenerOrigin()}/v1/actions`,
-            mcpEndpoint: `${listenerOrigin()}/mcp`,
+            mcpEndpoint: skill.mcpEndpoint,
+            skillEndpoint: skill.endpoint,
+            skillDownloadEndpoint: skill.downloadEndpoint,
             dexTrading: agent.dexTrading ? service.policy.dexTrading : null,
           };
           sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: mcpToolResult(value) });
           return;
         }
-        assertQos(params.name === "qos_request_transfer" || (params.name === "qos_request_swap" && agent.dexTrading), "MCP_TOOL_NOT_FOUND", "Unknown qOS MCP tool");
+        if (params.name === "qos_get_trading_skill") {
+          assertQos(hasExactKeys(params.arguments ?? {}, []), "MCP_TOOL_ARGUMENTS_INVALID", "qos_get_trading_skill accepts no arguments");
+          const pack = agentSkill(agent);
+          const skill = skillSummary(agent);
+          sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: mcpToolResult({ skill: pack.files["SKILL.md"], ...skill }) });
+          return;
+        }
+        assertQos((params.name === "qos_request_transfer" && agent.asset !== "trading-only") || (params.name === "qos_request_swap" && agent.dexTrading), "MCP_TOOL_NOT_FOUND", "Unknown qOS MCP tool");
         let action;
         if (params.name === "qos_request_swap") {
           assertQos(hasExactKeys(params.arguments, ["inputMint", "outputMint", "amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_swap requires exactly inputMint, outputMint, and amount");
@@ -503,16 +572,41 @@ export function startAgentServer(service, {
         sendJson(response, 401, { error: { code: "AGENT_UNAUTHORIZED", message: "Agent Bearer credential is missing, invalid, or revoked" } });
         return;
       }
+      if (request.method === "GET" && url.pathname.startsWith("/skill")) {
+        const pack = agentSkill(agent);
+        if (url.pathname === "/skill") {
+          sendBytes(response, 200, Buffer.from(pack.files["SKILL.md"], "utf8"), "text/markdown; charset=utf-8");
+          return;
+        }
+        if (url.pathname === "/skill/manifest") {
+          sendJson(response, 200, { ...pack.manifest, files: Object.keys(pack.files).sort() });
+          return;
+        }
+        if (url.pathname === "/skill/download") {
+          sendBytes(response, 200, buildSkillZip(pack.files), "application/zip", { filename: `qos-${agent.id}-trading-skill.zip` });
+          return;
+        }
+        const skillFile = /^\/skill\/files\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(url.pathname);
+        if (skillFile && Object.hasOwn(pack.files, skillFile[1])) {
+          sendBytes(response, 200, Buffer.from(pack.files[skillFile[1]], "utf8"), skillFile[1].endsWith(".json") ? "application/json; charset=utf-8" : "text/markdown; charset=utf-8");
+          return;
+        }
+        sendJson(response, 404, { error: { code: "SKILL_FILE_NOT_FOUND", message: "Skill file not found" } });
+        return;
+      }
       if (url.pathname === "/mcp") {
         await handleMcp(request, response, agent);
         return;
       }
       if (request.method === "GET" && url.pathname === "/v1/capabilities") {
+        const skill = skillSummary(agent);
         sendJson(response, 200, {
           agent: publicRecord(agent),
           endpoint: "/v1/actions",
-          mcpEndpoint: "/mcp",
-          supportedActions: [agent.asset === "sol" ? "transfer_sol" : "transfer_qos", ...(agent.dexTrading ? ["swap"] : [])],
+          mcpEndpoint: skill.mcpEndpoint,
+          skillEndpoint: skill.endpoint,
+          skillDownloadEndpoint: skill.downloadEndpoint,
+          supportedActions: [...(agent.asset === "trading-only" ? [] : [agent.asset === "sol" ? "transfer_sol" : "transfer_qos"]), ...(agent.dexTrading ? ["swap"] : [])],
           dexTrading: agent.dexTrading ? service.policy.dexTrading : null,
         });
         return;

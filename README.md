@@ -8,7 +8,14 @@ Most trading systems rely on a broad and fragile trust base: a general-purpose o
 
 The design has three goals: **keep strategies and keys private, make the machine verifiable, and give crypto applications hardware-enforced control over what may be signed.**
 
-Version 0.12.1 adds a versioned live-cloud host contract that refuses a
+Version 0.13.0 lets trading-enabled profiles swap any verified Solana Token or
+Token-2022 mint pair while retaining amount, daily, cooldown, slippage, route,
+network-fee, signer-set, and transaction-form controls. Each agent receives a
+configuration-specific trading skill that is available as MCP resources, at
+the authenticated `/skill` endpoint, and as a downloadable ZIP. Cloud agents
+have no qOS transfer tool: qOS is reserved for Cloud launch and settlement fees.
+
+Version 0.12.1 added a versioned live-cloud host contract that refuses a
 managed control plane configured to manufacture simulated transaction success.
 The Cloud host must explicitly enable live mainnet transactions before it can
 start against this firmware SDK.

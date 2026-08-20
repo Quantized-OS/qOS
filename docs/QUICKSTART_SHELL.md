@@ -435,14 +435,17 @@ export PATH="$HOME/.local/bin:$PATH"
 This source constructs one System Program SOL transfer, one pinned qOS
 Token-2022 `TransferChecked` instruction, the Cloud settlement/withdrawal
 templates, and one BYOK Jupiter Ultra Swap path. DEX trading is disabled until
-`trade configure` pins a mint pair and advanced limits. `trade swap` requires
-`--confirm-live`; agents also require `--enable-dex` and a live listener.
+`trade configure` pins advanced amount, timing, slippage, route-fee, and
+network-fee limits. Input and output mints are selected per request. `trade
+swap` requires `--confirm-live`; agents also require `--enable-dex` and a live
+listener.
 
-The swap path is manual ExactIn only. It rejects unapproved pairs, JupiterZ,
-gasless or additional signer paths, excessive input/slippage/route/network
-fees, cooldown and daily-limit violations, malformed transaction encoding, and
-ambiguous provider output. There is no arbitrary-signature, order-book, or
-perpetuals endpoint. See `DEX_TRADING.md` for the full boundary and commands.
+The swap path is manual ExactIn only. It accepts any two distinct initialized
+Solana Token Program or Token-2022 mints, then rejects JupiterZ, gasless or
+additional signer paths, excessive input/slippage/route/network fees, cooldown
+and daily-limit violations, malformed transaction encoding, and ambiguous
+provider output. There is no arbitrary-signature, order-book, or perpetuals
+endpoint. See `DEX_TRADING.md` for the full boundary and commands.
 
 The tested setup matrix is Ubuntu 20.04, 22.04, and 24.04 on x86-64 or ARM64.
 Other distributions are outside this beta matrix; Windows and macOS require a

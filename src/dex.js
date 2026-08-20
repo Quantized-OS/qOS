@@ -4,10 +4,12 @@ import { join, resolve } from "node:path";
 
 import { decodeBase58, encodeBase58 } from "./base58.js";
 import { hasExactKeys } from "./canonical.js";
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./constants.js";
 import { assertQos, QosError } from "./errors.js";
 import { loadPolicy, parseUnsigned, validateDexTradingPolicy, validatePolicy } from "./policy.js";
 import { readPrivateJson, writePrivateJsonAtomic } from "./private-json.js";
 import { assertPrivateDirectory, readSecureFile } from "./secure-file.js";
+import { parseGenericMintAccount } from "./token.js";
 import { encodeShortVec } from "./transaction.js";
 import { intentCommitment, policyCommitment } from "./zk.js";
 
@@ -69,7 +71,9 @@ function writeSecretAtomic(path, bytes) {
 
 export function configureDexTrading(home, {
   apiKeyFile,
-  allowedPairs,
+  allowedPairs = undefined,
+  maxInputAmount = undefined,
+  dailyInputLimit = undefined,
   receiver = null,
   maxSlippageBps = 100,
   maxRouteFeeBps = 100,
@@ -82,11 +86,14 @@ export function configureDexTrading(home, {
   assertQos(typeof apiKeyFile === "string" && apiKeyFile.length > 0, "DEX_CREDENTIAL_REQUIRED", "Jupiter trading requires an owner-only API key file");
   const policy = loadPolicy(join(paths.home, "policy.json"));
   assertQos(policy.cluster === "mainnet-beta", "DEX_CLUSTER_UNSUPPORTED", "Live DEX trading is supported only on Solana mainnet-beta");
+  const riskLimits = allowedPairs === undefined
+    ? { tokenScope: "any-solana-token", maxInputAmount, dailyInputLimit }
+    : { allowedPairs };
   const dexTrading = validateDexTradingPolicy({
     provider: "jupiter",
     endpoint: JUPITER_SWAP_ENDPOINT,
     receiver,
-    allowedPairs,
+    ...riskLimits,
     maxSlippageBps,
     maxRouteFeeBps,
     maxFeeLamports,
@@ -132,6 +139,14 @@ export function publicDexTrading(home) {
 
 function pairFor(policy, action) {
   assertQos(policy.dexTrading !== null, "DEX_TRADING_DISABLED", "This qOS profile does not enable DEX trading");
+  if (policy.dexTrading.tokenScope === "any-solana-token") {
+    return Object.freeze({
+      inputMint: action.inputMint,
+      outputMint: action.outputMint,
+      maxInputAmount: policy.dexTrading.maxInputAmount,
+      dailyInputLimit: policy.dexTrading.dailyInputLimit,
+    });
+  }
   const pair = policy.dexTrading.allowedPairs.find((item) => item.inputMint === action.inputMint && item.outputMint === action.outputMint);
   assertQos(pair !== undefined, "DEX_PAIR_NOT_ALLOWED", "Requested DEX mint pair is not allowlisted");
   return pair;
@@ -142,11 +157,28 @@ export function validateDexAction(policy, action) {
   assertQos(action.version === 2 && action.action === "swap", "INVALID_DEX_ACTION", "DEX action version or name is unsupported");
   decodeBase58(action.inputMint, 32);
   decodeBase58(action.outputMint, 32);
+  assertQos(action.inputMint !== action.outputMint, "DEX_IDENTICAL_MINTS", "DEX input and output mints must differ");
   assertQos(Number.isInteger(action.strategyId) && policy.allowedStrategyIds.includes(action.strategyId), "STRATEGY_NOT_ALLOWED", "DEX strategy is not allowlisted");
   const pair = pairFor(policy, action);
   const amount = parseUnsigned(action.amount, 64, "DEX input amount");
   assertQos(amount > 0n && amount <= BigInt(pair.maxInputAmount), "DEX_INPUT_LIMIT_EXCEEDED", "DEX input amount exceeds the pair policy");
   return Object.freeze({ action: Object.freeze({ ...action }), pair, amount });
+}
+
+async function validateSolanaTokenMints(rpc, action) {
+  assertQos(rpc && typeof rpc.getAccountInfo === "function", "DEX_RPC_UNAVAILABLE", "DEX trading requires Solana RPC account validation");
+  const [input, output] = await Promise.all([
+    rpc.getAccountInfo(action.inputMint),
+    rpc.getAccountInfo(action.outputMint),
+  ]);
+  for (const [label, address, value] of [
+    ["input", action.inputMint, input],
+    ["output", action.outputMint, output],
+  ]) {
+    assertQos(value && typeof value === "object", "DEX_MINT_NOT_FOUND", `DEX ${label} mint does not exist on the policy-pinned Solana cluster`, { mint: address });
+    assertQos(value.owner === TOKEN_PROGRAM_ID || value.owner === TOKEN_2022_PROGRAM_ID, "DEX_MINT_NOT_TOKEN", `DEX ${label} mint is not owned by a supported Solana token program`, { mint: address, owner: value.owner ?? null });
+    parseGenericMintAccount(value, value.owner);
+  }
 }
 
 async function readJsonResponse(response, operation) {
@@ -301,7 +333,7 @@ function deserializeOrderTransaction(order, signer) {
   }
 }
 
-export async function executeDexSwap({ home, policy, signer, runtimeProfile, proofGate, action, fetchImpl = globalThis.fetch, now = new Date() }) {
+export async function executeDexSwap({ home, policy, signer, runtimeProfile, proofGate, rpc, action, fetchImpl = globalThis.fetch, now = new Date() }) {
   const paths = dexPaths(home);
   const { pair, amount } = validateDexAction(policy, action);
   assertQos(policy.cluster === "mainnet-beta", "DEX_CLUSTER_UNSUPPORTED", "Live DEX trading is supported only on Solana mainnet-beta");
@@ -309,6 +341,7 @@ export async function executeDexSwap({ home, policy, signer, runtimeProfile, pro
   const signerStatus = signer.status();
   assertQos(signerStatus?.keyExportableToAgentProcess === false || (signerStatus?.keyExportableToAgentProcess === true && runtimeProfile?.profile === "mainnet-insecure"), "MAINNET_EXTERNAL_SIGNER_REQUIRED", "Mainnet software signing requires a setup-created --insecure profile; otherwise use a non-exportable external signer");
   assertQos(proofGate?.status?.().required !== true, "DEX_ZK_PROOF_UNSUPPORTED", "DEX swaps are disabled while a mandatory SNARK gate is configured");
+  await validateSolanaTokenMints(rpc, action);
   const provider = publicDexTrading(paths.home);
   const credentialBytes = readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" });
   let credential;

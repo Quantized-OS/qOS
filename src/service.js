@@ -315,6 +315,7 @@ export class QosService {
         signer: this.signer,
         runtimeProfile: this.runtimeProfile,
         proofGate: this.proofGate,
+        rpc: this.rpc,
         action,
         fetchImpl: this.dexFetch,
       });

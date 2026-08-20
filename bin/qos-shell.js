@@ -119,8 +119,8 @@ Commands (long | shorthand):
   serve [agent|api|mcp] [PORT] | api [PORT]
   serve core [PORT]                           security-audit | audit
   trade | tr status|st
-  trade | tr configure|cfg --api-key-file FILE --input-mint PUBKEY
-            --output-mint PUBKEY --max-input-amount N --daily-input-limit N
+  trade | tr configure|cfg --api-key-file FILE --max-input-amount N
+            --daily-input-limit N
             [advanced policy options]
   trade | tr swap|s AMOUNT --input-mint PUBKEY --output-mint PUBKEY
             --confirm-live [--strategy-id N]
@@ -129,8 +129,8 @@ Commands (long | shorthand):
 The shell never executes arbitrary shell text. Broadcast commands require the
 listed confirmation option and remain constrained by the qOS policy signer.
 qos is the only installed command; every operator feature is grouped here.
-DEX trading uses the pinned Jupiter Ultra Swap endpoint and rejects arbitrary
-transactions, co-signed routes, unapproved mint pairs, and out-of-policy spend.
+DEX trading uses the pinned Jupiter Ultra Swap endpoint and accepts any verified
+Solana token pair while rejecting arbitrary transactions and out-of-policy spend.
 `;
 }
 
@@ -343,8 +343,8 @@ function dispatch(tokens, context) {
       return { status: qos(["dex-status"], context), exit: false };
     }
     if (action === "configure") {
-      const allowed = new Set(["--api-key-file", "--input-mint", "--output-mint", "--max-input-amount", "--daily-input-limit", "--receiver", "--max-slippage-bps", "--max-route-fee-bps", "--max-fee-lamports", "--min-interval-seconds", "--max-swaps-per-day"]);
-      const required = new Set(["--api-key-file", "--input-mint", "--output-mint", "--max-input-amount", "--daily-input-limit"]);
+      const allowed = new Set(["--api-key-file", "--max-input-amount", "--daily-input-limit", "--receiver", "--max-slippage-bps", "--max-route-fee-bps", "--max-fee-lamports", "--min-interval-seconds", "--max-swaps-per-day"]);
+      const required = new Set(["--api-key-file", "--max-input-amount", "--daily-input-limit"]);
       const seen = new Set();
       const forwarded = [];
       for (let index = 0; index < args.length; index += 1) {
