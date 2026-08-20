@@ -133,9 +133,10 @@ malicious external verifier invalidates the authorization guarantee.
 - No bundled production SNARK circuit, proving key, ceremony, or verifier.
 - QEMU is a functional demonstration, not a hardware isolation boundary, and
   the runner refuses mainnet broadcast.
-- The listener implements policy-gated transfers and an opt-in bounded Jupiter
-  swap action. It is not a general transaction signer or multi-venue trading
-  engine. Jupiter transaction construction remains an external trust boundary.
+- The listener implements policy-gated transfers and an opt-in bounded
+  Jupiter/Raydium swap action. It is not a general transaction signer or an
+  arbitrary-program trading engine. Venue transaction construction remains an
+  external trust boundary and every returned transaction is revalidated.
 
 See `reports/PRODUCTION_SECURITY_REVIEW.md` for the production release decision,
 verification evidence, and acceptance criteria.

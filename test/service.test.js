@@ -8,6 +8,7 @@ import { DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH, QOS_TOKEN_MINT, TOKEN_2022_P
 import { QosError } from "../src/errors.js";
 import { initializeSandbox, QosService } from "../src/service.js";
 import { ensureRuntimeProfile } from "../src/runtime-profile.js";
+import { changePolicyDestination } from "../src/policy-store.js";
 import { parseCloudSettlementMessage } from "../src/transaction.js";
 
 class MockRpc {
@@ -253,26 +254,33 @@ test("service prepares, verifies, signs, and submits the pinned qOS Token-2022 t
   }
 });
 
-test("service submits one atomic qOS Cloud transfer-and-burn settlement", async () => {
+test("service submits one atomic qOS Cloud treasury, lottery, and burn settlement", async () => {
   const parent = mkdtempSync(join(tmpdir(), "qos-cloud-settlement-"));
   const home = join(parent, "sandbox");
   const treasury = encodeBase58(Buffer.alloc(32, 86));
+  const lottery = encodeBase58(Buffer.alloc(32, 87));
   initializeSandbox(home, treasury, { cluster: "mainnet-beta" });
   ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+  changePolicyDestination(home, "add", lottery);
   const service = QosService.open(home);
   const rpc = new MockRpc(MAINNET_GENESIS_HASH);
   const source = service.tokenAddresses(service.publicKey).tokenAccount;
   const destination = service.tokenAddresses(treasury).tokenAccount;
+  const lotteryTokenAccount = service.tokenAddresses(lottery).tokenAccount;
   rpc.accountInfos.set(QOS_TOKEN_MINT, mintAccount());
   rpc.accountInfos.set(source, tokenAccount(service.publicKey, 5_000_000n));
   rpc.accountInfos.set(destination, tokenAccount(treasury, 0n));
+  rpc.accountInfos.set(lotteryTokenAccount, tokenAccount(lottery, 0n));
   service.rpc = rpc;
   const intent = await service.prepareCloudSettlementIntent({
     destination: treasury,
+    lotteryDestination: lottery,
     grossAmount: "1000000",
     burnRemainderBefore: "0",
+    lotteryRemainderBefore: "0",
   });
-  assert.equal(intent.treasuryAmount, "990000");
+  assert.equal(intent.treasuryAmount, "490000");
+  assert.equal(intent.lotteryAmount, "500000");
   assert.equal(intent.burnAmount, "10000");
   const previous = process.env.QOS_ENABLE_MAINNET_BROADCAST;
   process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
@@ -280,11 +288,13 @@ test("service submits one atomic qOS Cloud transfer-and-burn settlement", async 
     const result = await service.submitIntent(intent);
     assert.equal(result.asset, "cloud-settlement");
     assert.equal(result.grossAmount, "1000000");
-    assert.equal(result.treasuryAmount, "990000");
+    assert.equal(result.treasuryAmount, "490000");
+    assert.equal(result.lotteryAmount, "500000");
     assert.equal(result.burnAmount, "10000");
     const transaction = Buffer.from(rpc.sent[0], "base64");
     const parsed = parseCloudSettlementMessage(transaction.subarray(65));
-    assert.equal(parsed.treasuryAmount, 990_000n);
+    assert.equal(parsed.treasuryAmount, 490_000n);
+    assert.equal(parsed.lotteryAmount, 500_000n);
     assert.equal(parsed.burnAmount, 10_000n);
   } finally {
     if (previous === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST;

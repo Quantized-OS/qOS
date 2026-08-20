@@ -15,28 +15,46 @@ import {
   initializeSandbox,
   onboardAgent,
   readAgentSkillPack,
+  setPolicyField,
 } from "qos-solana-sandbox/platform-sdk";
 ```
 
 `configureDexTrading(home, options)` imports an owner-only Jupiter API key,
-pins the built-in HTTPS endpoint, writes an `any-solana-token` DEX policy, and creates a
-separate persistent runtime-state file. Hosts may pin a distinct `receiver`
-public key; otherwise swap output returns to the firmware signer.
+enables the reviewed Jupiter and Raydium adapters, writes an
+`any-solana-token` DEX policy, and creates a separate persistent runtime-state
+file. Hosts may pin a distinct `receiver` public key; otherwise swap output
+returns to the firmware signer.
 `QosService.executeDexSwap(action)`
 enforces that policy, verifies both runtime-selected Token/Token-2022 mints,
-signs only the one-signer versioned transaction returned for the matching manual ExactIn order, and returns the confirmed signature and
-Solscan URL. Hosted services must mount only `runtime-state/` writable; model,
+dispatches only to the selected reviewed adapter, validates every returned
+program/account/signer, and returns confirmed signatures and Solscan URLs.
+Hosted services must mount only `runtime-state/` writable; model,
 DEX credential, signer, and policy files remain read-only inside the runtime.
 
 `readAgentSkillPack(home, id)` returns the generated public skill files without
 the agent Bearer token. `buildSkillZip(files)` creates a deterministic ZIP for
 account-authenticated or MCP-authenticated downloads. Cloud host contract
-version 2 requires both exports.
+version 3 requires these exports plus configurable RPC and atomic lottery
+settlement support.
+
+`setPolicyField(home, "rpc-url", value)` atomically validates and stores a
+complete Solana JSON-RPC URL. Remote endpoints must use HTTPS; arbitrary valid
+provider paths and queries are preserved. URL userinfo and fragments are
+rejected. Host services should treat the full value as a secret because many
+providers embed a project credential in the path.
 
 `changePolicyDestination(home, "add" | "remove", publicKey)` is the validated,
 atomic SDK surface for services that need more than one reviewed token
 destination. It preserves the policy's non-empty allowlist and all locked
 transaction-template fields.
+
+`QosService.prepareCloudSettlementIntent(options)` builds the Cloud contract-3
+version-5 settlement intent. It binds the cumulative-exact treasury, dedicated
+lottery, and burn amounts and emits one Token-2022 transaction ordered as
+treasury `TransferChecked`, lottery `TransferChecked`, then `BurnChecked`.
+Cloud supplies the business allocation and destination; firmware independently
+verifies the gross amount, accounts, mint, program, decimals, and carries
+before signing.
 
 `QosService.walletAssets(owner)` returns native SOL plus nonzero SPL Token and
 Token-2022 accounts owned by the supplied wallet. It validates token accounts,

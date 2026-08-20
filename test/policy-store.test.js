@@ -40,6 +40,8 @@ test("inline policy edits are atomic, validated, and leave template identity loc
   const preserved = readFileSync(join(home, "policy.json"), "utf8");
   assert.throws(() => setPolicyField(home, "rpc-url", "http://remote.invalid"), { code: "INSECURE_RPC_URL" });
   assert.equal(readFileSync(join(home, "policy.json"), "utf8"), preserved);
+  const customRpc = "https://provider.example/secret-project-path/?region=us-east";
+  assert.equal(setPolicyField(home, "rpc-url", customRpc).policy.rpcUrl, customRpc);
   assert.throws(() => setPolicyField(home, "clusterGenesis", genesis), { code: "POLICY_FIELD_LOCKED" });
 });
 

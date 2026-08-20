@@ -5,6 +5,7 @@ import { TextDecoder } from "node:util";
 
 import { authenticateAgent, getAgentRecord, readAgentSkillPack, validateAgentAction } from "./agent-registry.js";
 import { hasExactKeys } from "./canonical.js";
+import { publicDexTrading } from "./dex.js";
 import { assertQos, publicError, QosError } from "./errors.js";
 import { loadPolicy } from "./policy.js";
 import { readSecureFile } from "./secure-file.js";
@@ -340,16 +341,17 @@ export function startAgentServer(service, {
     }
     if (agent.dexTrading) tools.push({
       name: "qos_request_swap",
-      title: "Trade Solana tokens through Jupiter",
-      description: "Request one ExactIn swap between any distinct initialized Solana Token or Token-2022 mints. qOS verifies the mints and enforces configured amount, daily, cooldown, slippage, route-fee, network-fee, signer-set, and endpoint controls before signing and submission.",
+      title: "Trade Solana tokens through a reviewed venue",
+      description: "Request one ExactIn swap through Jupiter or direct Raydium routing between any distinct initialized Solana Token or Token-2022 mints. qOS verifies the venue, mints, programs, amount, daily budget, cooldown, slippage, route fee, network fee, and signer set before signing and submission.",
       inputSchema: {
         type: "object",
         properties: {
+          venue: { type: "string", enum: ["jupiter", "raydium"], description: "Reviewed execution adapter. Choose Jupiter aggregation or direct Raydium routing." },
           inputMint: { type: "string", description: "Solana input mint address. Resolve and verify the mint; never infer it from a ticker alone." },
           outputMint: { type: "string", description: "Distinct Solana output mint address." },
           amount: { type: "string", pattern: "^[1-9][0-9]*$", description: "Canonical input-token base-unit integer. For wrapped SOL, base units are lamports." },
         },
-        required: ["inputMint", "outputMint", "amount"],
+        required: ["venue", "inputMint", "outputMint", "amount"],
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -398,8 +400,8 @@ export function startAgentServer(service, {
           result: {
             protocolVersion,
             capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
-            serverInfo: { name: "qOS", version: "0.13.0" },
-            instructions: "Use qos_capabilities and qos_get_trading_skill first. qos_request_swap trades any verified Solana Token or Token-2022 mint pair within this box's firmware-enforced risk controls. qOS tokens are used by Cloud only for launch and settlement fees.",
+            serverInfo: { name: "qOS", version: "0.14.0" },
+            instructions: "Use qos_capabilities and qos_get_trading_skill first. qos_request_swap trades any verified Solana Token or Token-2022 mint pair through a selected reviewed Jupiter or Raydium adapter within firmware-enforced risk controls. qOS tokens are used by Cloud only for launch and settlement fees.",
           },
         });
         return;
@@ -447,7 +449,7 @@ export function startAgentServer(service, {
             mcpEndpoint: skill.mcpEndpoint,
             skillEndpoint: skill.endpoint,
             skillDownloadEndpoint: skill.downloadEndpoint,
-            dexTrading: agent.dexTrading ? service.policy.dexTrading : null,
+            dexTrading: agent.dexTrading ? publicDexTrading(resolvedHome) : null,
           };
           sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: mcpToolResult(value) });
           return;
@@ -462,8 +464,8 @@ export function startAgentServer(service, {
         assertQos((params.name === "qos_request_transfer" && agent.asset !== "trading-only") || (params.name === "qos_request_swap" && agent.dexTrading), "MCP_TOOL_NOT_FOUND", "Unknown qOS MCP tool");
         let action;
         if (params.name === "qos_request_swap") {
-          assertQos(hasExactKeys(params.arguments, ["inputMint", "outputMint", "amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_swap requires exactly inputMint, outputMint, and amount");
-          action = { version: 2, action: "swap", inputMint: params.arguments.inputMint, outputMint: params.arguments.outputMint, amount: params.arguments.amount, strategyId: agent.strategyId };
+          assertQos(hasExactKeys(params.arguments, ["venue", "inputMint", "outputMint", "amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_swap requires exactly venue, inputMint, outputMint, and amount");
+          action = { version: 3, action: "swap", venue: params.arguments.venue, inputMint: params.arguments.inputMint, outputMint: params.arguments.outputMint, amount: params.arguments.amount, strategyId: agent.strategyId };
         } else {
           assertQos(hasExactKeys(params.arguments, ["amount"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_request_transfer requires exactly one amount string");
           action = { version: 1, action: agent.asset === "sol" ? "transfer_sol" : "transfer_qos", amount: params.arguments.amount, destination: agent.destination, strategyId: agent.strategyId };
@@ -607,7 +609,7 @@ export function startAgentServer(service, {
           skillEndpoint: skill.endpoint,
           skillDownloadEndpoint: skill.downloadEndpoint,
           supportedActions: [...(agent.asset === "trading-only" ? [] : [agent.asset === "sol" ? "transfer_sol" : "transfer_qos"]), ...(agent.dexTrading ? ["swap"] : [])],
-          dexTrading: agent.dexTrading ? service.policy.dexTrading : null,
+          dexTrading: agent.dexTrading ? publicDexTrading(resolvedHome) : null,
         });
         return;
       }

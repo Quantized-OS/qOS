@@ -21,14 +21,16 @@ test("qOS exports a versioned platform SDK without embedding the Cloud service",
 
   const sdk = await import("qos-solana-sandbox/platform-sdk");
   assert.equal(sdk.QOS_PLATFORM_SDK_VERSION, 1);
-  assert.equal(sdk.QOS_CLOUD_HOST_CONTRACT_VERSION, 2);
+  assert.equal(sdk.QOS_CLOUD_HOST_CONTRACT_VERSION, 3);
+  assert.equal(typeof sdk.setPolicyField, "function");
+  assert.equal(typeof sdk.RAYDIUM_SWAP_ENDPOINT, "string");
   assert.equal(typeof sdk.readAgentSkillPack, "function");
   assert.equal(typeof sdk.buildSkillZip, "function");
   assert.equal(typeof sdk.QosService, "function");
   assert.equal(typeof sdk.configureModelProvider, "function");
   assert.equal(typeof sdk.changePolicyDestination, "function");
   assert.deepEqual(sdk.assertCloudLiveTransactions(true), {
-    version: 2,
+    version: 3,
     liveTransactions: true,
     simulatedSuccessSupported: false,
   });

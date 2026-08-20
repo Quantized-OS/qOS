@@ -1,6 +1,6 @@
 # Agent onboarding, approvals, and offboarding
 
-qOS 0.13.0 gives every automated agent a separate, revocable credential and a
+qOS 0.14.0 gives every automated agent a separate, revocable credential and a
 scope narrower than the active qOS policy. An agent never receives the signer
 key or the operator API token. It can submit only one exact action shape to the
 loopback listener.
@@ -11,11 +11,11 @@ This release supports three reviewed action surfaces:
 | --- | --- | --- |
 | Devnet | `transfer_sol` | One native System Program transfer |
 | Mainnet | `transfer_qos` | One pinned qOS Token-2022 `TransferChecked` |
-| Mainnet, when configured | `swap` | One manual ExactIn Jupiter order constrained by the profile DEX policy |
+| Mainnet, when configured | `swap` | One ExactIn Jupiter or Raydium route constrained by the profile DEX policy |
 
 DEX access is opt-in per profile and per agent. A swap request cannot select an
-endpoint or an arbitrary transaction; it supplies two Solana mint addresses
-and a base-unit amount. qOS verifies both mint accounts and checks the configured
+unreviewed endpoint or an arbitrary transaction; it supplies a reviewed venue,
+two Solana mint addresses, and a base-unit amount. qOS verifies both mint accounts and checks the configured
 per-swap and daily budgets, slippage, route and network fees, cooldown, daily
 count, signer set, router, and confirmation result before updating persistent
 trading state.

@@ -101,9 +101,11 @@ export function buildCloudSettlementMessage({
   payer,
   sourceTokenAccount,
   destinationTokenAccount,
+  lotteryDestinationTokenAccount,
   mint,
   tokenProgram,
   treasuryAmount,
+  lotteryAmount,
   burnAmount,
   decimals,
   recentBlockhash,
@@ -111,33 +113,45 @@ export function buildCloudSettlementMessage({
   assertQos(tokenProgram === TOKEN_2022_PROGRAM_ID, "UNSUPPORTED_TOKEN_PROGRAM", "qOS Cloud settlement requires the pinned Token-2022 program");
   assertQos(Number.isInteger(decimals) && decimals >= 0 && decimals <= 255, "INVALID_TOKEN_DECIMALS", "Token decimals must fit in u8");
   const treasury = BigInt(treasuryAmount);
+  const lottery = BigInt(lotteryAmount);
   const burn = BigInt(burnAmount);
-  assertQos(treasury >= 0n && burn >= 0n && treasury + burn > 0n, "ZERO_AMOUNT", "Cloud settlement must transfer or burn at least one base unit");
+  assertQos(treasury >= 0n && lottery >= 0n && burn >= 0n && treasury + lottery + burn > 0n, "ZERO_AMOUNT", "Cloud settlement must transfer, allocate, or burn at least one base unit");
   const accounts = [
     decodeBase58(payer, 32),
     decodeBase58(sourceTokenAccount, 32),
     decodeBase58(destinationTokenAccount, 32),
+    decodeBase58(lotteryDestinationTokenAccount, 32),
     decodeBase58(mint, 32),
     decodeBase58(tokenProgram, 32),
   ];
-  assertQos(new Set(accounts.map((account) => account.toString("hex"))).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Cloud settlement requires five distinct accounts");
+  assertQos(new Set(accounts.map((account) => account.toString("hex"))).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Cloud settlement requires six distinct accounts");
   const instructions = [];
   if (treasury > 0n) {
     const transferData = Buffer.concat([Buffer.from([12]), u64le(treasury), Buffer.from([decimals])]);
     instructions.push(Buffer.concat([
-      Buffer.from([4]),
+      Buffer.from([5]),
       encodeShortVec(4),
-      Buffer.from([1, 3, 2, 0]),
+      Buffer.from([1, 4, 2, 0]),
       encodeShortVec(transferData.length),
       transferData,
+    ]));
+  }
+  if (lottery > 0n) {
+    const lotteryData = Buffer.concat([Buffer.from([12]), u64le(lottery), Buffer.from([decimals])]);
+    instructions.push(Buffer.concat([
+      Buffer.from([5]),
+      encodeShortVec(4),
+      Buffer.from([1, 4, 3, 0]),
+      encodeShortVec(lotteryData.length),
+      lotteryData,
     ]));
   }
   if (burn > 0n) {
     const burnData = Buffer.concat([Buffer.from([15]), u64le(burn), Buffer.from([decimals])]);
     instructions.push(Buffer.concat([
-      Buffer.from([4]),
+      Buffer.from([5]),
       encodeShortVec(3),
-      Buffer.from([1, 3, 0]),
+      Buffer.from([1, 4, 0]),
       encodeShortVec(burnData.length),
       burnData,
     ]));
@@ -464,13 +478,14 @@ export function parseCloudSettlementMessage(message) {
   const header = [reader.byte(), reader.byte(), reader.byte()];
   assertQos(header[0] === 1 && header[1] === 0 && header[2] === 1, "UNEXPECTED_MESSAGE_HEADER", "Cloud settlement header does not match the pinned template");
   const accountCount = reader.shortVec();
-  assertQos(accountCount === 5, "UNEXPECTED_ACCOUNTS", "Cloud settlement requires exactly five accounts");
+  assertQos(accountCount === 6, "UNEXPECTED_ACCOUNTS", "Cloud settlement requires exactly six accounts");
   const accounts = Array.from({ length: accountCount }, () => encodeBase58(reader.bytes(32)));
   assertQos(new Set(accounts).size === accounts.length, "DUPLICATE_TRANSACTION_ACCOUNT", "Cloud settlement contains duplicate accounts");
   const recentBlockhash = encodeBase58(reader.bytes(32));
   const instructionCount = reader.shortVec();
-  assertQos(instructionCount === 1 || instructionCount === 2, "UNEXPECTED_INSTRUCTIONS", "Cloud settlement requires one or two pinned instructions");
+  assertQos(instructionCount >= 1 && instructionCount <= 3, "UNEXPECTED_INSTRUCTIONS", "Cloud settlement requires one to three pinned instructions");
   let treasuryAmount = 0n;
+  let lotteryAmount = 0n;
   let burnAmount = 0n;
   let decimals;
   for (let index = 0; index < instructionCount; index += 1) {
@@ -479,15 +494,23 @@ export function parseCloudSettlementMessage(message) {
     const indexes = [...reader.bytes(accountIndexCount)];
     const dataLength = reader.shortVec();
     const data = reader.bytes(dataLength);
-    assertQos(programIndex === 4 && accounts[programIndex] === TOKEN_2022_PROGRAM_ID, "WRONG_PROGRAM", "Cloud settlement may invoke only the pinned Token-2022 program");
+    assertQos(programIndex === 5 && accounts[programIndex] === TOKEN_2022_PROGRAM_ID, "WRONG_PROGRAM", "Cloud settlement may invoke only the pinned Token-2022 program");
     assertQos(data.length === 10, "WRONG_INSTRUCTION", "Cloud settlement instruction data is not canonical");
     const amount = data.readBigUInt64LE(1);
     assertQos(amount > 0n, "ZERO_AMOUNT", "Cloud settlement instructions must use positive amounts");
     if (data[0] === 12) {
-      assertQos(treasuryAmount === 0n && index === 0 && accountIndexCount === 4 && indexes[0] === 1 && indexes[1] === 3 && indexes[2] === 2 && indexes[3] === 0, "WRONG_INSTRUCTION", "Cloud settlement TransferChecked accounts or ordering changed");
-      treasuryAmount = amount;
+      assertQos(accountIndexCount === 4 && indexes[0] === 1 && indexes[1] === 4 && indexes[3] === 0, "WRONG_INSTRUCTION", "Cloud settlement TransferChecked accounts or ordering changed");
+      if (indexes[2] === 2) {
+        assertQos(treasuryAmount === 0n && lotteryAmount === 0n && index === 0, "WRONG_INSTRUCTION", "Cloud treasury transfer ordering changed");
+        treasuryAmount = amount;
+      } else if (indexes[2] === 3) {
+        assertQos(lotteryAmount === 0n && (treasuryAmount > 0n || index === 0), "WRONG_INSTRUCTION", "Cloud lottery transfer ordering changed");
+        lotteryAmount = amount;
+      } else {
+        assertQos(false, "WRONG_INSTRUCTION", "Cloud settlement transfer destination changed");
+      }
     } else if (data[0] === 15) {
-      assertQos(burnAmount === 0n && accountIndexCount === 3 && indexes[0] === 1 && indexes[1] === 3 && indexes[2] === 0, "WRONG_INSTRUCTION", "Cloud settlement BurnChecked accounts changed");
+      assertQos(burnAmount === 0n && accountIndexCount === 3 && indexes[0] === 1 && indexes[1] === 4 && indexes[2] === 0, "WRONG_INSTRUCTION", "Cloud settlement BurnChecked accounts changed");
       burnAmount = amount;
     } else {
       assertQos(false, "WRONG_INSTRUCTION", "Cloud settlement permits only TransferChecked and BurnChecked");
@@ -500,10 +523,12 @@ export function parseCloudSettlementMessage(message) {
     payer: accounts[0],
     sourceTokenAccount: accounts[1],
     destinationTokenAccount: accounts[2],
-    mint: accounts[3],
-    tokenProgram: accounts[4],
+    lotteryDestinationTokenAccount: accounts[3],
+    mint: accounts[4],
+    tokenProgram: accounts[5],
     recentBlockhash,
     treasuryAmount,
+    lotteryAmount,
     burnAmount,
     decimals,
   };

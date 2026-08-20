@@ -97,6 +97,8 @@ Paths and behavior:
       --offline                Skip cluster readiness checks and Devnet funding
       --no-fund                Verify Devnet but do not request its default airdrop
       --airdrop-lamports N     Devnet funding amount (default: 200000000)
+      --rpc-url-file PATH      Owner-only file containing a complete HTTPS
+                               Solana RPC URL, including provider path/query
       --unattended             Never prompt and finish without opening the shell
   -n, --no-shell               Finish without entering qOS
   -h, --help                   Show this help
@@ -528,6 +530,7 @@ signer_guide=0
 offline=0
 no_fund=0
 airdrop_lamports="200000000"
+rpc_url_file=""
 model_provider=""
 model_profile=""
 model_name=""
@@ -657,6 +660,12 @@ while (($#)); do
       require_option_value "$1" "${2-}"
       mark_seen airdrop_lamports "$1"
       airdrop_lamports="$2"
+      shift 2
+      ;;
+    --rpc-url-file)
+      require_option_value "$1" "${2-}"
+      mark_seen rpc_url_file "$1"
+      rpc_url_file="$2"
       shift 2
       ;;
     --model-provider)
@@ -794,7 +803,7 @@ fi
 if [[ "${action}" == "uninstall" ]]; then
   [[ "${devnet}" -eq 0 && "${insecure}" -eq 0 && "${accept_insecure_risk}" -eq 0 && -z "${qos_home}" && -z "${destination}" && -z "${public_key}" && -z "${signer_command}" \
     && "${skip_setup}" -eq 0 && "${skip_firmware}" -eq 0 && "${verbose}" -eq 0 && "${open_shell}" -eq 1 && "${wizard}" -eq 0 && "${unattended}" -eq 0 \
-    && "${offline}" -eq 0 && "${no_fund}" -eq 0 && "${airdrop_lamports}" == "200000000" \
+    && "${offline}" -eq 0 && "${no_fund}" -eq 0 && "${airdrop_lamports}" == "200000000" && -z "${rpc_url_file}" \
     && -z "${model_provider}" && -z "${model_profile}" && -z "${model_name}" && -z "${model_endpoint}" \
     && -z "${model_api_key}" && -z "${model_api_key_file}" && -z "${model_api_key_env}" \
     && "${allow_custom_model_endpoint}" -eq 0 && "${skip_model}" -eq 0 \
@@ -843,6 +852,15 @@ fi
 (( ! offline || ! no_fund )) || die "--offline and --no-fund are redundant; choose one."
 if [[ "${airdrop_lamports}" != "200000000" && ( "${offline}" -eq 1 || "${no_fund}" -eq 1 ) ]]; then
   die "--airdrop-lamports cannot be combined with --offline or --no-fund."
+fi
+if [[ -n "${rpc_url_file}" ]]; then
+  rpc_url_file="$(expand_home_path "${rpc_url_file}")"
+  [[ "${rpc_url_file}" == /* ]] || rpc_url_file="$(resolve_absolute_path "${rpc_url_file}")"
+  [[ -f "${rpc_url_file}" && ! -L "${rpc_url_file}" ]] || die "--rpc-url-file must be a regular, non-symlink file."
+  rpc_url_mode="$(stat -c '%a' -- "${rpc_url_file}")"
+  [[ "${rpc_url_mode}" == "600" || "${rpc_url_mode}" == "400" ]] || die "--rpc-url-file must have mode 600 or 400."
+  [[ "$(stat -c '%u' -- "${rpc_url_file}")" == "$(id -u)" ]] || die "--rpc-url-file must be owned by the setup user."
+  [[ "$(stat -c '%s' -- "${rpc_url_file}")" -ge 12 && "$(stat -c '%s' -- "${rpc_url_file}")" -le 2049 ]] || die "--rpc-url-file must contain a bounded HTTPS URL."
 fi
 
 model_requested=0
@@ -1341,6 +1359,19 @@ Destination:    $(printf '%s\n' "${created_profile}" | json_field destination)
 Key custody:    $(printf '%s\n' "${created_profile}" | json_field keyCustody)
 Profile files:  ${qos_home}
 EOF
+fi
+
+if [[ -n "${rpc_url_file}" ]]; then
+  rpc_provider_host="$(run_node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { setPolicyField } from "./src/platform-sdk.js";
+    const raw = readFileSync(process.argv[2], "utf8");
+    const value = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+    if (value.includes("\n") || value.includes("\r")) throw new Error("RPC URL file must contain exactly one line");
+    setPolicyField(process.argv[1], "rpc-url", value);
+    process.stdout.write(new URL(value).hostname);
+  ' "${qos_home}" "${rpc_url_file}")" || die "The custom Solana RPC URL is invalid."
+  log "Configured custom HTTPS Solana RPC provider ${rpc_provider_host}; credential path and query are hidden."
 fi
 
 profile_args=(create --home "${qos_home}" --profile "${profile}")

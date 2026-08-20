@@ -6,10 +6,11 @@ import test from "node:test";
 
 import { onboardAgent, validateAgentAction } from "../src/agent-registry.js";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
-import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../src/constants.js";
+import { SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../src/constants.js";
 import { configureDexTrading, dexPaths } from "../src/dex.js";
 import { ensureRuntimeProfile } from "../src/runtime-profile.js";
 import { initializeSandbox, QosService } from "../src/service.js";
+import { associatedTokenAddress } from "../src/token.js";
 import { encodeShortVec } from "../src/transaction.js";
 
 const INPUT_MINT = "So11111111111111111111111111111111111111112";
@@ -22,6 +23,19 @@ function mintAccount(owner, decimals = 6) {
   bytes[44] = decimals;
   bytes[45] = 1;
   return { owner, data: [bytes.toString("base64"), "base64"] };
+}
+
+function tokenAccount(tokenProgram, mint, owner, amount) {
+  const bytes = Buffer.alloc(165);
+  decodeBase58(mint, 32).copy(bytes, 0);
+  decodeBase58(owner, 32).copy(bytes, 32);
+  bytes.writeBigUInt64LE(BigInt(amount), 64);
+  bytes[108] = 1;
+  return { owner: tokenProgram, lamports: 2_039_280, data: [bytes.toString("base64"), "base64"] };
+}
+
+function systemAccount(lamports) {
+  return { owner: SYSTEM_PROGRAM_ID, lamports, data: ["", "base64"] };
 }
 
 function dexRpc(policy) {
@@ -47,6 +61,28 @@ function versionedTransaction(signer) {
     encodeShortVec(1),
     Buffer.from([9]),
     encodeShortVec(0),
+  ]);
+  return Buffer.concat([encodeShortVec(1), Buffer.alloc(64), message]).toString("base64");
+}
+
+function raydiumLegacyTransaction(signer) {
+  const program = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+  const inputAccount = associatedTokenAddress({ owner: signer, mint: INPUT_MINT, tokenProgram: TOKEN_PROGRAM_ID });
+  const outputAccount = associatedTokenAddress({ owner: RECEIVER, mint: OUTPUT_MINT, tokenProgram: TOKEN_2022_PROGRAM_ID });
+  const message = Buffer.concat([
+    Buffer.from([1, 0, 1]),
+    encodeShortVec(4),
+    decodeBase58(signer, 32),
+    decodeBase58(inputAccount, 32),
+    decodeBase58(outputAccount, 32),
+    decodeBase58(program, 32),
+    Buffer.alloc(32, 18),
+    encodeShortVec(1),
+    Buffer.from([3]),
+    encodeShortVec(3),
+    Buffer.from([0, 1, 2]),
+    encodeShortVec(1),
+    Buffer.from([9]),
   ]);
   return Buffer.concat([encodeShortVec(1), Buffer.alloc(64), message]).toString("base64");
 }
@@ -165,6 +201,88 @@ test("a signed swap with an ambiguous execute failure conservatively reserves it
   const state = JSON.parse(readFileSync(dexPaths(home).tradingState, "utf8"));
   assert.equal(state.tradeCount, 1);
   assert.equal(state.inputTotals[`${INPUT_MINT}>${OUTPUT_MINT}`], "1005");
+});
+
+test("direct Raydium trading signs only a reviewed one-signer transaction and never sends the Jupiter key", async (t) => {
+  const home = configuredProfile(t);
+  const service = QosService.open(home);
+  const calls = [];
+  service.dexFetch = async (url, options) => {
+    calls.push([String(url), options]);
+    if (calls.length === 1) {
+      return jsonResponse({
+        success: true,
+        data: {
+          swapType: "BaseIn",
+          inputMint: INPUT_MINT,
+          outputMint: OUTPUT_MINT,
+          inputAmount: "1000",
+          outputAmount: "900",
+          otherAmountThreshold: "850",
+          slippageBps: 75,
+          routePlan: [{ feeAmount: "5" }],
+        },
+      });
+    }
+    return jsonResponse({ success: true, data: [{ transaction: raydiumLegacyTransaction(service.publicKey) }] });
+  };
+  const inputAccount = associatedTokenAddress({ owner: service.publicKey, mint: INPUT_MINT, tokenProgram: TOKEN_PROGRAM_ID });
+  const outputAccount = associatedTokenAddress({ owner: RECEIVER, mint: OUTPUT_MINT, tokenProgram: TOKEN_2022_PROGRAM_ID });
+  const accountInfo = async (address) => {
+    if (address === INPUT_MINT) return mintAccount(TOKEN_PROGRAM_ID, 9);
+    if (address === OUTPUT_MINT) return mintAccount(TOKEN_2022_PROGRAM_ID, 6);
+    if (address === service.publicKey) return systemAccount(1_000_000_000);
+    if (address === outputAccount) return tokenAccount(TOKEN_2022_PROGRAM_ID, OUTPUT_MINT, RECEIVER, 0);
+    return null;
+  };
+  service.rpc = {
+    getGenesisHash: async () => service.policy.clusterGenesis,
+    getAccountInfo: accountInfo,
+    getMultipleAccounts: async (addresses) => Promise.all(addresses.map(accountInfo)),
+    getFeeForMessage: async () => 5_000,
+    simulateTransaction: async (_encoded, { accounts }) => ({
+      err: null,
+      accounts: accounts.map((address) => {
+        if (address === service.publicKey) return systemAccount(999_990_000);
+        if (address === inputAccount) return null;
+        if (address === outputAccount) return tokenAccount(TOKEN_2022_PROGRAM_ID, OUTPUT_MINT, RECEIVER, 900);
+        return null;
+      }),
+    }),
+    sendTransaction: async (encoded) => encodeBase58(Buffer.from(encoded, "base64").subarray(1, 65)),
+    confirmSignature: async () => ({ slot: 123, confirmationStatus: "confirmed", err: null }),
+  };
+  const prior = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    const result = await service.executeDexSwap({
+      version: 3,
+      action: "swap",
+      venue: "raydium",
+      inputMint: INPUT_MINT,
+      outputMint: OUTPUT_MINT,
+      amount: "1000",
+      strategyId: 1,
+    });
+    assert.equal(result.status, "confirmed");
+    assert.equal(result.provider, "raydium");
+    assert.equal(result.router, "raydium-direct");
+    assert.equal(result.totalInputAmount, "1000");
+    assert.equal(result.totalOutputAmount, "900");
+    assert.equal(result.signatures.length, 1);
+  } finally {
+    if (prior === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST; else process.env.QOS_ENABLE_MAINNET_BROADCAST = prior;
+  }
+  const quote = new URL(calls[0][0]);
+  assert.equal(quote.origin, "https://transaction-v1.raydium.io");
+  assert.equal(quote.pathname, "/compute/swap-base-in");
+  assert.equal(quote.searchParams.get("txVersion"), "LEGACY");
+  assert.equal(calls[0][1].headers, undefined);
+  assert.equal(calls[1][0], "https://transaction-v1.raydium.io/transaction/swap-base-in");
+  assert.equal(calls[1][1].headers["x-api-key"], undefined);
+  assert.equal(JSON.parse(calls[1][1].body).swapResponse.success, true);
+  assert.equal(JSON.parse(calls[1][1].body).swapResponse.data.inputAmount, "1000");
+  assert.equal(JSON.stringify(calls).includes("jup-test-owner-key"), false);
 });
 
 test("agent automatic trading scope accepts any Solana mint pair within firmware amount limits", (t) => {

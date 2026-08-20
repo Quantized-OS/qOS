@@ -129,18 +129,21 @@ test("Token-2022 parser rejects a changed instruction opcode", () => {
   assert.throws(() => parseTokenTransferCheckedMessage(tampered), { code: "WRONG_INSTRUCTION" });
 });
 
-test("qOS Cloud settlement atomically transfers 99 percent and burns 1 percent", () => {
+test("qOS Cloud settlement atomically allocates 49 percent, 50 percent, and burns 1 percent", () => {
   const payer = encodeBase58(Buffer.alloc(32, 31));
   const sourceTokenAccount = encodeBase58(Buffer.alloc(32, 32));
   const destinationTokenAccount = encodeBase58(Buffer.alloc(32, 33));
+  const lotteryDestinationTokenAccount = encodeBase58(Buffer.alloc(32, 39));
   const recentBlockhash = encodeBase58(Buffer.alloc(32, 34));
   const message = buildCloudSettlementMessage({
     payer,
     sourceTokenAccount,
     destinationTokenAccount,
+    lotteryDestinationTokenAccount,
     mint: QOS_TOKEN_MINT,
     tokenProgram: TOKEN_2022_PROGRAM_ID,
-    treasuryAmount: 990_000n,
+    treasuryAmount: 490_000n,
+    lotteryAmount: 500_000n,
     burnAmount: 10_000n,
     decimals: 6,
     recentBlockhash,
@@ -149,29 +152,34 @@ test("qOS Cloud settlement atomically transfers 99 percent and burns 1 percent",
     payer,
     sourceTokenAccount,
     destinationTokenAccount,
+    lotteryDestinationTokenAccount,
     mint: QOS_TOKEN_MINT,
     tokenProgram: TOKEN_2022_PROGRAM_ID,
     recentBlockhash,
-    treasuryAmount: 990_000n,
+    treasuryAmount: 490_000n,
+    lotteryAmount: 500_000n,
     burnAmount: 10_000n,
     decimals: 6,
   });
 });
 
-test("qOS Cloud settlement supports a deferred sub-base-unit burn remainder", () => {
+test("qOS Cloud settlement supports a deferred burn remainder with a lottery allocation", () => {
   const message = buildCloudSettlementMessage({
     payer: encodeBase58(Buffer.alloc(32, 35)),
     sourceTokenAccount: encodeBase58(Buffer.alloc(32, 36)),
     destinationTokenAccount: encodeBase58(Buffer.alloc(32, 37)),
+    lotteryDestinationTokenAccount: encodeBase58(Buffer.alloc(32, 40)),
     mint: QOS_TOKEN_MINT,
     tokenProgram: TOKEN_2022_PROGRAM_ID,
-    treasuryAmount: 99n,
+    treasuryAmount: 50n,
+    lotteryAmount: 49n,
     burnAmount: 0n,
     decimals: 6,
     recentBlockhash: encodeBase58(Buffer.alloc(32, 38)),
   });
   const parsed = parseCloudSettlementMessage(message);
-  assert.equal(parsed.treasuryAmount, 99n);
+  assert.equal(parsed.treasuryAmount, 50n);
+  assert.equal(parsed.lotteryAmount, 49n);
   assert.equal(parsed.burnAmount, 0n);
 });
 

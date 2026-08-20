@@ -4,17 +4,25 @@ import { join, resolve } from "node:path";
 
 import { decodeBase58, encodeBase58 } from "./base58.js";
 import { hasExactKeys } from "./canonical.js";
-import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./constants.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  SYSTEM_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  WRAPPED_SOL_MINT,
+} from "./constants.js";
 import { assertQos, QosError } from "./errors.js";
 import { loadPolicy, parseUnsigned, validateDexTradingPolicy, validatePolicy } from "./policy.js";
 import { readPrivateJson, writePrivateJsonAtomic } from "./private-json.js";
 import { assertPrivateDirectory, readSecureFile } from "./secure-file.js";
-import { parseGenericMintAccount } from "./token.js";
+import { associatedTokenAddress, parseGenericMintAccount } from "./token.js";
 import { encodeShortVec } from "./transaction.js";
 import { intentCommitment, policyCommitment } from "./zk.js";
 
 export const JUPITER_SWAP_ENDPOINT = "https://api.jup.ag/swap/v2";
-const PROVIDER_KEYS = ["version", "provider", "endpoint"];
+export const RAYDIUM_SWAP_ENDPOINT = "https://transaction-v1.raydium.io";
+const PROVIDER_V1_KEYS = ["version", "provider", "endpoint"];
+const PROVIDER_V2_KEYS = ["version", "provider", "endpoint", "venues", "raydiumEndpoint"];
 const STATE_KEYS = ["version", "day", "tradeCount", "lastExecutedAt", "inputTotals"];
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TRANSACTION_BYTES = 1_232;
@@ -71,6 +79,7 @@ function writeSecretAtomic(path, bytes) {
 
 export function configureDexTrading(home, {
   apiKeyFile,
+  venues = ["jupiter", "raydium"],
   allowedPairs = undefined,
   maxInputAmount = undefined,
   dailyInputLimit = undefined,
@@ -84,6 +93,7 @@ export function configureDexTrading(home, {
   const paths = dexPaths(home);
   assertPrivateDirectory(paths.home, { errorCode: "INSECURE_SANDBOX_HOME", label: "qOS profile home" });
   assertQos(typeof apiKeyFile === "string" && apiKeyFile.length > 0, "DEX_CREDENTIAL_REQUIRED", "Jupiter trading requires an owner-only API key file");
+  assertQos(Array.isArray(venues) && venues.length >= 1 && venues.length <= 2 && venues.every((venue) => venue === "jupiter" || venue === "raydium") && new Set(venues).size === venues.length, "INVALID_DEX_VENUES", "DEX venues must select Jupiter, Raydium, or both reviewed adapters");
   const policy = loadPolicy(join(paths.home, "policy.json"));
   assertQos(policy.cluster === "mainnet-beta", "DEX_CLUSTER_UNSUPPORTED", "Live DEX trading is supported only on Solana mainnet-beta");
   const riskLimits = allowedPairs === undefined
@@ -116,7 +126,13 @@ export function configureDexTrading(home, {
     } finally {
       storedCredential.fill(0);
     }
-    writePrivateJsonAtomic(paths.provider, { version: 1, provider: "jupiter", endpoint: JUPITER_SWAP_ENDPOINT }, { errorCode: "DEX_CONFIG_WRITE_FAILED", label: "DEX provider configuration" });
+    writePrivateJsonAtomic(paths.provider, {
+      version: 2,
+      provider: "reviewed-multivenue",
+      endpoint: JUPITER_SWAP_ENDPOINT,
+      venues,
+      raydiumEndpoint: RAYDIUM_SWAP_ENDPOINT,
+    }, { errorCode: "DEX_CONFIG_WRITE_FAILED", label: "DEX provider configuration" });
     if (!existsSync(paths.tradingState)) writePrivateJsonAtomic(paths.tradingState, emptyTradingState(), { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
     const nextPolicy = validatePolicy({ ...policy, version: 3, dexTrading });
     writePrivateJsonAtomic(join(paths.home, "policy.json"), nextPolicy, { errorCode: "POLICY_WRITE_FAILED", label: "Policy file" });
@@ -132,9 +148,16 @@ export function publicDexTrading(home) {
   const policy = loadPolicy(join(paths.home, "policy.json"));
   if (policy.dexTrading === null) return null;
   const provider = readPrivateJson(paths.provider, { errorCode: "INVALID_DEX_CONFIG", label: "DEX provider configuration" });
-  assertQos(hasExactKeys(provider, PROVIDER_KEYS) && provider.version === 1 && provider.provider === "jupiter" && provider.endpoint === JUPITER_SWAP_ENDPOINT, "INVALID_DEX_CONFIG", "DEX provider configuration is invalid");
+  if (hasExactKeys(provider, PROVIDER_V1_KEYS)) {
+    assertQos(provider.version === 1 && provider.provider === "jupiter" && provider.endpoint === JUPITER_SWAP_ENDPOINT, "INVALID_DEX_CONFIG", "DEX provider configuration is invalid");
+    provider.venues = ["jupiter"];
+    provider.raydiumEndpoint = RAYDIUM_SWAP_ENDPOINT;
+  } else {
+    assertQos(hasExactKeys(provider, PROVIDER_V2_KEYS) && provider.version === 2 && provider.provider === "reviewed-multivenue" && provider.endpoint === JUPITER_SWAP_ENDPOINT && provider.raydiumEndpoint === RAYDIUM_SWAP_ENDPOINT, "INVALID_DEX_CONFIG", "DEX provider configuration is invalid");
+    assertQos(Array.isArray(provider.venues) && provider.venues.length >= 1 && provider.venues.length <= 2 && provider.venues.every((venue) => venue === "jupiter" || venue === "raydium") && new Set(provider.venues).size === provider.venues.length, "INVALID_DEX_CONFIG", "DEX venue configuration is invalid");
+  }
   readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" }).fill(0);
-  return { ...policy.dexTrading, credentialConfigured: true };
+  return { ...policy.dexTrading, provider: provider.provider, venues: [...provider.venues], raydiumEndpoint: provider.raydiumEndpoint, credentialConfigured: true };
 }
 
 function pairFor(policy, action) {
@@ -153,8 +176,12 @@ function pairFor(policy, action) {
 }
 
 export function validateDexAction(policy, action) {
-  assertQos(action && typeof action === "object" && !Array.isArray(action) && hasExactKeys(action, ["version", "action", "inputMint", "outputMint", "amount", "strategyId"]), "INVALID_DEX_ACTION", "DEX action has missing or unknown fields");
-  assertQos(action.version === 2 && action.action === "swap", "INVALID_DEX_ACTION", "DEX action version or name is unsupported");
+  const legacy = action && typeof action === "object" && !Array.isArray(action) && hasExactKeys(action, ["version", "action", "inputMint", "outputMint", "amount", "strategyId"]);
+  const multivenue = action && typeof action === "object" && !Array.isArray(action) && hasExactKeys(action, ["version", "action", "venue", "inputMint", "outputMint", "amount", "strategyId"]);
+  assertQos(legacy || multivenue, "INVALID_DEX_ACTION", "DEX action has missing or unknown fields");
+  assertQos((legacy && action.version === 2 || multivenue && action.version === 3) && action.action === "swap", "INVALID_DEX_ACTION", "DEX action version or name is unsupported");
+  const venue = legacy ? "jupiter" : action.venue;
+  assertQos(venue === "jupiter" || venue === "raydium", "DEX_VENUE_NOT_ALLOWED", "DEX venue must be Jupiter or Raydium");
   decodeBase58(action.inputMint, 32);
   decodeBase58(action.outputMint, 32);
   assertQos(action.inputMint !== action.outputMint, "DEX_IDENTICAL_MINTS", "DEX input and output mints must differ");
@@ -162,7 +189,7 @@ export function validateDexAction(policy, action) {
   const pair = pairFor(policy, action);
   const amount = parseUnsigned(action.amount, 64, "DEX input amount");
   assertQos(amount > 0n && amount <= BigInt(pair.maxInputAmount), "DEX_INPUT_LIMIT_EXCEEDED", "DEX input amount exceeds the pair policy");
-  return Object.freeze({ action: Object.freeze({ ...action }), pair, amount });
+  return Object.freeze({ action: Object.freeze({ ...action, venue }), pair, amount, venue });
 }
 
 async function validateSolanaTokenMints(rpc, action) {
@@ -171,14 +198,16 @@ async function validateSolanaTokenMints(rpc, action) {
     rpc.getAccountInfo(action.inputMint),
     rpc.getAccountInfo(action.outputMint),
   ]);
+  const validated = {};
   for (const [label, address, value] of [
     ["input", action.inputMint, input],
     ["output", action.outputMint, output],
   ]) {
     assertQos(value && typeof value === "object", "DEX_MINT_NOT_FOUND", `DEX ${label} mint does not exist on the policy-pinned Solana cluster`, { mint: address });
     assertQos(value.owner === TOKEN_PROGRAM_ID || value.owner === TOKEN_2022_PROGRAM_ID, "DEX_MINT_NOT_TOKEN", `DEX ${label} mint is not owned by a supported Solana token program`, { mint: address, owner: value.owner ?? null });
-    parseGenericMintAccount(value, value.owner);
+    validated[label] = { ...parseGenericMintAccount(value, value.owner), tokenProgram: value.owner };
   }
+  return validated;
 }
 
 async function readJsonResponse(response, operation) {
@@ -333,16 +362,463 @@ function deserializeOrderTransaction(order, signer) {
   }
 }
 
+const RAYDIUM_PROGRAM_IDS = new Set([
+  SYSTEM_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  "ComputeBudget111111111111111111111111111111",
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+  "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+  "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h",
+  "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS",
+]);
+
+async function readRaydiumJson(response, operation) {
+  assertQos(response && typeof response.arrayBuffer === "function" && Number.isInteger(response.status), "DEX_PROVIDER_RESPONSE_INVALID", `Raydium ${operation} response is invalid`);
+  const declared = response.headers?.get?.("content-length");
+  if (declared !== null && declared !== undefined) {
+    assertQos(/^(0|[1-9][0-9]*)$/.test(declared) && Number(declared) <= MAX_RESPONSE_BYTES, "DEX_PROVIDER_RESPONSE_TOO_LARGE", `Raydium ${operation} response is too large`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  try {
+    assertQos(bytes.length <= MAX_RESPONSE_BYTES, "DEX_PROVIDER_RESPONSE_TOO_LARGE", `Raydium ${operation} response is too large`);
+    let value;
+    try { value = JSON.parse(bytes.toString("utf8")); } catch { throw new QosError("DEX_PROVIDER_RESPONSE_INVALID", `Raydium ${operation} returned invalid JSON`); }
+    assertQos(response.ok === true && value?.success === true, "DEX_PROVIDER_REJECTED", `Raydium ${operation} rejected the request`, { statusCode: response.status, providerCode: value?.msg ?? null });
+    return value;
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+function deserializeRaydiumTransaction(encoded, signer) {
+  const raw = Buffer.from(encoded, "base64");
+  try {
+    assertQos(raw.length > 0 && raw.length <= MAX_TRANSACTION_BYTES && raw.toString("base64") === encoded, "DEX_TRANSACTION_INVALID", "Raydium transaction encoding is invalid");
+    const cursor = { offset: 0 };
+    const signatureCount = readShortVec(raw, cursor, "signature count");
+    assertQos(signatureCount === 1, "DEX_SIGNER_SET_INVALID", "Raydium transaction must require only the qOS signer");
+    const signatureOffset = cursor.offset;
+    const priorSignature = take(raw, cursor, 64, "signature");
+    assertQos(priorSignature.every((byte) => byte === 0), "DEX_TRANSACTION_PRESIGNED", "Raydium transaction contains an unexpected signature");
+    const messageOffset = cursor.offset;
+    const header = take(raw, cursor, 3, "message header");
+    assertQos((header[0] & 0x80) === 0 && header[0] === 1 && header[1] === 0, "DEX_TRANSACTION_VERSION_INVALID", "Raydium transactions must use a one-signer legacy Solana message");
+    const accountCount = readShortVec(raw, cursor, "account count");
+    assertQos(accountCount >= 1 && accountCount <= 64, "DEX_TRANSACTION_COMPLEXITY", "Raydium transaction account count is invalid");
+    const accountBytes = take(raw, cursor, accountCount * 32, "accounts");
+    const accounts = Array.from({ length: accountCount }, (_, index) => encodeBase58(accountBytes.subarray(index * 32, index * 32 + 32)));
+    assertQos(accounts[0] === signer, "DEX_SIGNER_SET_INVALID", "qOS signer must be the Raydium transaction fee payer");
+    const recentBlockhash = encodeBase58(take(raw, cursor, 32, "recent blockhash"));
+    const instructionCount = readShortVec(raw, cursor, "instruction count");
+    assertQos(instructionCount >= 1 && instructionCount <= 64, "DEX_TRANSACTION_COMPLEXITY", "Raydium transaction instruction count is invalid");
+    let raydiumInstruction = false;
+    const instructions = [];
+    for (let index = 0; index < instructionCount; index += 1) {
+      const programIndex = take(raw, cursor, 1, "program index")[0];
+      assertQos(programIndex < accounts.length && RAYDIUM_PROGRAM_IDS.has(accounts[programIndex]), "DEX_PROGRAM_NOT_ALLOWED", "Raydium transaction invokes a program outside the reviewed allowlist", { programId: accounts[programIndex] ?? null });
+      if ([
+        "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+        "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+        "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+        "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h",
+        "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS",
+      ].includes(accounts[programIndex])) raydiumInstruction = true;
+      const instructionAccounts = readShortVec(raw, cursor, "instruction account count");
+      assertQos(instructionAccounts <= 128, "DEX_TRANSACTION_COMPLEXITY", "Raydium instruction account count is too large");
+      const accountIndexes = [...take(raw, cursor, instructionAccounts, "instruction accounts")];
+      assertQos(accountIndexes.every((accountIndex) => accountIndex < accounts.length), "DEX_TRANSACTION_INVALID", "Raydium instruction references an account outside the transaction");
+      const dataLength = readShortVec(raw, cursor, "instruction data length");
+      const data = Buffer.from(take(raw, cursor, dataLength, "instruction data"));
+      instructions.push({
+        programId: accounts[programIndex],
+        accounts: accountIndexes.map((accountIndex) => accounts[accountIndex]),
+        data,
+      });
+    }
+    assertQos(raydiumInstruction, "DEX_PROGRAM_NOT_ALLOWED", "Raydium transaction does not invoke a reviewed Raydium swap program");
+    assertQos(cursor.offset === raw.length, "DEX_TRANSACTION_INVALID", "Raydium transaction contains trailing bytes");
+    const preserved = Buffer.from(raw);
+    return {
+      raw: preserved,
+      message: preserved.subarray(messageOffset),
+      recentBlockhash,
+      accounts,
+      instructions,
+      sign(signature) {
+        assertQos(Buffer.isBuffer(signature) && signature.length === 64, "INVALID_SIGNATURE", "DEX signer returned an invalid Ed25519 signature");
+        const signed = Buffer.from(preserved);
+        signature.copy(signed, signatureOffset);
+        return signed;
+      },
+    };
+  } finally {
+    raw.fill(0);
+  }
+}
+
+function dexTokenAccount(value, { tokenProgram, mint, owner, field, allowMissing = false }) {
+  if (value === null || value === undefined) {
+    assertQos(allowMissing, "DEX_TOKEN_ACCOUNT_NOT_FOUND", `${field} does not exist`);
+    return null;
+  }
+  assertQos(value && value.owner === tokenProgram && Array.isArray(value.data) && value.data.length === 2 && value.data[1] === "base64", "DEX_TOKEN_ACCOUNT_INVALID", `${field} is not a canonical token account`);
+  const bytes = Buffer.from(value.data[0], "base64");
+  try {
+    assertQos(bytes.toString("base64") === value.data[0] && bytes.length >= 165, "DEX_TOKEN_ACCOUNT_INVALID", `${field} is not a canonical token account`);
+    assertQos(encodeBase58(bytes.subarray(0, 32)) === mint && encodeBase58(bytes.subarray(32, 64)) === owner && bytes[108] === 1, "DEX_TOKEN_ACCOUNT_INVALID", `${field} changed mint, authority, or state`);
+    return bytes.readBigUInt64LE(64);
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+function accountLamports(value, field) {
+  assertQos(value && Number.isSafeInteger(value.lamports) && value.lamports >= 0, "DEX_ACCOUNT_INVALID", `${field} has an invalid SOL balance`);
+  return BigInt(value.lamports);
+}
+
+function transferAmount(data, checked) {
+  const expected = checked ? 10 : 9;
+  assertQos(data.length === expected, "DEX_TOKEN_INSTRUCTION_INVALID", "Raydium token transfer data has an invalid length");
+  return data.readBigUInt64LE(1);
+}
+
+function validateRaydiumInstructionSurface(transaction, {
+  signer,
+  inputAccount,
+  outputAccount,
+  inputMint,
+  outputMint,
+  inputTokenProgram,
+  outputTokenProgram,
+  inputOwner,
+  outputOwner,
+  wrapSol,
+  unwrapSol,
+  maximumInput,
+}) {
+  assertQos(transaction.accounts.includes(inputAccount) && transaction.accounts.includes(outputAccount), "DEX_ACCOUNT_SET_INVALID", "Raydium transaction omitted the policy-derived input or output account");
+  let swapInstruction = false;
+  for (const instruction of transaction.instructions) {
+    if (instruction.programId === SYSTEM_PROGRAM_ID) {
+      assertQos(wrapSol && instruction.data.length === 12 && instruction.data.readUInt32LE(0) === 2, "DEX_SYSTEM_INSTRUCTION_FORBIDDEN", "Raydium transaction contains an unreviewed System Program instruction");
+      assertQos(instruction.accounts.length === 2 && instruction.accounts[0] === signer && instruction.accounts[1] === inputAccount, "DEX_SYSTEM_INSTRUCTION_FORBIDDEN", "Raydium transaction changed the wrapped-SOL funding destination");
+      assertQos(instruction.data.readBigUInt64LE(4) <= maximumInput + 2_500_000n, "DEX_SYSTEM_INSTRUCTION_FORBIDDEN", "Raydium transaction exceeds the wrapped-SOL funding limit");
+      continue;
+    }
+    if (instruction.programId === ASSOCIATED_TOKEN_PROGRAM_ID) {
+      assertQos(instruction.data.length === 0 || (instruction.data.length === 1 && instruction.data[0] === 1), "DEX_ATA_INSTRUCTION_FORBIDDEN", "Raydium transaction contains an unsupported associated-account instruction");
+      assertQos(instruction.accounts.length >= 6 && instruction.accounts[0] === signer, "DEX_ATA_INSTRUCTION_FORBIDDEN", "Raydium associated-account creation changed the fee payer");
+      const associated = instruction.accounts[1];
+      const expected = associated === inputAccount
+        ? { owner: inputOwner, mint: inputMint, tokenProgram: inputTokenProgram }
+        : associated === outputAccount
+          ? { owner: outputOwner, mint: outputMint, tokenProgram: outputTokenProgram }
+          : null;
+      assertQos(expected !== null && instruction.accounts[2] === expected.owner && instruction.accounts[3] === expected.mint && instruction.accounts[4] === SYSTEM_PROGRAM_ID && instruction.accounts[5] === expected.tokenProgram, "DEX_ATA_INSTRUCTION_FORBIDDEN", "Raydium transaction tried to create an account outside the requested swap");
+      continue;
+    }
+    if (instruction.programId === TOKEN_PROGRAM_ID || instruction.programId === TOKEN_2022_PROGRAM_ID) {
+      const opcode = instruction.data[0];
+      if (opcode === 17) {
+        assertQos(instruction.data.length === 1 && instruction.accounts.length === 1 && instruction.accounts[0] === inputAccount && wrapSol, "DEX_TOKEN_INSTRUCTION_FORBIDDEN", "Raydium SyncNative instruction is outside the requested wrapped-SOL input");
+        continue;
+      }
+      if (opcode === 9) {
+        const reviewedWrappedAccount = (wrapSol && instruction.accounts[0] === inputAccount) || (unwrapSol && instruction.accounts[0] === outputAccount);
+        assertQos(instruction.data.length === 1 && instruction.accounts.length >= 3 && reviewedWrappedAccount && instruction.accounts[1] === signer && instruction.accounts[2] === signer, "DEX_TOKEN_INSTRUCTION_FORBIDDEN", "Raydium close-account instruction is outside the requested wrapped-SOL flow");
+        continue;
+      }
+      if (opcode === 3 || opcode === 12) {
+        const amount = transferAmount(instruction.data, opcode === 12);
+        const authorityIndex = opcode === 12 ? 3 : 2;
+        const checkedMintMatches = opcode !== 12 || instruction.accounts[1] === inputMint;
+        assertQos(instruction.programId === inputTokenProgram && instruction.accounts.length > authorityIndex && instruction.accounts[0] === inputAccount && instruction.accounts[authorityIndex] === signer && checkedMintMatches && amount <= maximumInput, "DEX_TOKEN_INSTRUCTION_FORBIDDEN", "Raydium direct token transfer exceeds or changes the requested input");
+        continue;
+      }
+      assertQos(false, "DEX_TOKEN_INSTRUCTION_FORBIDDEN", "Raydium transaction contains an unreviewed direct token instruction");
+    }
+    if ([
+      "ComputeBudget111111111111111111111111111111",
+      "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+    ].includes(instruction.programId)) continue;
+    if ([
+      "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+      "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+      "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h",
+      "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS",
+    ].includes(instruction.programId)) {
+      if (instruction.accounts.includes(inputAccount) && instruction.accounts.includes(outputAccount)) swapInstruction = true;
+      continue;
+    }
+    assertQos(false, "DEX_PROGRAM_NOT_ALLOWED", "Raydium transaction invokes a program outside the reviewed adapter");
+  }
+  assertQos(swapInstruction, "DEX_ACCOUNT_SET_INVALID", "Raydium swap instruction did not bind the requested input and output accounts");
+}
+
+async function rejectUnexpectedSignerTokenAccounts(rpc, transaction, signer, allowedAccounts) {
+  const values = await rpc.getMultipleAccounts(transaction.accounts);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (value === null || (value.owner !== TOKEN_PROGRAM_ID && value.owner !== TOKEN_2022_PROGRAM_ID) || !Array.isArray(value.data) || value.data[1] !== "base64") continue;
+    const bytes = Buffer.from(value.data[0], "base64");
+    try {
+      if (bytes.toString("base64") !== value.data[0] || bytes.length < 165 || bytes[108] !== 1) continue;
+      if (encodeBase58(bytes.subarray(32, 64)) === signer) {
+        assertQos(allowedAccounts.has(transaction.accounts[index]), "DEX_ACCOUNT_SET_INVALID", "Raydium transaction included another token account controlled by the firmware signer");
+      }
+    } finally {
+      bytes.fill(0);
+    }
+  }
+}
+
+function validateRaydiumSimulation(simulation, {
+  inspectionAccounts,
+  signer,
+  inputAccount,
+  outputAccount,
+  inputMint,
+  outputMint,
+  inputTokenProgram,
+  outputTokenProgram,
+  inputOwner,
+  outputOwner,
+  wrapSol,
+  unwrapSol,
+  preAccounts,
+  minimumOutput,
+  maximumInput,
+  maximumFeeLamports,
+}) {
+  assertQos(simulation && simulation.err === null && Array.isArray(simulation.accounts) && simulation.accounts.length === inspectionAccounts.length, "DEX_SIMULATION_FAILED", "Raydium preflight simulation failed or omitted inspected account state");
+  const before = new Map(inspectionAccounts.map((address, index) => [address, preAccounts[index]]));
+  const after = new Map(inspectionAccounts.map((address, index) => [address, simulation.accounts[index]]));
+  if (!wrapSol) {
+    const prior = dexTokenAccount(before.get(inputAccount), { tokenProgram: inputTokenProgram, mint: inputMint, owner: inputOwner, field: "Raydium input account" });
+    const next = dexTokenAccount(after.get(inputAccount), { tokenProgram: inputTokenProgram, mint: inputMint, owner: inputOwner, field: "simulated Raydium input account" });
+    assertQos(prior > next && prior - next <= maximumInput, "DEX_SIMULATION_INPUT_MISMATCH", "Raydium simulation exceeded or did not debit the requested input");
+  }
+  if (!unwrapSol) {
+    const prior = dexTokenAccount(before.get(outputAccount), { tokenProgram: outputTokenProgram, mint: outputMint, owner: outputOwner, field: "Raydium output account", allowMissing: true }) ?? 0n;
+    const next = dexTokenAccount(after.get(outputAccount), { tokenProgram: outputTokenProgram, mint: outputMint, owner: outputOwner, field: "simulated Raydium output account" });
+    assertQos(next >= prior && next - prior >= minimumOutput, "DEX_SIMULATION_OUTPUT_MISMATCH", "Raydium simulation did not deliver the quote-protected minimum output");
+  }
+  const priorSol = accountLamports(before.get(signer), "Raydium signer account");
+  const nextSol = accountLamports(after.get(signer), "simulated Raydium signer account");
+  if (wrapSol) assertQos(priorSol <= nextSol + maximumInput + maximumFeeLamports, "DEX_SIMULATION_SOL_MISMATCH", "Raydium simulation debited more SOL than the input and fee policy allows");
+  if (unwrapSol) assertQos(nextSol + maximumFeeLamports >= priorSol + minimumOutput, "DEX_SIMULATION_OUTPUT_MISMATCH", "Raydium simulation did not return the quote-protected SOL output");
+}
+
+function validateRaydiumQuote(quote, policy, action) {
+  const data = quote?.data;
+  assertQos(data && typeof data === "object" && data.swapType === "BaseIn", "DEX_ORDER_INVALID", "Raydium quote is not a BaseIn swap");
+  assertQos(data.inputMint === action.inputMint && data.outputMint === action.outputMint && data.inputAmount === action.amount, "DEX_ORDER_MISMATCH", "Raydium quote does not match the requested pair and amount");
+  assertQos(Number.isInteger(data.slippageBps) && data.slippageBps >= 0 && data.slippageBps <= policy.maxSlippageBps, "DEX_SLIPPAGE_LIMIT_EXCEEDED", "Raydium quote exceeds the slippage policy");
+  const outputAmount = parseUnsigned(data.outputAmount, 64, "Raydium output amount");
+  const minimumOutput = parseUnsigned(data.otherAmountThreshold, 64, "Raydium minimum output");
+  assertQos(outputAmount > 0n && minimumOutput > 0n && minimumOutput <= outputAmount, "DEX_ORDER_INVALID", "Raydium quote output protection is invalid");
+  assertQos(Array.isArray(data.routePlan) && data.routePlan.length >= 1 && data.routePlan.length <= 16, "DEX_ORDER_INVALID", "Raydium quote route plan is invalid");
+  const feeAmount = data.routePlan.reduce((sum, leg) => sum + parseUnsigned(leg?.feeAmount ?? "0", 64, "Raydium route fee"), 0n);
+  const input = BigInt(action.amount);
+  const routeFeeBps = Number((feeAmount * 10_000n + input - 1n) / input);
+  assertQos(routeFeeBps <= policy.maxRouteFeeBps, "DEX_ROUTE_FEE_LIMIT_EXCEEDED", "Raydium quote exceeds the route fee policy");
+  return { data, outputAmount, minimumOutput, routeFeeBps };
+}
+
+async function executeRaydiumSwap({ paths, provider, pair, amount, policy, signer, rpc, action, fetchImpl, now, mints }) {
+  assertQos(provider.venues.includes("raydium"), "DEX_VENUE_NOT_ALLOWED", "Raydium is not enabled for this qOS profile");
+  const quoteUrl = new URL(`${provider.raydiumEndpoint}/compute/swap-base-in`);
+  quoteUrl.searchParams.set("inputMint", action.inputMint);
+  quoteUrl.searchParams.set("outputMint", action.outputMint);
+  quoteUrl.searchParams.set("amount", action.amount);
+  quoteUrl.searchParams.set("slippageBps", String(provider.maxSlippageBps));
+  quoteUrl.searchParams.set("txVersion", "LEGACY");
+  const quote = await readRaydiumJson(await fetchImpl(quoteUrl, { method: "GET", redirect: "error", signal: AbortSignal.timeout(15_000) }), "quote");
+  const validated = validateRaydiumQuote(quote, provider, action);
+  const state = currentState(paths, now);
+  const budget = enforceState(provider, pair, amount, validated.routeFeeBps, state, now);
+  const receiver = provider.receiver ?? signer.publicKey;
+  const wrapSol = action.inputMint === WRAPPED_SOL_MINT;
+  const unwrapSol = action.outputMint === WRAPPED_SOL_MINT && receiver === signer.publicKey;
+  const inputTokenAccount = associatedTokenAddress({ owner: signer.publicKey, mint: action.inputMint, tokenProgram: mints.input.tokenProgram });
+  const outputTokenAccount = associatedTokenAddress({ owner: receiver, mint: action.outputMint, tokenProgram: mints.output.tokenProgram });
+  const inputAccount = wrapSol ? null : inputTokenAccount;
+  const outputAccount = unwrapSol ? null : outputTokenAccount;
+  if (inputAccount !== null) assertQos(await rpc.getAccountInfo(inputAccount) !== null, "DEX_INPUT_ACCOUNT_NOT_FOUND", "Raydium input token account does not exist for the firmware signer");
+  const outputExists = await rpc.getAccountInfo(outputTokenAccount) !== null;
+  const buildBody = {
+    computeUnitPriceMicroLamports: "0",
+    swapResponse: quote,
+    txVersion: "LEGACY",
+    wallet: signer.publicKey,
+    wrapSol,
+    unwrapSol,
+    ...(inputAccount === null ? {} : { inputAccount }),
+    ...(outputAccount === null ? {} : { outputAccount }),
+  };
+  const built = await readRaydiumJson(await fetchImpl(`${provider.raydiumEndpoint}/transaction/swap-base-in`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(buildBody),
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  }), "transaction build");
+  const entries = Array.isArray(built.data) ? built.data : [built.data];
+  assertQos(entries.length === 1 && entries.every((entry) => typeof entry?.transaction === "string"), "DEX_TRANSACTION_INVALID", "The reviewed Raydium adapter requires one atomic swap transaction");
+  const transactions = entries.map((entry) => deserializeRaydiumTransaction(entry.transaction, signer.publicKey));
+  validateRaydiumInstructionSurface(transactions[0], {
+    signer: signer.publicKey,
+    inputAccount: inputTokenAccount,
+    outputAccount: outputTokenAccount,
+    inputMint: action.inputMint,
+    outputMint: action.outputMint,
+    inputTokenProgram: mints.input.tokenProgram,
+    outputTokenProgram: mints.output.tokenProgram,
+    inputOwner: signer.publicKey,
+    outputOwner: receiver,
+    wrapSol,
+    unwrapSol,
+    maximumInput: budget.worstGross,
+  });
+  await rejectUnexpectedSignerTokenAccounts(rpc, transactions[0], signer.publicKey, new Set([inputTokenAccount, outputTokenAccount]));
+  const inspectionAccounts = [...new Set([signer.publicKey, inputTokenAccount, outputTokenAccount])];
+  const preAccounts = await rpc.getMultipleAccounts(inspectionAccounts);
+  const networkFees = await Promise.all(transactions.map((transaction) => rpc.getFeeForMessage(transaction.message.toString("base64"))));
+  assertQos(networkFees.every((fee) => Number.isSafeInteger(fee) && fee >= 0), "FEE_UNAVAILABLE", "RPC could not calculate a Raydium transaction fee");
+  const estimatedRentLamports = outputExists ? 0n : 2_500_000n;
+  const networkFee = networkFees.reduce((sum, fee) => sum + BigInt(fee), 0n) + estimatedRentLamports;
+  assertQos(networkFee <= BigInt(provider.maxFeeLamports), "DEX_NETWORK_FEE_LIMIT_EXCEEDED", "Raydium transaction batch exceeds the network and rent fee policy");
+  const reservedState = {
+    version: 1,
+    day: now.toISOString().slice(0, 10),
+    tradeCount: state.tradeCount + 1,
+    lastExecutedAt: now.toISOString(),
+    inputTotals: { ...state.inputTotals, [budget.pairId]: (BigInt(state.inputTotals[budget.pairId] ?? "0") + budget.worstGross).toString() },
+  };
+  validateTradingState(reservedState);
+  const signatures = [];
+  try {
+    for (let index = 0; index < transactions.length; index += 1) {
+      const transaction = transactions[index];
+      const message = Buffer.from(transaction.message);
+      let signature;
+      try {
+        const dexIntent = {
+          version: 2,
+          provider: "raydium",
+          endpoint: provider.raydiumEndpoint,
+          batchIndex: index,
+          batchSize: transactions.length,
+          inputMint: action.inputMint,
+          outputMint: action.outputMint,
+          receiver,
+          inputAmount: action.amount,
+          minimumOutput: validated.minimumOutput.toString(),
+          maxSlippageBps: provider.maxSlippageBps,
+          maxRouteFeeBps: provider.maxRouteFeeBps,
+          maxFeeLamports: provider.maxFeeLamports,
+          strategyId: action.strategyId,
+          recentBlockhash: transaction.recentBlockhash,
+          transactionSha256: createHash("sha256").update(message).digest("hex"),
+        };
+        signature = await signer.sign(message, {
+          version: 1,
+          intent: dexIntent,
+          intentCommitment: intentCommitment(dexIntent),
+          policyCommitment: policyCommitment(policy),
+          privacyProofVerified: false,
+        });
+        const expectedSignature = encodeBase58(signature);
+        const signedBytes = transaction.sign(signature);
+        let submitted;
+        try {
+          const signedTransaction = signedBytes.toString("base64");
+          const simulation = await rpc.simulateTransaction(signedTransaction, { accounts: inspectionAccounts });
+          validateRaydiumSimulation(simulation, {
+            inspectionAccounts,
+            signer: signer.publicKey,
+            inputAccount: inputTokenAccount,
+            outputAccount: outputTokenAccount,
+            inputMint: action.inputMint,
+            outputMint: action.outputMint,
+            inputTokenProgram: mints.input.tokenProgram,
+            outputTokenProgram: mints.output.tokenProgram,
+            inputOwner: signer.publicKey,
+            outputOwner: receiver,
+            wrapSol,
+            unwrapSol,
+            preAccounts,
+            minimumOutput: validated.minimumOutput,
+            maximumInput: budget.worstGross,
+            maximumFeeLamports: BigInt(provider.maxFeeLamports),
+          });
+          if (index === 0) writePrivateJsonAtomic(paths.tradingState, reservedState, { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
+          submitted = await rpc.sendTransaction(signedTransaction);
+        } finally {
+          signedBytes.fill(0);
+        }
+        assertQos(submitted === expectedSignature, "SIGNATURE_MISMATCH", "Solana RPC returned a different Raydium transaction signature");
+        await rpc.confirmSignature(submitted, { timeoutMs: policy.confirmationTimeoutMs, recentBlockhash: transaction.recentBlockhash });
+        signatures.push(submitted);
+      } finally {
+        message.fill(0);
+        signature?.fill(0);
+      }
+    }
+    const next = {
+      ...reservedState,
+      inputTotals: { ...state.inputTotals, [budget.pairId]: (BigInt(state.inputTotals[budget.pairId] ?? "0") + amount).toString() },
+    };
+    validateTradingState(next);
+    writePrivateJsonAtomic(paths.tradingState, next, { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
+    return {
+      status: "confirmed",
+      provider: "raydium",
+      router: "raydium-direct",
+      inputMint: action.inputMint,
+      outputMint: action.outputMint,
+      receiver,
+      requestedInputAmount: action.amount,
+      totalInputAmount: action.amount,
+      totalOutputAmount: validated.outputAmount.toString(),
+      minimumOutput: validated.minimumOutput.toString(),
+      slippageBps: validated.data.slippageBps,
+      routeFeeBps: validated.routeFeeBps,
+      networkAndRentFeeLamports: networkFee.toString(),
+      signature: signatures.at(-1),
+      signatures,
+      explorerUrl: `https://solscan.io/tx/${signatures.at(-1)}`,
+      explorerUrls: signatures.map((value) => `https://solscan.io/tx/${value}`),
+      limits: { day: next.day, tradeCount: next.tradeCount, pairInputTotal: next.inputTotals[budget.pairId] },
+    };
+  } finally {
+    for (const transaction of transactions) {
+      transaction.raw.fill(0);
+      for (const instruction of transaction.instructions) instruction.data.fill(0);
+    }
+  }
+}
+
 export async function executeDexSwap({ home, policy, signer, runtimeProfile, proofGate, rpc, action, fetchImpl = globalThis.fetch, now = new Date() }) {
   const paths = dexPaths(home);
-  const { pair, amount } = validateDexAction(policy, action);
+  const { pair, amount, venue } = validateDexAction(policy, action);
   assertQos(policy.cluster === "mainnet-beta", "DEX_CLUSTER_UNSUPPORTED", "Live DEX trading is supported only on Solana mainnet-beta");
   assertQos(process.env.QOS_ENABLE_MAINNET_BROADCAST === "I_UNDERSTAND", "MAINNET_BROADCAST_DISABLED", "Set QOS_ENABLE_MAINNET_BROADCAST=I_UNDERSTAND to authorize a mainnet DEX swap");
   const signerStatus = signer.status();
   assertQos(signerStatus?.keyExportableToAgentProcess === false || (signerStatus?.keyExportableToAgentProcess === true && runtimeProfile?.profile === "mainnet-insecure"), "MAINNET_EXTERNAL_SIGNER_REQUIRED", "Mainnet software signing requires a setup-created --insecure profile; otherwise use a non-exportable external signer");
   assertQos(proofGate?.status?.().required !== true, "DEX_ZK_PROOF_UNSUPPORTED", "DEX swaps are disabled while a mandatory SNARK gate is configured");
-  await validateSolanaTokenMints(rpc, action);
+  const mints = await validateSolanaTokenMints(rpc, action);
   const provider = publicDexTrading(paths.home);
+  assertQos(provider.venues.includes(venue), "DEX_VENUE_NOT_ALLOWED", "Requested DEX venue is not enabled for this qOS profile");
+  if (venue === "raydium") {
+    return executeRaydiumSwap({ paths, provider, pair, amount, policy, signer, rpc, action: { ...action, venue }, fetchImpl, now, mints });
+  }
   const credentialBytes = readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" });
   let credential;
   try {
