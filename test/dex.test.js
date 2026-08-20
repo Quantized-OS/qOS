@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +7,7 @@ import test from "node:test";
 import { onboardAgent, validateAgentAction } from "../src/agent-registry.js";
 import { decodeBase58, encodeBase58 } from "../src/base58.js";
 import { SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../src/constants.js";
-import { configureDexTrading, dexPaths } from "../src/dex.js";
+import { configureDexTrading, defaultDexVenue, dexPaths, publicDexTrading } from "../src/dex.js";
 import { ensureRuntimeProfile } from "../src/runtime-profile.js";
 import { initializeSandbox, QosService } from "../src/service.js";
 import { associatedTokenAddress } from "../src/token.js";
@@ -140,6 +140,68 @@ function configuredProfile(t) {
   });
   return home;
 }
+
+test("Raydium-only trading requires no Jupiter key and uses the 300-trade 30-second defaults", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "qos-dex-raydium-only-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "profile");
+  initializeSandbox(home, "2HRxdPxxReP4PAHunxHD5mjPXWwBhnhYq4NowVEoLxg5", { cluster: "mainnet-beta" });
+  ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+
+  const configured = configureDexTrading(home, {
+    venues: ["raydium"],
+    receiver: RECEIVER,
+    maxInputAmount: "18446744073709551615",
+    dailyInputLimit: "18446744073709551615",
+  });
+
+  assert.deepEqual(configured.venues, ["raydium"]);
+  assert.equal(defaultDexVenue(home), "raydium");
+  assert.equal(configured.jupiterCredentialConfigured, false);
+  assert.equal(configured.maxSwapsPerDay, 300);
+  assert.equal(configured.minIntervalSeconds, 30);
+  assert.equal(configured.maxInputAmount, "18446744073709551615");
+  assert.equal(existsSync(dexPaths(home).apiKey), false);
+  assert.equal(publicDexTrading(home).credentialConfigured, false);
+  const policy = JSON.parse(readFileSync(join(home, "policy.json"), "utf8"));
+  const agent = onboardAgent(home, {
+    id: "raydium-agent",
+    approvalMode: "auto",
+    asset: "trading-only",
+    maxAmount: "0",
+    destination: policy.allowedDestinations[0],
+    strategyId: 1,
+    acceptAuto: true,
+    enableDexTrading: true,
+  });
+  const skill = readFileSync(join(agent.skillsDirectory, "SKILL.md"), "utf8");
+  const capabilities = readFileSync(join(agent.skillsDirectory, "capabilities.md"), "utf8");
+  const manifest = JSON.parse(readFileSync(join(agent.skillsDirectory, "manifest.json"), "utf8"));
+  assert.match(skill, /qos_search_markets/);
+  assert.match(capabilities, /Jupiter credential configured: no/);
+  assert.match(capabilities, /Maximum swaps per UTC day: 300/);
+  assert.deepEqual(manifest.venues, ["raydium"]);
+  assert.equal(manifest.version, 5);
+  assert.equal(existsSync(join(agent.skillsDirectory, "market-discovery.md")), true);
+  assert.equal(existsSync(join(agent.skillsDirectory, "strategy-selection.md")), true);
+  const service = QosService.open(home);
+  service.rpc = dexRpc(service.policy);
+  const prior = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    await assert.rejects(service.executeDexSwap({
+      version: 3,
+      action: "swap",
+      venue: "jupiter",
+      inputMint: INPUT_MINT,
+      outputMint: OUTPUT_MINT,
+      amount: "1000",
+      strategyId: 1,
+    }), { code: "DEX_VENUE_NOT_ALLOWED" });
+  } finally {
+    if (prior === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST; else process.env.QOS_ENABLE_MAINNET_BROADCAST = prior;
+  }
+});
 
 test("BYOK Jupiter swap signs only a bounded one-signer v0 order and persists limits", async (t) => {
   const home = configuredProfile(t);

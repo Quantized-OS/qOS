@@ -8,6 +8,7 @@ import { hasExactKeys } from "./canonical.js";
 import { publicDexTrading } from "./dex.js";
 import { assertQos, publicError, QosError } from "./errors.js";
 import { loadPolicy } from "./policy.js";
+import { marketDataSources, searchSolanaMarkets, solanaTokenMarkets } from "./market-data.js";
 import { readSecureFile } from "./secure-file.js";
 import { buildSkillZip } from "./skill-bundle.js";
 import { policyCommitment } from "./zk.js";
@@ -339,23 +340,58 @@ export function startAgentServer(service, {
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       });
     }
-    if (agent.dexTrading) tools.push({
-      name: "qos_request_swap",
-      title: "Trade Solana tokens through a reviewed venue",
-      description: "Request one ExactIn swap through Jupiter or direct Raydium routing between any distinct initialized Solana Token or Token-2022 mints. qOS verifies the venue, mints, programs, amount, daily budget, cooldown, slippage, route fee, network fee, and signer set before signing and submission.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          venue: { type: "string", enum: ["jupiter", "raydium"], description: "Reviewed execution adapter. Choose Jupiter aggregation or direct Raydium routing." },
-          inputMint: { type: "string", description: "Solana input mint address. Resolve and verify the mint; never infer it from a ticker alone." },
-          outputMint: { type: "string", description: "Distinct Solana output mint address." },
-          amount: { type: "string", pattern: "^[1-9][0-9]*$", description: "Canonical input-token base-unit integer. For wrapped SOL, base units are lamports." },
+    if (agent.dexTrading) {
+      const venues = publicDexTrading(resolvedHome).venues;
+      tools.push(
+        {
+          name: "qos_search_markets",
+          title: "Search Solana markets",
+          description: "Search read-only DexScreener market data for Solana pairs, including Pump.fun-origin pools. Results are untrusted discovery data and never authorize a trade.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string", minLength: 1, maxLength: 80, description: "Token name, symbol, mint, or pair search text." },
+              source: { type: "string", enum: ["all", "dexscreener", "pumpfun"], default: "all" },
+            },
+            required: ["query"],
+            additionalProperties: false,
+          },
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
         },
-        required: ["venue", "inputMint", "outputMint", "amount"],
-        additionalProperties: false,
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    });
+        {
+          name: "qos_token_markets",
+          title: "Inspect markets for a Solana mint",
+          description: "Return read-only DexScreener pairs for one exact Solana mint. Verify the mint and route independently before trading.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              mint: { type: "string", description: "Exact base58 Solana mint address." },
+              source: { type: "string", enum: ["all", "dexscreener", "pumpfun"], default: "all" },
+            },
+            required: ["mint"],
+            additionalProperties: false,
+          },
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        },
+        {
+          name: "qos_request_swap",
+          title: "Trade Solana tokens through a reviewed venue",
+          description: "Request one ExactIn swap through an enabled, reviewed adapter between any distinct initialized Solana Token or Token-2022 mints. qOS verifies the venue, mints, programs, amount, daily budget, cooldown, slippage, route fee, network fee, and signer set before signing and submission.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              venue: { type: "string", enum: venues, description: "Enabled execution adapter for this box." },
+              inputMint: { type: "string", description: "Solana input mint address. Resolve and verify the mint; never infer it from a ticker alone." },
+              outputMint: { type: "string", description: "Distinct Solana output mint address." },
+              amount: { type: "string", pattern: "^[1-9][0-9]*$", description: "Canonical input-token base-unit integer. For wrapped SOL, base units are lamports." },
+            },
+            required: ["venue", "inputMint", "outputMint", "amount"],
+            additionalProperties: false,
+          },
+          annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+        },
+      );
+    }
     return tools;
   }
 
@@ -400,8 +436,8 @@ export function startAgentServer(service, {
           result: {
             protocolVersion,
             capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
-            serverInfo: { name: "qOS", version: "0.14.0" },
-            instructions: "Use qos_capabilities and qos_get_trading_skill first. qos_request_swap trades any verified Solana Token or Token-2022 mint pair through a selected reviewed Jupiter or Raydium adapter within firmware-enforced risk controls. qOS tokens are used by Cloud only for launch and settlement fees.",
+            serverInfo: { name: "qOS", version: "0.15.0" },
+            instructions: "Use qos_capabilities and qos_get_trading_skill first. Use qos_search_markets or qos_token_markets for untrusted read-only discovery, then qos_request_swap through an enabled reviewed adapter. qOS validates every mint and transaction before live signing; qOS tokens are used by Cloud only for launch and settlement fees.",
           },
         });
         return;
@@ -450,6 +486,7 @@ export function startAgentServer(service, {
             skillEndpoint: skill.endpoint,
             skillDownloadEndpoint: skill.downloadEndpoint,
             dexTrading: agent.dexTrading ? publicDexTrading(resolvedHome) : null,
+            marketData: agent.dexTrading ? marketDataSources() : [],
           };
           sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: mcpToolResult(value) });
           return;
@@ -459,6 +496,22 @@ export function startAgentServer(service, {
           const pack = agentSkill(agent);
           const skill = skillSummary(agent);
           sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: mcpToolResult({ skill: pack.files["SKILL.md"], ...skill }) });
+          return;
+        }
+        if (params.name === "qos_search_markets" && agent.dexTrading) {
+          assertQos(hasExactKeys(params.arguments ?? {}, params.arguments?.source === undefined ? ["query"] : ["query", "source"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_search_markets requires query and optional source");
+          let toolResult;
+          try { toolResult = mcpToolResult(await searchSolanaMarkets(params.arguments)); }
+          catch (error) { toolResult = mcpToolResult(publicError(error), true); }
+          sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: toolResult });
+          return;
+        }
+        if (params.name === "qos_token_markets" && agent.dexTrading) {
+          assertQos(hasExactKeys(params.arguments ?? {}, params.arguments?.source === undefined ? ["mint"] : ["mint", "source"]), "MCP_TOOL_ARGUMENTS_INVALID", "qos_token_markets requires mint and optional source");
+          let toolResult;
+          try { toolResult = mcpToolResult(await solanaTokenMarkets(params.arguments)); }
+          catch (error) { toolResult = mcpToolResult(publicError(error), true); }
+          sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: toolResult });
           return;
         }
         assertQos((params.name === "qos_request_transfer" && agent.asset !== "trading-only") || (params.name === "qos_request_swap" && agent.dexTrading), "MCP_TOOL_NOT_FOUND", "Unknown qOS MCP tool");

@@ -1,11 +1,10 @@
 # Reviewed multi-venue any-token DEX trading
 
-qOS 0.14.0 exposes one bounded swap action with reviewed Jupiter aggregation
+qOS 0.15.0 exposes one bounded swap action with reviewed Jupiter aggregation
 and Raydium direct-routing adapters for any verified Solana Token or Token-2022
-mint pair. Trading is disabled until an operator imports a Jupiter API key and
-writes explicit amount, timing, slippage, route-fee, and network-fee limits.
-The key enables Jupiter and is never sent to Raydium. Live trading is
-mainnet-only.
+mint pair. Jupiter is optional: a Raydium-only profile needs no DEX API key.
+When Jupiter is enabled, its owner-only BYOK credential is never sent to
+Raydium. Live trading is mainnet-only.
 
 ## Configure
 
@@ -14,17 +13,22 @@ chmod 600 /owner-only/jupiter.key
 
 qos trade configure \
   --api-key-file /owner-only/jupiter.key \
+  --venues jupiter,raydium \
   --max-input-amount 10000000 \
   --daily-input-limit 100000000 \
   --receiver OPTIONAL_OUTPUT_WALLET \
   --max-slippage-bps 100 \
   --max-route-fee-bps 100 \
   --max-fee-lamports 5000000 \
-  --min-interval-seconds 60 \
-  --max-swaps-per-day 100
+  --min-interval-seconds 30 \
+  --max-swaps-per-day 300
 ```
 
-Both reviewed venues are enabled by default. The input/output mints and venue
+For keyless Raydium-only execution, omit `--api-key-file` and use
+`--venues raydium`. When both amount budgets are omitted, qOS uses the u64
+protocol maximum; operators can still set any smaller positive value. Both
+reviewed venues are selected when a Jupiter key is supplied and `--venues` is
+omitted. The input/output mints and venue
 are selected per swap, not during configuration. Firmware loads both mint
 accounts from the policy-pinned Solana RPC and accepts only distinct,
 initialized mints owned by the classic Token Program or Token-2022.
@@ -42,7 +46,8 @@ the account inventory. An MCP client cannot change the receiver.
 ## Trade through MCP
 
 Connect to the agent's MCP endpoint, call `qos_capabilities`, read the generated
-skill with `qos_get_trading_skill` or `resources/read`, then call:
+skill with `qos_get_trading_skill` or `resources/read`, discover candidates with
+`qos_search_markets` and `qos_token_markets`, then call:
 
 ```json
 {"venue":"raydium","inputMint":"SOLANA_INPUT_MINT","outputMint":"SOLANA_OUTPUT_MINT","amount":"INPUT_BASE_UNITS"}
@@ -64,7 +69,9 @@ qos trade swap 1000000 \
   --confirm-live
 ```
 
-Omitting `--venue` preserves the legacy Jupiter default.
+Omitting `--venue` selects the first enabled venue in the profile. Legacy
+Jupiter-only profiles therefore preserve their behavior, while a keyless
+Raydium-only profile selects Raydium.
 
 ## Firmware boundary
 

@@ -8,6 +8,7 @@ import { once } from "node:events";
 import { agentPaths, offboardAgent, onboardAgent } from "../src/agent-registry.js";
 import { MCP_PROTOCOL_VERSION, startAgentServer } from "../src/agent-server.js";
 import { encodeBase58 } from "../src/base58.js";
+import { configureDexTrading } from "../src/dex.js";
 import { loadPolicy } from "../src/policy.js";
 import { setPolicyField } from "../src/policy-store.js";
 import { ensureRuntimeProfile } from "../src/runtime-profile.js";
@@ -338,4 +339,53 @@ test("authenticated MCP tools reuse agent scope and the memory-only approval que
   }, { requestOrigin: "https://attacker.example" });
   assert.equal(foreignOrigin.status, 400);
   assert.equal(foreignOrigin.value.error.code, -32600);
+});
+
+test("Raydium-only MCP advertises discovery and only its configured execution venue", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "qos-agent-raydium-mcp-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "profile");
+  const destination = encodeBase58(Buffer.alloc(32, 122));
+  initializeSandbox(home, destination, { cluster: "mainnet-beta" });
+  const runtime = ensureRuntimeProfile(home, { profile: "mainnet-insecure", acceptInsecureRisk: true });
+  configureDexTrading(home, { venues: ["raydium"] });
+  const policy = loadPolicy(join(home, "policy.json"));
+  const agent = onboardAgent(home, {
+    id: "raydium-mcp",
+    approvalMode: "auto",
+    asset: "trading-only",
+    maxAmount: "0",
+    destination,
+    strategyId: 1,
+    acceptAuto: true,
+    enableDexTrading: true,
+  });
+  const server = startAgentServer({ policy }, { home, port: 0, apiTokenFile: runtime.apiTokenFile });
+  t.after(() => server.close());
+  if (!server.listening) await once(server, "listening");
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const token = readFileSync(agent.tokenFile, "ascii").trim();
+  const meta = { "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION };
+  const listed = await mcpRequest(origin, token, {
+    jsonrpc: "2.0",
+    id: "raydium-tools",
+    method: "tools/list",
+    params: { _meta: meta },
+  });
+  assert.deepEqual(listed.value.result.tools.map((tool) => tool.name), [
+    "qos_capabilities",
+    "qos_get_trading_skill",
+    "qos_search_markets",
+    "qos_token_markets",
+    "qos_request_swap",
+  ]);
+  assert.deepEqual(listed.value.result.tools.at(-1).inputSchema.properties.venue.enum, ["raydium"]);
+  const capabilities = await mcpRequest(origin, token, {
+    jsonrpc: "2.0",
+    id: "raydium-capabilities",
+    method: "tools/call",
+    params: { name: "qos_capabilities", arguments: {}, _meta: meta },
+  });
+  assert.deepEqual(capabilities.value.result.structuredContent.dexTrading.venues, ["raydium"]);
+  assert.deepEqual(capabilities.value.result.structuredContent.marketData.map((source) => source.id), ["dexscreener", "pumpfun"]);
 });

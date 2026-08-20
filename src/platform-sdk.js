@@ -20,6 +20,7 @@ export { getAgent, onboardAgent, readAgentSkillPack } from "./agent-registry.js"
 export { decodeBase58 } from "./base58.js";
 export { QOS_TOKEN_MINT } from "./constants.js";
 export { configureDexTrading, JUPITER_SWAP_ENDPOINT, RAYDIUM_SWAP_ENDPOINT, publicDexTrading } from "./dex.js";
+export { DEXSCREENER_ORIGIN, marketDataSources, searchSolanaMarkets, solanaTokenMarkets } from "./market-data.js";
 export { assertQos, publicError, QosError } from "./errors.js";
 export { publicKeyAddress, publicKeyObjectFromRaw } from "./key-store.js";
 export { modelProviderCatalog } from "./model-provider.js";

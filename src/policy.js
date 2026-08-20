@@ -231,8 +231,8 @@ export function validateDexTradingPolicy(value) {
   assertQos(Number.isInteger(value.maxRouteFeeBps) && value.maxRouteFeeBps >= 0 && value.maxRouteFeeBps <= 500, "INVALID_DEX_ROUTE_FEE", "DEX route fee cap must be between 0 and 500 basis points");
   const maxFeeLamports = parseUnsigned(value.maxFeeLamports, 64, "dexTrading.maxFeeLamports");
   assertQos(maxFeeLamports >= 5_000n && maxFeeLamports <= 10_000_000n, "INVALID_DEX_NETWORK_FEE", "DEX network and rent fee cap must be between 5000 and 10000000 lamports");
-  assertQos(Number.isInteger(value.minIntervalSeconds) && value.minIntervalSeconds >= 5 && value.minIntervalSeconds <= 86_400, "INVALID_DEX_INTERVAL", "DEX minimum interval must be between 5 seconds and one day");
-  assertQos(Number.isInteger(value.maxSwapsPerDay) && value.maxSwapsPerDay >= 1 && value.maxSwapsPerDay <= 1_000, "INVALID_DEX_DAILY_COUNT", "DEX daily swap count must be between 1 and 1000");
+  assertQos(Number.isInteger(value.minIntervalSeconds) && value.minIntervalSeconds >= 1 && value.minIntervalSeconds <= 86_400, "INVALID_DEX_INTERVAL", "DEX minimum interval must be between 1 second and one day");
+  assertQos(Number.isInteger(value.maxSwapsPerDay) && value.maxSwapsPerDay >= 1 && value.maxSwapsPerDay <= 1_000_000, "INVALID_DEX_DAILY_COUNT", "DEX daily swap count must be between 1 and 1000000");
   return Object.freeze(normalized);
 }
 

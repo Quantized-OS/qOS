@@ -119,8 +119,8 @@ Commands (long | shorthand):
   serve [agent|api|mcp] [PORT] | api [PORT]
   serve core [PORT]                           security-audit | audit
   trade | tr status|st
-  trade | tr configure|cfg --api-key-file FILE --max-input-amount N
-            --daily-input-limit N
+  trade | tr configure|cfg [--api-key-file FILE] [--venues jupiter,raydium]
+            [--max-input-amount N] [--daily-input-limit N]
             [advanced policy options]
   trade | tr swap|s AMOUNT [--venue jupiter|raydium] --input-mint PUBKEY
             --output-mint PUBKEY --confirm-live [--strategy-id N]
@@ -343,8 +343,8 @@ function dispatch(tokens, context) {
       return { status: qos(["dex-status"], context), exit: false };
     }
     if (action === "configure") {
-      const allowed = new Set(["--api-key-file", "--max-input-amount", "--daily-input-limit", "--receiver", "--max-slippage-bps", "--max-route-fee-bps", "--max-fee-lamports", "--min-interval-seconds", "--max-swaps-per-day"]);
-      const required = new Set(["--api-key-file", "--max-input-amount", "--daily-input-limit"]);
+      const allowed = new Set(["--api-key-file", "--venues", "--max-input-amount", "--daily-input-limit", "--receiver", "--max-slippage-bps", "--max-route-fee-bps", "--max-fee-lamports", "--min-interval-seconds", "--max-swaps-per-day"]);
+      const required = new Set();
       const seen = new Set();
       const forwarded = [];
       for (let index = 0; index < args.length; index += 1) {
