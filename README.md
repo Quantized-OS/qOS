@@ -38,12 +38,15 @@ Version 0.12.0 added BYOK Jupiter Ultra Swap support for bounded automated
 trading. Each profile pins one or more mint pairs plus per-swap input, daily
 input, slippage, route-fee, network/rent-fee, cooldown, and daily-count limits.
 Self-hosted profiles may additionally pin a distinct swap-output receiver;
-managed Cloud profiles use that field to route proceeds into the account's
-server billing wallet.
+managed Cloud profiles use that field to route every confirmed swap's output
+proceeds directly into the user's connected funding wallet.
 Agents receive a separate `qos_request_swap` MCP tool only when explicitly
 enabled; qOS still owns validation, signing, confirmation, and persistent spend
-accounting. The signed-submission review, managed inventory, withdrawal, and
-model-provider boundaries from 0.11 remain available.
+accounting. Public trading state also reports a lifetime execution-success
+rate: confirmed swaps divided by conclusive completed attempts. Ambiguous RPC
+or delivery outcomes remain unresolved and are excluded from that denominator.
+The signed-submission review, managed inventory, withdrawal, and model-provider
+boundaries from 0.11 remain available.
 
 Solana is the first test environment because it combines high-throughput execution, latency-sensitive trading, composable programs, and a clear need for safer automated signing.
 

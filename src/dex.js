@@ -24,7 +24,8 @@ export const RAYDIUM_SWAP_ENDPOINT = "https://transaction-v1.raydium.io";
 const PROVIDER_V1_KEYS = ["version", "provider", "endpoint"];
 const PROVIDER_V2_KEYS = ["version", "provider", "endpoint", "venues", "raydiumEndpoint"];
 const PROVIDER_V3_KEYS = ["version", "provider", "endpoint", "venues", "raydiumEndpoint", "jupiterCredentialConfigured"];
-const STATE_KEYS = ["version", "day", "tradeCount", "lastExecutedAt", "inputTotals"];
+const STATE_V1_KEYS = ["version", "day", "tradeCount", "lastExecutedAt", "inputTotals"];
+const STATE_V2_KEYS = ["version", "day", "tradeCount", "lastExecutedAt", "inputTotals", "lifetimeAttempts", "lifetimeSuccesses", "lifetimeFailures"];
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TRANSACTION_BYTES = 1_232;
 
@@ -41,21 +42,74 @@ export function dexPaths(home) {
 }
 
 function emptyTradingState() {
-  return { version: 1, day: null, tradeCount: 0, lastExecutedAt: null, inputTotals: {} };
+  return {
+    version: 2,
+    day: null,
+    tradeCount: 0,
+    lastExecutedAt: null,
+    inputTotals: {},
+    lifetimeAttempts: 0,
+    lifetimeSuccesses: 0,
+    lifetimeFailures: 0,
+  };
 }
 
 function validateTradingState(value) {
-  assertQos(value && typeof value === "object" && !Array.isArray(value) && hasExactKeys(value, STATE_KEYS), "INVALID_DEX_STATE", "DEX state has missing or unknown fields");
-  assertQos(value.version === 1, "INVALID_DEX_STATE", "DEX state version is unsupported");
-  assertQos(value.day === null || /^\d{4}-\d{2}-\d{2}$/.test(value.day), "INVALID_DEX_STATE", "DEX state day is invalid");
-  assertQos(Number.isInteger(value.tradeCount) && value.tradeCount >= 0 && value.tradeCount <= 1_000_000, "INVALID_DEX_STATE", "DEX trade count is invalid");
-  assertQos(value.lastExecutedAt === null || (typeof value.lastExecutedAt === "string" && Number.isFinite(Date.parse(value.lastExecutedAt))), "INVALID_DEX_STATE", "DEX last execution time is invalid");
-  assertQos(value.inputTotals && typeof value.inputTotals === "object" && !Array.isArray(value.inputTotals), "INVALID_DEX_STATE", "DEX input totals are invalid");
-  for (const [pair, amount] of Object.entries(value.inputTotals)) {
+  assertQos(value && typeof value === "object" && !Array.isArray(value), "INVALID_DEX_STATE", "DEX state has missing or unknown fields");
+  const legacy = value.version === 1 && hasExactKeys(value, STATE_V1_KEYS);
+  const current = value.version === 2 && hasExactKeys(value, STATE_V2_KEYS);
+  assertQos(legacy || current, "INVALID_DEX_STATE", "DEX state version or fields are unsupported");
+  const normalized = legacy ? {
+    ...value,
+    version: 2,
+    lifetimeAttempts: value.tradeCount,
+    lifetimeSuccesses: 0,
+    lifetimeFailures: 0,
+  } : value;
+  assertQos(normalized.day === null || /^\d{4}-\d{2}-\d{2}$/.test(normalized.day), "INVALID_DEX_STATE", "DEX state day is invalid");
+  assertQos(Number.isInteger(normalized.tradeCount) && normalized.tradeCount >= 0 && normalized.tradeCount <= 1_000_000, "INVALID_DEX_STATE", "DEX trade count is invalid");
+  for (const field of ["lifetimeAttempts", "lifetimeSuccesses", "lifetimeFailures"]) {
+    assertQos(Number.isSafeInteger(normalized[field]) && normalized[field] >= 0 && normalized[field] <= 1_000_000_000, "INVALID_DEX_STATE", `DEX state ${field} is invalid`);
+  }
+  assertQos(normalized.lifetimeSuccesses + normalized.lifetimeFailures <= normalized.lifetimeAttempts, "INVALID_DEX_STATE", "DEX state outcomes exceed recorded attempts");
+  assertQos(normalized.lastExecutedAt === null || (typeof normalized.lastExecutedAt === "string" && Number.isFinite(Date.parse(normalized.lastExecutedAt))), "INVALID_DEX_STATE", "DEX state last execution time is invalid");
+  assertQos(normalized.inputTotals && typeof normalized.inputTotals === "object" && !Array.isArray(normalized.inputTotals), "INVALID_DEX_STATE", "DEX input totals are invalid");
+  for (const [pair, amount] of Object.entries(normalized.inputTotals)) {
     assertQos(pair.length >= 65 && pair.length <= 96 && pair.includes(">"), "INVALID_DEX_STATE", "DEX state contains an invalid pair identifier");
     parseUnsigned(amount, 64, "dex state input total");
   }
-  return value;
+  return normalized;
+}
+
+function tradingPerformance(state) {
+  const completedAttempts = state.lifetimeSuccesses + state.lifetimeFailures;
+  return Object.freeze({
+    attempts: state.lifetimeAttempts,
+    confirmed: state.lifetimeSuccesses,
+    failed: state.lifetimeFailures,
+    unresolved: state.lifetimeAttempts - completedAttempts,
+    completedAttempts,
+    successRateBasisPoints: completedAttempts === 0
+      ? null
+      : Math.floor((state.lifetimeSuccesses * 10_000 + Math.floor(completedAttempts / 2)) / completedAttempts),
+  });
+}
+
+function conclusiveDexFailure(error) {
+  return [
+    "DEX_PROVIDER_REJECTED",
+    "DEX_EXECUTION_FAILED",
+    "RPC_ERROR",
+    "TRANSACTION_FAILED",
+    "BLOCKHASH_EXPIRED",
+  ].includes(error?.code);
+}
+
+function recordConclusiveDexFailure(paths, reservedState, error) {
+  if (reservedState === null || !conclusiveDexFailure(error)) return;
+  const failed = { ...reservedState, lifetimeFailures: reservedState.lifetimeFailures + 1 };
+  validateTradingState(failed);
+  writePrivateJsonAtomic(paths.tradingState, failed, { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
 }
 
 function visibleApiKey(bytes) {
@@ -175,6 +229,7 @@ export function publicDexTrading(home) {
   }
   if (provider.jupiterCredentialConfigured) readSecureFile(paths.apiKey, { privateFile: true, minBytes: 8, maxBytes: 2_050, errorCode: "INSECURE_DEX_CREDENTIAL", label: "Jupiter API key file" }).fill(0);
   else assertQos(!existsSync(paths.apiKey), "INVALID_DEX_CONFIG", "Raydium-only DEX configuration retained an unexpected Jupiter credential");
+  const state = validateTradingState(readPrivateJson(paths.tradingState, { errorCode: "INVALID_DEX_STATE", label: "DEX trading state" }));
   return {
     ...policy.dexTrading,
     provider: provider.provider,
@@ -182,6 +237,7 @@ export function publicDexTrading(home) {
     raydiumEndpoint: provider.raydiumEndpoint,
     credentialConfigured: provider.jupiterCredentialConfigured,
     jupiterCredentialConfigured: provider.jupiterCredentialConfigured,
+    performance: tradingPerformance(state),
   };
 }
 
@@ -265,7 +321,13 @@ function safeNumber(value, field) {
 function currentState(paths, now) {
   const state = validateTradingState(readPrivateJson(paths.tradingState, { errorCode: "INVALID_DEX_STATE", label: "DEX trading state" }));
   const day = now.toISOString().slice(0, 10);
-  return state.day === day ? state : { ...emptyTradingState(), day };
+  return state.day === day ? state : {
+    ...emptyTradingState(),
+    day,
+    lifetimeAttempts: state.lifetimeAttempts,
+    lifetimeSuccesses: state.lifetimeSuccesses,
+    lifetimeFailures: state.lifetimeFailures,
+  };
 }
 
 function enforceState(policy, pair, amount, routeFeeBps, state, now) {
@@ -724,11 +786,14 @@ async function executeRaydiumSwap({ paths, provider, pair, amount, policy, signe
   const networkFee = networkFees.reduce((sum, fee) => sum + BigInt(fee), 0n) + estimatedRentLamports;
   assertQos(networkFee <= BigInt(provider.maxFeeLamports), "DEX_NETWORK_FEE_LIMIT_EXCEEDED", "Raydium transaction batch exceeds the network and rent fee policy");
   const reservedState = {
-    version: 1,
+    version: 2,
     day: now.toISOString().slice(0, 10),
     tradeCount: state.tradeCount + 1,
     lastExecutedAt: now.toISOString(),
     inputTotals: { ...state.inputTotals, [budget.pairId]: (BigInt(state.inputTotals[budget.pairId] ?? "0") + budget.worstGross).toString() },
+    lifetimeAttempts: state.lifetimeAttempts + 1,
+    lifetimeSuccesses: state.lifetimeSuccesses,
+    lifetimeFailures: state.lifetimeFailures,
   };
   validateTradingState(reservedState);
   const signatures = [];
@@ -803,6 +868,7 @@ async function executeRaydiumSwap({ paths, provider, pair, amount, policy, signe
     const next = {
       ...reservedState,
       inputTotals: { ...state.inputTotals, [budget.pairId]: (BigInt(state.inputTotals[budget.pairId] ?? "0") + amount).toString() },
+      lifetimeSuccesses: reservedState.lifetimeSuccesses + 1,
     };
     validateTradingState(next);
     writePrivateJsonAtomic(paths.tradingState, next, { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
@@ -826,6 +892,9 @@ async function executeRaydiumSwap({ paths, provider, pair, amount, policy, signe
       explorerUrls: signatures.map((value) => `https://solscan.io/tx/${value}`),
       limits: { day: next.day, tradeCount: next.tradeCount, pairInputTotal: next.inputTotals[budget.pairId] },
     };
+  } catch (error) {
+    recordConclusiveDexFailure(paths, reservedState, error);
+    throw error;
   } finally {
     for (const transaction of transactions) {
       transaction.raw.fill(0);
@@ -873,6 +942,7 @@ export async function executeDexSwap({ home, policy, signer, runtimeProfile, pro
     const transaction = deserializeOrderTransaction(order, signer.publicKey);
     const message = Buffer.from(transaction.message);
     let signature;
+    let reservedState = null;
     try {
       const dexIntent = {
         version: 5,
@@ -904,12 +974,15 @@ export async function executeDexSwap({ home, policy, signer, runtimeProfile, pro
       const signedBytes = transaction.sign(signature);
       const signedTransaction = signedBytes.toString("base64");
       signedBytes.fill(0);
-      const reservedState = {
-        version: 1,
+      reservedState = {
+        version: 2,
         day: now.toISOString().slice(0, 10),
         tradeCount: state.tradeCount + 1,
         lastExecutedAt: now.toISOString(),
         inputTotals: { ...state.inputTotals, [budget.pairId]: (BigInt(state.inputTotals[budget.pairId] ?? "0") + budget.worstGross).toString() },
+        lifetimeAttempts: state.lifetimeAttempts + 1,
+        lifetimeSuccesses: state.lifetimeSuccesses,
+        lifetimeFailures: state.lifetimeFailures,
       };
       validateTradingState(reservedState);
       // Once a signed transaction is handed to the venue, delivery can become
@@ -934,11 +1007,10 @@ export async function executeDexSwap({ home, policy, signer, runtimeProfile, pro
       assertQos(totalInput > 0n && totalInput <= budget.worstGross, "DEX_EXECUTION_INPUT_MISMATCH", "Jupiter execution exceeded the authorized gross input budget");
       assertQos(totalOutput >= validated.minimumOutput, "DEX_EXECUTION_OUTPUT_MISMATCH", "Jupiter execution returned less than the authorized minimum output");
       const next = {
-        version: 1,
-        day: now.toISOString().slice(0, 10),
-        tradeCount: reservedState.tradeCount,
+        ...reservedState,
         lastExecutedAt: now.toISOString(),
         inputTotals: { ...state.inputTotals, [budget.pairId]: (BigInt(state.inputTotals[budget.pairId] ?? "0") + totalInput).toString() },
+        lifetimeSuccesses: reservedState.lifetimeSuccesses + 1,
       };
       validateTradingState(next);
       writePrivateJsonAtomic(paths.tradingState, next, { errorCode: "DEX_STATE_WRITE_FAILED", label: "DEX trading state" });
@@ -961,6 +1033,9 @@ export async function executeDexSwap({ home, policy, signer, runtimeProfile, pro
         explorerUrl: `https://solscan.io/tx/${execution.signature}`,
         limits: { day: next.day, tradeCount: next.tradeCount, pairInputTotal: next.inputTotals[budget.pairId] },
       };
+    } catch (error) {
+      recordConclusiveDexFailure(paths, reservedState, error);
+      throw error;
     } finally {
       message.fill(0);
       transaction.raw.fill(0);

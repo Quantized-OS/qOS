@@ -2,9 +2,20 @@ import { assertQos, QosError } from "./errors.js";
 import { TextDecoder } from "node:util";
 
 const MAX_RPC_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_RPC_MAX_ATTEMPTS = 5;
+const DEFAULT_RPC_RETRY_BASE_MS = 500;
+const DEFAULT_RPC_RETRY_MAX_MS = 8_000;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function retryAfterMilliseconds(response, now = Date.now()) {
+  const value = response.headers.get("retry-after");
+  if (value === null) return null;
+  if (/^(?:0|[1-9][0-9]*)$/.test(value)) return Number(value) * 1_000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
 }
 
 async function readBoundedJson(response) {
@@ -56,50 +67,89 @@ async function readBoundedJson(response) {
 }
 
 export class SolanaRpc {
-  constructor(url, { timeoutMs = 10_000, commitment = "confirmed" } = {}) {
+  constructor(url, {
+    timeoutMs = 10_000,
+    commitment = "confirmed",
+    maxAttempts = DEFAULT_RPC_MAX_ATTEMPTS,
+    retryBaseMs = DEFAULT_RPC_RETRY_BASE_MS,
+    retryMaxMs = DEFAULT_RPC_RETRY_MAX_MS,
+    sleepImpl = sleep,
+    randomImpl = Math.random,
+  } = {}) {
+    assertQos(Number.isInteger(maxAttempts) && maxAttempts >= 1 && maxAttempts <= 10, "RPC_RETRY_CONFIG_INVALID", "Solana RPC retry attempts must be between one and ten");
+    assertQos(Number.isInteger(retryBaseMs) && retryBaseMs >= 0 && retryBaseMs <= 10_000, "RPC_RETRY_CONFIG_INVALID", "Solana RPC base retry delay is invalid");
+    assertQos(Number.isInteger(retryMaxMs) && retryMaxMs >= retryBaseMs && retryMaxMs <= 60_000, "RPC_RETRY_CONFIG_INVALID", "Solana RPC maximum retry delay is invalid");
+    assertQos(typeof sleepImpl === "function" && typeof randomImpl === "function", "RPC_RETRY_CONFIG_INVALID", "Solana RPC retry hooks are invalid");
     this.url = url;
     this.timeoutMs = timeoutMs;
     this.commitment = commitment;
+    this.maxAttempts = maxAttempts;
+    this.retryBaseMs = retryBaseMs;
+    this.retryMaxMs = retryMaxMs;
+    this.sleepImpl = sleepImpl;
+    this.randomImpl = randomImpl;
     this.id = 0;
   }
 
   async call(method, params = []) {
     assertQos(this.id < Number.MAX_SAFE_INTEGER, "RPC_ID_EXHAUSTED", "Solana RPC request identifier space is exhausted");
     const id = ++this.id;
-    let response;
-    try {
-      response = await fetch(this.url, {
-        method: "POST",
-        headers: {
-          "accept": "application/json",
-          "accept-encoding": "identity",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-        redirect: "error",
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      throw new QosError("RPC_UNAVAILABLE", "Solana RPC request failed");
+    const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      let response;
+      try {
+        response = await fetch(this.url, {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "accept-encoding": "identity",
+            "content-type": "application/json",
+          },
+          body,
+          redirect: "error",
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (error) {
+        throw new QosError("RPC_UNAVAILABLE", "Solana RPC request failed");
+      }
+      if (response.status === 429) {
+        const requestedDelay = retryAfterMilliseconds(response);
+        await response.body?.cancel().catch(() => {});
+        if (attempt === this.maxAttempts) {
+          throw new QosError("RPC_RATE_LIMITED", "Solana RPC remained rate limited after bounded retries", {
+            statusCode: 429,
+            attempts: attempt,
+          });
+        }
+        const exponential = Math.min(this.retryMaxMs, this.retryBaseMs * (2 ** Math.min(attempt - 1, 20)));
+        const random = Number(this.randomImpl());
+        const jitter = Number.isFinite(random) && random >= 0 && random < 1
+          ? Math.floor(exponential * 0.25 * random)
+          : 0;
+        const delay = Math.min(this.retryMaxMs, Math.max(exponential + jitter, requestedDelay ?? 0));
+        await this.sleepImpl(delay);
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        assertQos(false, "RPC_HTTP_ERROR", `Solana RPC returned HTTP ${response.status}`);
+      }
+      let payload;
+      try {
+        payload = await readBoundedJson(response);
+      } catch (error) {
+        await response.body?.cancel().catch(() => {});
+        throw error;
+      }
+      assertQos(payload && payload.jsonrpc === "2.0" && payload.id === id, "RPC_INVALID_RESPONSE", "Solana RPC response envelope is invalid");
+      if (payload.error) {
+        const rpcCode = Number.isSafeInteger(payload.error.code) ? payload.error.code : undefined;
+        throw new QosError("RPC_ERROR", `Solana RPC ${method} failed`, rpcCode === undefined ? undefined : { rpcCode });
+      }
+      assertQos(Object.hasOwn(payload, "result"), "RPC_MISSING_RESULT", "Solana RPC response has no result");
+      return payload.result;
     }
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => {});
-      assertQos(false, "RPC_HTTP_ERROR", `Solana RPC returned HTTP ${response.status}`);
-    }
-    let payload;
-    try {
-      payload = await readBoundedJson(response);
-    } catch (error) {
-      await response.body?.cancel().catch(() => {});
-      throw error;
-    }
-    assertQos(payload && payload.jsonrpc === "2.0" && payload.id === id, "RPC_INVALID_RESPONSE", "Solana RPC response envelope is invalid");
-    if (payload.error) {
-      const rpcCode = Number.isSafeInteger(payload.error.code) ? payload.error.code : undefined;
-      throw new QosError("RPC_ERROR", `Solana RPC ${method} failed`, rpcCode === undefined ? undefined : { rpcCode });
-    }
-    assertQos(Object.hasOwn(payload, "result"), "RPC_MISSING_RESULT", "Solana RPC response has no result");
-    return payload.result;
+    throw new QosError("RPC_RATE_LIMITED", "Solana RPC retry loop ended unexpectedly");
   }
 
   getGenesisHash() {

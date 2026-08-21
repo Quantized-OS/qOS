@@ -236,8 +236,20 @@ test("BYOK Jupiter swap signs only a bounded one-signer v0 order and persists li
   assert.equal(calls[0][1].headers["x-api-key"], "jup-test-owner-key");
   assert.deepEqual(Object.keys(JSON.parse(calls[1][1].body)).sort(), ["lastValidBlockHeight", "requestId", "signedTransaction"]);
   const state = JSON.parse(readFileSync(dexPaths(home).tradingState, "utf8"));
+  assert.equal(state.version, 2);
   assert.equal(state.tradeCount, 1);
   assert.equal(state.inputTotals[`${INPUT_MINT}>${OUTPUT_MINT}`], "1005");
+  assert.equal(state.lifetimeAttempts, 1);
+  assert.equal(state.lifetimeSuccesses, 1);
+  assert.equal(state.lifetimeFailures, 0);
+  assert.deepEqual(publicDexTrading(home).performance, {
+    attempts: 1,
+    confirmed: 1,
+    failed: 0,
+    unresolved: 0,
+    completedAttempts: 1,
+    successRateBasisPoints: 10_000,
+  });
 });
 
 test("a signed swap with an ambiguous execute failure conservatively reserves its budget", async (t) => {
@@ -263,6 +275,49 @@ test("a signed swap with an ambiguous execute failure conservatively reserves it
   const state = JSON.parse(readFileSync(dexPaths(home).tradingState, "utf8"));
   assert.equal(state.tradeCount, 1);
   assert.equal(state.inputTotals[`${INPUT_MINT}>${OUTPUT_MINT}`], "1005");
+  assert.equal(state.lifetimeAttempts, 1);
+  assert.equal(state.lifetimeSuccesses, 0);
+  assert.equal(state.lifetimeFailures, 0);
+  assert.deepEqual(publicDexTrading(home).performance, {
+    attempts: 1,
+    confirmed: 0,
+    failed: 0,
+    unresolved: 1,
+    completedAttempts: 0,
+    successRateBasisPoints: null,
+  });
+});
+
+test("a conclusive venue failure is included in the bot execution success rate", async (t) => {
+  const home = configuredProfile(t);
+  const service = QosService.open(home);
+  let calls = 0;
+  service.dexFetch = async () => {
+    calls += 1;
+    return calls === 1
+      ? jsonResponse(validOrder(service))
+      : jsonResponse({ status: "Failed", code: 410, signature: null });
+  };
+  service.rpc = dexRpc(service.policy);
+  const prior = process.env.QOS_ENABLE_MAINNET_BROADCAST;
+  process.env.QOS_ENABLE_MAINNET_BROADCAST = "I_UNDERSTAND";
+  try {
+    await assert.rejects(
+      service.executeDexSwap({ version: 2, action: "swap", inputMint: INPUT_MINT, outputMint: OUTPUT_MINT, amount: "1000", strategyId: 1 }),
+      { code: "DEX_EXECUTION_FAILED" },
+    );
+  } finally {
+    if (prior === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST; else process.env.QOS_ENABLE_MAINNET_BROADCAST = prior;
+  }
+
+  assert.deepEqual(publicDexTrading(home).performance, {
+    attempts: 1,
+    confirmed: 0,
+    failed: 1,
+    unresolved: 0,
+    completedAttempts: 1,
+    successRateBasisPoints: 0,
+  });
 });
 
 test("direct Raydium trading signs only a reviewed one-signer transaction and never sends the Jupiter key", async (t) => {
@@ -332,6 +387,7 @@ test("direct Raydium trading signs only a reviewed one-signer transaction and ne
     assert.equal(result.totalInputAmount, "1000");
     assert.equal(result.totalOutputAmount, "900");
     assert.equal(result.signatures.length, 1);
+    assert.equal(publicDexTrading(home).performance.successRateBasisPoints, 10_000);
   } finally {
     if (prior === undefined) delete process.env.QOS_ENABLE_MAINNET_BROADCAST; else process.env.QOS_ENABLE_MAINNET_BROADCAST = prior;
   }

@@ -23,6 +23,62 @@ test("RPC client emits canonical JSON-RPC requests and validates the envelope", 
   assert.equal(requests[0].options.redirect, "error");
 });
 
+test("RPC client retries HTTP 429 responses with one stable JSON-RPC request id", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  const delays = [];
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    if (requests.length < 3) {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: "genesis" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const rpc = new SolanaRpc("https://example.invalid", {
+    timeoutMs: 1000,
+    maxAttempts: 3,
+    retryBaseMs: 0,
+    retryMaxMs: 2_000,
+    sleepImpl: async (milliseconds) => { delays.push(milliseconds); },
+    randomImpl: () => 0,
+  });
+
+  assert.equal(await rpc.getGenesisHash(), "genesis");
+  assert.equal(requests.length, 3);
+  assert.deepEqual(new Set(requests.map((request) => request.id)).size, 1);
+  assert.deepEqual(delays, [1_000, 1_000]);
+});
+
+test("RPC client returns a specific error after exhausting bounded 429 retries", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("rate limited", { status: 429 });
+  };
+  const rpc = new SolanaRpc("https://example.invalid", {
+    timeoutMs: 1000,
+    maxAttempts: 2,
+    retryBaseMs: 0,
+    retryMaxMs: 0,
+    sleepImpl: async () => {},
+    randomImpl: () => 0,
+  });
+
+  await assert.rejects(() => rpc.getGenesisHash(), (error) => {
+    assert.equal(error.code, "RPC_RATE_LIMITED");
+    assert.deepEqual(error.details, { statusCode: 429, attempts: 2 });
+    return true;
+  });
+  assert.equal(calls, 2);
+});
+
 test("RPC client fails closed on JSON-RPC errors", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
