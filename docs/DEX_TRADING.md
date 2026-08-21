@@ -40,8 +40,15 @@ limits apply across the profile. qOS includes the quoted route fee in the gross
 per-trade and daily reservation.
 
 `--receiver` pins every trade's output wallet. If omitted, output returns to the
-firmware signer. qOS Cloud pins the account server wallet so proceeds appear in
-the account inventory. An MCP client cannot change the receiver.
+firmware signer. qOS Cloud pins the user's connected funding wallet, so every
+confirmed trade sends its full output proceeds back to that wallet. An MCP
+client cannot change the receiver.
+
+The public trading policy includes a lifetime execution-success metric. It is
+the number of confirmed swaps divided by conclusive completed attempts.
+Ambiguous RPC, timeout, or delivery outcomes are reported as unresolved and do
+not count as either a success or a failure until their outcome is known. This
+measures execution reliability, not cross-token investment profitability.
 
 ## Trade through MCP
 
